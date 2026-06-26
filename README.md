@@ -46,10 +46,13 @@ Open [http://localhost:3000](http://localhost:3000) and sign in.
 
 1. Push this project to a GitHub repository.
 2. Go to [vercel.com](https://vercel.com) and import the repo.
-3. Add environment variables:
+3. Add environment variables (match your `.env.local` exactly):
    - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-4. Deploy. Share the Vercel URL with your partner.
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY` **or** `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+4. Deploy. After deploy, open `https://your-app.vercel.app/api/health` — `"ok": true` means env vars are set.
+5. In Supabase → **Authentication** → **URL Configuration**, set **Site URL** and **Redirect URLs** to your Vercel URL.
+
+See [DEPLOY.md](DEPLOY.md) for full troubleshooting (including `MIDDLEWARE_INVOCATION_FAILED`).
 
 ## Partner Onboarding
 

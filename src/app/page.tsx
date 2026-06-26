@@ -11,13 +11,11 @@ export default async function DashboardPage() {
 
   const [
     { count: clientCount },
-    { count: tradeCount },
     { data: recentLedger },
     { data: ledgerTotals },
     { data: invoiceHeaders },
   ] = await Promise.all([
     supabase.from("clients").select("*", { count: "exact", head: true }),
-    supabase.from("trade_partners").select("*", { count: "exact", head: true }),
     supabase
       .from("ledger")
       .select("*, clients(name)")
@@ -76,13 +74,12 @@ export default async function DashboardPage() {
       hint: "All debit items invoiced and paid",
       href: "/ledger",
     },
-    { label: "Trade Partners", value: tradeCount ?? 0, href: "/trade-partners" },
   ];
 
   return (
     <AppShell>
       <PageHeader
-        title="Dashboard"
+        title="Maison Joy Business Overview"
         description="Overview of expenses, receivables, tax due, and recent activity."
         action={
           <div className="flex flex-wrap gap-2">
@@ -118,7 +115,7 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mb-6 grid gap-4 sm:grid-cols-2">
         {cards.map((card) => (
           <Link
             key={card.label}
@@ -138,58 +135,81 @@ export default async function DashboardPage() {
           Uninvoiced ledger items ready to bill, and invoiced amounts still awaiting payment.
         </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <Link
-            href="/invoicing"
-            className="rounded-lg border border-slate-100 bg-slate-50 p-4 transition hover:border-brand-200"
-          >
+          <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
             <p className="text-xs uppercase tracking-wide text-slate-500">To Be Invoiced</p>
             <p className="mt-1 text-xl font-semibold text-slate-900">
               {formatCurrency(toBeInvoiced.amount)}
             </p>
-            <p className="mt-1 text-sm text-slate-600">
-              {toBeInvoiced.count} {toBeInvoiced.count === 1 ? "item" : "items"}
-            </p>
-          </Link>
+            {toBeInvoiced.count === 0 ? (
+              <p className="mt-1 text-sm text-slate-600">
+                No outstanding items to be invoiced
+              </p>
+            ) : (
+              <>
+                <p className="mt-1 text-sm text-slate-600">
+                  {toBeInvoiced.count} outstanding{" "}
+                  {toBeInvoiced.count === 1 ? "item" : "items"} to be invoiced
+                </p>
+                <div className="mt-2 flex flex-wrap gap-3 text-sm font-medium">
+                  <Link
+                    href="/ledger?uninvoiced=1"
+                    className="text-brand-700 hover:text-brand-800 hover:underline"
+                  >
+                    View in Ledger →
+                  </Link>
+                  <Link
+                    href="/invoicing"
+                    className="text-brand-700 hover:text-brand-800 hover:underline"
+                  >
+                    Create Invoice →
+                  </Link>
+                </div>
+              </>
+            )}
+          </div>
           <Link
             href="/payments"
             className="rounded-lg border border-slate-100 bg-slate-50 p-4 transition hover:border-brand-200"
           >
-            <p className="text-xs uppercase tracking-wide text-slate-500">Invoiced, Not Paid</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500">Outstanding Payments</p>
             <p className="mt-1 text-xl font-semibold text-amber-800">
               {formatCurrency(invoicedUnpaid.amount)}
             </p>
             <p className="mt-1 text-sm text-slate-600">
-              Customer price on unpaid invoiced debits
+              Unpaid Invoices
             </p>
           </Link>
         </div>
       </section>
 
       <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
-        <h2 className="text-lg font-semibold text-slate-900">Ledger Balance</h2>
+        <h2 className="text-lg font-semibold text-slate-900">P&amp;L Details</h2>
         <p className="mt-1 text-sm text-slate-600">
-          For each invoiced line: <strong>Credits</strong> = customer price (invoice amount),{" "}
-          <strong>Debits</strong> = total designer cost. <strong>Gross profit</strong> = invoice − cost
-          (profit before expenses/loans). Uninvoiced debit costs are included in Debits only.
+          For each invoiced line: <strong>Revenue</strong> = customer price (invoice amount),{" "}
+          <strong>Cost of goods sold</strong> = total designer cost. <strong>Gross profit</strong> =
+          revenue − cost (before expenses & loans). Uninvoiced debit costs are included in
+          cost of goods sold only.
         </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Credits (Invoiced)</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500">Revenue</p>
             <p className="mt-1 text-xl font-semibold text-brand-800">
               {formatCurrency(ledgerBalances.credits)}
             </p>
           </div>
           <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Debits (Designer Cost)</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500">Cost of Goods Sold</p>
             <p className="mt-1 text-xl font-semibold text-slate-900">
               {formatCurrency(ledgerBalances.debits)}
             </p>
           </div>
-          <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
-            <p className="text-xs font-medium leading-snug text-slate-500">
-              Gross Profit (profit before expenses/loans)
+          <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
+            <p className="text-sm font-semibold leading-snug text-slate-700">
+              GROSS PROFIT
+              <br />
+              <span className="text-xs font-medium text-slate-500">(before expenses &amp; loans)</span>
             </p>
-            <p className="mt-1 text-xl font-semibold text-slate-900">
+            <p className="mt-2 text-2xl font-bold text-brand-800">
               {formatCurrency(netBalance)}
             </p>
           </div>
@@ -199,7 +219,9 @@ export default async function DashboardPage() {
       <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">Tax Due by Month</h2>
+            <h2 className="text-lg font-semibold text-slate-900">
+              Sales and Use Tax Due by the 20th of each month
+            </h2>
             <p className="text-sm text-slate-600">
               Unpaid sales and use tax from ledger entries where Sales and Use Tax Paid is unchecked.
             </p>

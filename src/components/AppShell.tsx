@@ -1,22 +1,73 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "./ui/Button";
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: "⌂" },
+  { href: "/", label: "Maison Joy Business Overview", icon: "⌂" },
   { href: "/ledger", label: "Ledger", icon: "₿" },
+  { href: "/invoicing", label: "Invoicing", icon: "📄" },
   { href: "/payments", label: "Payments", icon: "💵" },
   { href: "/clients", label: "Clients", icon: "👤" },
-  { href: "/invoicing", label: "Invoicing", icon: "📄" },
-  { href: "/trade-partners", label: "Trade", icon: "🤝" },
 ];
+
+const tradePartnersHref = "/trade-partners";
+
+function navLinkClass(active: boolean) {
+  return `flex min-h-11 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
+    active ? "bg-brand-50 text-brand-800" : "text-slate-700 hover:bg-slate-50"
+  }`;
+}
+
+function tradeAccountCountLabel(count: number | null) {
+  if (count === null) return "—";
+  if (count === 0) return "No trade accounts";
+  return `${count} trade ${count === 1 ? "account" : "accounts"}`;
+}
+
+function TradeAccountBox({
+  count,
+  pathname,
+}: {
+  count: number | null;
+  pathname: string;
+}) {
+  return (
+    <div className="space-y-1 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+      <div className="px-3 py-2">
+        <p className="text-xs uppercase tracking-wide text-slate-500">Trade Accounts</p>
+        <p className="mt-1 text-sm font-medium text-slate-900">
+          {tradeAccountCountLabel(count)}
+        </p>
+      </div>
+      <Link
+        href={tradePartnersHref}
+        className={navLinkClass(pathname === tradePartnersHref)}
+      >
+        <span aria-hidden>🤝</span>
+        View Trade Accounts
+      </Link>
+    </div>
+  );
+}
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [tradeAccountCount, setTradeAccountCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    const supabase = createClient();
+    void supabase
+      .from("trade_partners")
+      .select("*", { count: "exact", head: true })
+      .then(({ count, error }) => {
+        if (!error) setTradeAccountCount(count ?? 0);
+      });
+  }, [pathname]);
 
   async function handleSignOut() {
     const supabase = createClient();
@@ -54,14 +105,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               const active = pathname === item.href;
               return (
                 <li key={item.href}>
-                  <Link
-                    href={item.href}
-                    className={`flex min-h-11 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
-                      active
-                        ? "bg-brand-50 text-brand-800"
-                        : "text-slate-700 hover:bg-slate-50"
-                    }`}
-                  >
+                  <Link href={item.href} className={navLinkClass(active)}>
                     <span aria-hidden>{item.icon}</span>
                     {item.label}
                   </Link>
@@ -77,13 +121,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </button>
             </li>
           </ul>
+
+          <div className="mt-4">
+            <TradeAccountBox count={tradeAccountCount} pathname={pathname} />
+          </div>
         </nav>
 
-        <main className="min-w-0 flex-1">{children}</main>
+        <main className="min-w-0 flex-1">
+          <div className="mb-4 md:hidden">
+            <TradeAccountBox count={tradeAccountCount} pathname={pathname} />
+          </div>
+          {children}
+        </main>
       </div>
 
       <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white md:hidden">
-        <ul className="grid grid-cols-6">
+        <ul className="grid grid-cols-5">
           {navItems.map((item) => {
             const active = pathname === item.href;
             return (

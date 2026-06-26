@@ -1,18 +1,30 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { LedgerForm } from "@/components/forms/LedgerForm";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { isLedgerLineUninvoiced } from "@/lib/invoice-utils";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { Client, Invoice, LedgerEntry, TradePartner } from "@/lib/types";
 import { formatCurrency, formatDate, getLedgerCustomerPrice, getLedgerTotalDesignerCost, purchaserFromEmail } from "@/lib/utils";
 
 export default function LedgerPage() {
+  return (
+    <Suspense fallback={<p className="p-4 text-sm text-slate-500">Loading...</p>}>
+      <LedgerPageContent />
+    </Suspense>
+  );
+}
+
+function LedgerPageContent() {
+  const searchParams = useSearchParams();
+  const uninvoicedOnly = searchParams.get("uninvoiced") === "1";
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [tradePartners, setTradePartners] = useState<TradePartner[]>([]);
@@ -105,8 +117,14 @@ export default function LedgerPage() {
     );
   }
 
-  const debitEntries = entries.filter((entry) => entry.credit_debit === "debit");
-  const creditEntries = entries.filter((entry) => entry.credit_debit === "credit");
+  const visibleEntries = useMemo(
+    () =>
+      uninvoicedOnly ? entries.filter(isLedgerLineUninvoiced) : entries,
+    [entries, uninvoicedOnly]
+  );
+
+  const debitEntries = visibleEntries.filter((entry) => entry.credit_debit === "debit");
+  const creditEntries = visibleEntries.filter((entry) => entry.credit_debit === "credit");
 
   return (
     <AppShell>
@@ -130,6 +148,16 @@ export default function LedgerPage() {
       {loadError && !showForm && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
           Could not load ledger: {loadError}
+        </div>
+      )}
+
+      {uninvoicedOnly && !showForm && !loading && (
+        <div className="mb-4 rounded-lg border border-brand-200 bg-brand-50 p-3 text-sm text-slate-800">
+          Showing outstanding items to be invoiced ({visibleEntries.length}{" "}
+          {visibleEntries.length === 1 ? "item" : "items"}).{" "}
+          <Link href="/ledger" className="font-medium text-brand-700 hover:underline">
+            Show all ledger entries
+          </Link>
         </div>
       )}
 
@@ -168,6 +196,13 @@ export default function LedgerPage() {
         )
       ) : loading ? (
         <p className="text-sm text-slate-500">Loading ledger...</p>
+      ) : uninvoicedOnly && visibleEntries.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
+          <p>No outstanding items to be invoiced.</p>
+          <Link href="/ledger" className="mt-3 inline-block font-medium text-brand-700 hover:underline">
+            Show all ledger entries
+          </Link>
+        </div>
       ) : entries.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
           No ledger entries yet.
