@@ -169,8 +169,8 @@ export default async function DashboardPage() {
         <h2 className="text-lg font-semibold text-slate-900">Ledger Balance</h2>
         <p className="mt-1 text-sm text-slate-600">
           For each invoiced line: <strong>Credits</strong> = customer price (invoice amount),{" "}
-          <strong>Debits</strong> = total designer cost. <strong>Net</strong> = invoice − cost
-          (your margin). Uninvoiced debit costs are included in Debits only.
+          <strong>Debits</strong> = total designer cost. <strong>Gross profit</strong> = invoice − cost
+          (profit before expenses/loans). Uninvoiced debit costs are included in Debits only.
         </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
@@ -186,7 +186,9 @@ export default async function DashboardPage() {
             </p>
           </div>
           <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Net Profit</p>
+            <p className="text-xs font-medium leading-snug text-slate-500">
+              Gross Profit (profit before expenses/loans)
+            </p>
             <p className="mt-1 text-xl font-semibold text-slate-900">
               {formatCurrency(netBalance)}
             </p>
