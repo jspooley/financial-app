@@ -3,9 +3,24 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getSupabaseAnonKey, getSupabaseUrl } from "./env";
 
 export async function updateSession(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request });
+  const isAuthPage = request.nextUrl.pathname.startsWith("/login");
 
-  const supabase = createServerClient(getSupabaseUrl(), getSupabaseAnonKey(), {
+  try {
+    const supabaseUrl = getSupabaseUrl().trim();
+    const supabaseAnonKey = getSupabaseAnonKey().trim();
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      console.error(
+        "Missing Supabase env: set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel, then redeploy."
+      );
+      return isAuthPage
+        ? NextResponse.next({ request })
+        : NextResponse.redirect(new URL("/login", request.url));
+    }
+
+    let supabaseResponse = NextResponse.next({ request });
+
+    const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
       cookies: {
         getAll() {
           return request.cookies.getAll();
@@ -20,26 +35,25 @@ export async function updateSession(request: NextRequest) {
           );
         },
       },
+    });
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user && !isAuthPage) {
+      return NextResponse.redirect(new URL("/login", request.url));
     }
-  );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    if (user && isAuthPage) {
+      return NextResponse.redirect(new URL("/", request.url));
+    }
 
-  const isAuthPage = request.nextUrl.pathname.startsWith("/login");
-
-  if (!user && !isAuthPage) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
+    return supabaseResponse;
+  } catch (error) {
+    console.error("Middleware updateSession failed:", error);
+    return isAuthPage
+      ? NextResponse.next({ request })
+      : NextResponse.redirect(new URL("/login", request.url));
   }
-
-  if (user && isAuthPage) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/";
-    return NextResponse.redirect(url);
-  }
-
-  return supabaseResponse;
 }
