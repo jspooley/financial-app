@@ -8,11 +8,11 @@ import { Button } from "./ui/Button";
 
 const navItems = [
   { href: "/", label: "Maison Joy Business Overview", icon: "⌂" },
-  { href: "/ledger", label: "Ledger", icon: "₿" },
-  { href: "/invoicing", label: "Invoicing", icon: "📄" },
-  { href: "/payments", label: "Payments", icon: "💵" },
-  { href: "/clients", label: "Clients", icon: "👤" },
   { href: "/appointments", label: "Appointments", icon: "📅" },
+  { href: "/clients", label: "Clients", icon: "👤" },
+  { href: "/ledger", label: "Ledger", icon: "₿" },
+  { href: "/payments", label: "Payments", icon: "💵" },
+  { href: "/invoicing", label: "Invoicing", icon: "📄" },
 ];
 
 const tradePartnersHref = "/trade-partners";
