@@ -11,11 +11,21 @@ export default async function DashboardPage() {
 
   const [
     { count: clientCount },
+    { count: pendingAppointments },
+    { count: wonAppointments },
+    { count: lostAppointments },
     { data: recentLedger },
     { data: ledgerTotals },
     { data: invoiceHeaders },
   ] = await Promise.all([
     supabase.from("clients").select("*", { count: "exact", head: true }),
+    supabase
+      .from("appointments")
+      .select("*", { count: "exact", head: true })
+      .eq("job_won", false)
+      .eq("job_lost", false),
+    supabase.from("appointments").select("*", { count: "exact", head: true }).eq("job_won", true),
+    supabase.from("appointments").select("*", { count: "exact", head: true }).eq("job_lost", true),
     supabase
       .from("ledger")
       .select("*, clients(name)")
@@ -62,6 +72,22 @@ export default async function DashboardPage() {
     hint?: string;
     href: string;
   }> = [
+    {
+      label: "Pending Appointments",
+      value: pendingAppointments ?? 0,
+      hint: "Neither won nor lost",
+      href: "/appointments?status=pending",
+    },
+    {
+      label: "Won",
+      value: wonAppointments ?? 0,
+      href: "/appointments?status=won",
+    },
+    {
+      label: "Lost",
+      value: lostAppointments ?? 0,
+      href: "/appointments?status=lost",
+    },
     {
       label: "Open Jobs",
       value: jobSummary.openJobs,
@@ -115,7 +141,7 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2">
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {cards.map((card) => (
           <Link
             key={card.label}

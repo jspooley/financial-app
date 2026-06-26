@@ -66,6 +66,37 @@ export interface Client {
   updated_at: string;
 }
 
+export type ReferralSource =
+  | "Instagram"
+  | "Facebook"
+  | "Word of Mouth"
+  | "Web Search"
+  | "Other";
+
+export const REFERRAL_SOURCE_OPTIONS: ReferralSource[] = [
+  "Instagram",
+  "Facebook",
+  "Word of Mouth",
+  "Web Search",
+  "Other",
+];
+
+export interface Appointment {
+  id: string;
+  appointment_date: string;
+  client_name: string;
+  client_email: string | null;
+  client_phone: string | null;
+  client_address: string | null;
+  referred_by: string | null;
+  referral_source: ReferralSource | null;
+  notes: string | null;
+  job_won: boolean;
+  job_lost: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface TradePartner {
   id: string;
   company_name: string;
@@ -132,6 +163,14 @@ export interface Database {
           id?: string;
         };
         Update: Partial<Database["public"]["Tables"]["clients"]["Insert"]>;
+        Relationships: [];
+      };
+      appointments: {
+        Row: Appointment;
+        Insert: Omit<Appointment, "id" | "created_at" | "updated_at"> & {
+          id?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["appointments"]["Insert"]>;
         Relationships: [];
       };
       trade_partners: {
