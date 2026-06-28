@@ -194,11 +194,17 @@ type TaxDueEntry = {
   purchaser?: "Jess" | "Molly" | string | null;
   sales_and_use_tax_paid?: boolean;
   sand_u_tax_paid?: boolean;
+  wholesale_retail?: "wholesale" | "retail";
+  clients?: { name?: string } | null;
+  id?: string;
 };
 
+export function isSalesUseTaxPaid(entry: TaxDueEntry) {
+  return Boolean(entry.sales_and_use_tax_paid ?? entry.sand_u_tax_paid);
+}
+
 function isUnpaidSalesUseTax(entry: TaxDueEntry) {
-  const taxPaid = entry.sales_and_use_tax_paid ?? entry.sand_u_tax_paid;
-  return !taxPaid;
+  return !isSalesUseTaxPaid(entry);
 }
 
 function taxPurchaserBucket(
@@ -209,6 +215,15 @@ function taxPurchaserBucket(
   if (normalized === "jess") return "Jess";
   if (normalized === "molly") return "Molly";
   return null;
+}
+
+export function getSalesUseTaxLineItems(entries: TaxDueEntry[]) {
+  return entries
+    .filter(
+      (entry) =>
+        entry.wholesale_retail !== "retail" && Number(entry.tax_amount) > 0
+    )
+    .sort((a, b) => b.entry_date.localeCompare(a.entry_date));
 }
 
 export function groupTaxDueByMonth(entries: TaxDueEntry[]): MonthlyTaxDue[] {

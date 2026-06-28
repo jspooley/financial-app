@@ -2,13 +2,13 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/server";
-import { formatCurrency, formatDate, currentMonthKey, getLedgerCustomerPrice, getLedgerTotalDesignerCost, groupTaxDueByMonth, sumLedgerCreditsAndDebits } from "@/lib/utils";
+import { formatCurrency, formatDate, currentMonthKey, getLedgerInvoicedAmount, getSalesUseTaxLineItems, groupTaxDueByMonth, isSalesUseTaxPaid, sumLedgerCreditsAndDebits } from "@/lib/utils";
 import {
-  isLedgerLineFullyPaid,
   summarizeInvoicedUnpaid,
   summarizeJobsByStatus,
   summarizeToBeInvoiced,
 } from "@/lib/invoice-utils";
+import { ledgerDetailColumns, ledgerDetailFields, mapLedgerTableRow } from "@/lib/ledger-display";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 
 export default async function DashboardPage() {
@@ -36,7 +36,7 @@ export default async function DashboardPage() {
       .select("*, clients(name)")
       .order("entry_date", { ascending: false })
       .limit(10),
-    supabase.from("ledger").select("*"),
+    supabase.from("ledger").select("*, clients(name)"),
     supabase.from("invoicing").select("client_id, po_number"),
   ]);
 
@@ -70,6 +70,7 @@ export default async function DashboardPage() {
   const currentMonthTaxDue = currentMonthTax?.amount ?? 0;
   const currentMonthJessTaxDue = currentMonthTax?.jess ?? 0;
   const currentMonthMollyTaxDue = currentMonthTax?.molly ?? 0;
+  const salesUseTaxLines = getSalesUseTaxLineItems(allLedgerEntries);
 
   const cards: Array<{
     label: string;
@@ -377,6 +378,84 @@ export default async function DashboardPage() {
             )}
           </table>
         </div>
+
+        <div className="mt-6">
+          <h3 className="text-sm font-semibold text-slate-900">Tax by ledger entry</h3>
+          <p className="mt-1 text-sm text-slate-600">
+            Wholesale tax amounts and whether sales and use tax has been paid.
+          </p>
+          <div className="mt-3 space-y-3 md:hidden">
+            {salesUseTaxLines.length === 0 ? (
+              <p className="py-4 text-center text-sm text-slate-500">No tax entries yet.</p>
+            ) : (
+              salesUseTaxLines.slice(0, 20).map((entry) => (
+                <div
+                  key={entry.id ?? `${entry.entry_date}-${entry.tax_amount}`}
+                  className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-sm"
+                >
+                  <p className="font-medium text-slate-900">
+                    {entry.clients?.name ?? "—"} · {formatDate(entry.entry_date)}
+                  </p>
+                  <dl className="mt-2 grid grid-cols-3 gap-2">
+                    <div>
+                      <dt className="text-slate-500">Tax</dt>
+                      <dd className="font-medium">{formatCurrency(Number(entry.tax_amount))}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-slate-500">Purchaser</dt>
+                      <dd>{entry.purchaser ?? "—"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-slate-500">Paid</dt>
+                      <dd>{isSalesUseTaxPaid(entry) ? "Yes" : "No"}</dd>
+                    </div>
+                  </dl>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="mt-3 hidden overflow-x-auto md:block">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-left text-slate-500">
+                  <th className="py-2 pr-4">Date</th>
+                  <th className="py-2 pr-4">Client</th>
+                  <th className="py-2 pr-4 text-right">Tax</th>
+                  <th className="py-2 pr-4">Purchaser</th>
+                  <th className="py-2 pr-4">Paid</th>
+                </tr>
+              </thead>
+              <tbody>
+                {salesUseTaxLines.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-6 text-center text-slate-500">
+                      No tax entries yet.
+                    </td>
+                  </tr>
+                ) : (
+                  salesUseTaxLines.slice(0, 20).map((entry) => (
+                    <tr
+                      key={entry.id ?? `${entry.entry_date}-${entry.tax_amount}`}
+                      className="border-b border-slate-50"
+                    >
+                      <td className="py-3 pr-4 whitespace-nowrap">
+                        {formatDate(entry.entry_date)}
+                      </td>
+                      <td className="py-3 pr-4">{entry.clients?.name ?? "—"}</td>
+                      <td className="py-3 pr-4 text-right font-medium">
+                        {formatCurrency(Number(entry.tax_amount))}
+                      </td>
+                      <td className="py-3 pr-4">{entry.purchaser ?? "—"}</td>
+                      <td className="py-3 pr-4">
+                        {isSalesUseTaxPaid(entry) ? "Yes" : "No"}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
@@ -409,41 +488,18 @@ export default async function DashboardPage() {
                 className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-sm"
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="font-medium text-slate-900">
-                      {entry.clients?.name ?? "—"}
-                    </p>
-                    <p className="text-slate-500">
-                      {formatDate(entry.entry_date)} · {entry.credit_debit}
-                    </p>
-                  </div>
-                  <p className="shrink-0 font-semibold text-brand-800">
-                    {formatCurrency(getLedgerCustomerPrice(entry))}
+                  <p className="text-sm font-medium text-slate-500">Invoiced Amount</p>
+                  <p className="font-semibold text-brand-800">
+                    {formatCurrency(getLedgerInvoicedAmount(entry))}
                   </p>
                 </div>
-                <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                  <div>
-                    <dt className="text-slate-500">PO</dt>
-                    <dd>{entry.po_number ?? "—"}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-slate-500">Invoiced</dt>
-                    <dd>{entry.invoiced ? "Yes" : "No"}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-slate-500">Paid</dt>
-                    <dd>
-                      {entry.credit_debit === "debit"
-                        ? isLedgerLineFullyPaid(entry)
-                          ? "Yes"
-                          : "No"
-                        : "—"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-slate-500">Invoice ID</dt>
-                    <dd className="truncate">{entry.invoice_id ?? "—"}</dd>
-                  </div>
+                <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                  {ledgerDetailFields(entry).map((field) => (
+                    <div key={field.label}>
+                      <dt className="text-slate-500">{field.label}</dt>
+                      <dd>{field.value}</dd>
+                    </div>
+                  ))}
                 </dl>
               </article>
             ))
@@ -453,22 +509,20 @@ export default async function DashboardPage() {
           <table className="min-w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100 text-left text-slate-500">
-                <th className="py-2 pr-4">Date</th>
-                <th className="py-2 pr-4">Client</th>
-                <th className="py-2 pr-4">Debit/Credit</th>
-                <th className="py-2 pr-4">Description</th>
-                <th className="py-2 pr-4">PO</th>
-                <th className="py-2 pr-4">Total Designer Cost</th>
-                <th className="py-2 pr-4">Customer Price</th>
-                <th className="py-2 pr-4">Invoiced</th>
-                <th className="py-2 pr-4">Invoice ID</th>
-                <th className="py-2 pr-4">Paid</th>
+                {ledgerDetailColumns.map((column) => (
+                  <th key={column.key} className="py-2 pr-4 whitespace-nowrap">
+                    {column.label}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {(recentEntries.length === 0) ? (
                 <tr>
-                  <td colSpan={10} className="py-6 text-center text-slate-500">
+                  <td
+                    colSpan={ledgerDetailColumns.length}
+                    className="py-6 text-center text-slate-500"
+                  >
                     No ledger entries yet.{" "}
                     <Link href="/ledger" className="text-brand-700 underline">
                       Add your first entry
@@ -476,32 +530,18 @@ export default async function DashboardPage() {
                   </td>
                 </tr>
               ) : (
-                recentEntries.map((entry) => (
-                  <tr key={entry.id} className="border-b border-slate-50">
-                    <td className="py-3 pr-4 whitespace-nowrap">{formatDate(entry.entry_date)}</td>
-                    <td className="py-3 pr-4">{entry.clients?.name ?? "—"}</td>
-                    <td className="py-3 pr-4 capitalize">{entry.credit_debit}</td>
-                    <td className="py-3 pr-4 max-w-48 truncate">
-                      {entry.description?.trim() || "—"}
-                    </td>
-                    <td className="py-3 pr-4">{entry.po_number ?? "—"}</td>
-                    <td className="py-3 pr-4 whitespace-nowrap">
-                      {formatCurrency(getLedgerTotalDesignerCost(entry))}
-                    </td>
-                    <td className="py-3 pr-4 whitespace-nowrap">
-                      {formatCurrency(getLedgerCustomerPrice(entry))}
-                    </td>
-                    <td className="py-3 pr-4">{entry.invoiced ? "Yes" : "No"}</td>
-                    <td className="py-3 pr-4">{entry.invoice_id ?? "—"}</td>
-                    <td className="py-3 pr-4">
-                      {entry.credit_debit === "debit"
-                        ? isLedgerLineFullyPaid(entry)
-                          ? "Yes"
-                          : "No"
-                        : "—"}
-                    </td>
-                  </tr>
-                ))
+                recentEntries.map((entry) => {
+                  const row = mapLedgerTableRow(entry);
+                  return (
+                    <tr key={entry.id} className="border-b border-slate-50">
+                      {ledgerDetailColumns.map((column) => (
+                        <td key={column.key} className="py-3 pr-4 whitespace-nowrap">
+                          {row[column.key as keyof typeof row]}
+                        </td>
+                      ))}
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
