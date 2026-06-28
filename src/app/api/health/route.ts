@@ -8,6 +8,10 @@ export async function GET() {
 
   return Response.json({
     ok: Boolean(url && key),
+    deploy: {
+      commit: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? null,
+      env: process.env.VERCEL_ENV ?? null,
+    },
     supabase: {
       urlConfigured: Boolean(url),
       keyConfigured: Boolean(key),

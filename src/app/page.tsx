@@ -11,6 +11,9 @@ import {
 import { ledgerDetailColumns, ledgerDetailFields, mapLedgerTableRow } from "@/lib/ledger-display";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export default async function DashboardPage() {
   const supabase = await createClient();
 
