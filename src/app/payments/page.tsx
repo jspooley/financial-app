@@ -7,16 +7,16 @@ import { SelectField } from "@/components/ui/FormFields";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/client";
 import {
+  getLedgerOutstandingBalance,
+  isLedgerLineFullyPaid,
   isLedgerLineInvoiced,
-  isLedgerLineUnpaid,
 } from "@/lib/invoice-utils";
 import { normalizeLedgerRow, PAYMENTS_DB_SETUP_SQL, type LedgerDbRow } from "@/lib/ledger-db";
 import type { Client, LedgerEntry, PaymentType, Purchaser } from "@/lib/types";
 import {
   formatCurrency,
   formatDate,
-  getLedgerCustomerPrice,
-  getLedgerTotalDesignerCost,
+  getLedgerInvoicedAmount,
   roundMoney,
 } from "@/lib/utils";
 
@@ -24,7 +24,6 @@ type PaymentView = "outstanding" | "history";
 
 type PaymentRowDraft = {
   selected: boolean;
-  paid: boolean;
   date_paid: string;
   paid_to: Purchaser;
   payment_type: PaymentType;
@@ -38,7 +37,7 @@ const defaultPaidTo: Purchaser = "Jess";
 function defaultPaymentAmount(entry: LedgerEntry) {
   const saved = Number(entry.payment_amount);
   if (saved > 0) return saved;
-  return getLedgerCustomerPrice(entry);
+  return getLedgerInvoicedAmount(entry);
 }
 
 export default function PaymentsPage() {
@@ -106,13 +105,13 @@ export default function PaymentsPage() {
       (entry) =>
         entry.credit_debit === "debit" &&
         isLedgerLineInvoiced(entry) &&
-        isLedgerLineUnpaid(entry)
+        !isLedgerLineFullyPaid(entry)
     );
     const paidDebits = allInvoiced.filter(
       (entry) =>
         entry.credit_debit === "debit" &&
         isLedgerLineInvoiced(entry) &&
-        entry.paid
+        isLedgerLineFullyPaid(entry)
     );
 
     if (unpaidDebits.length === 0) {
@@ -123,8 +122,8 @@ export default function PaymentsPage() {
         (entry) => entry.credit_debit === "credit" && isLedgerLineInvoiced(entry)
       );
 
-      if (invoicedDebits.length > 0 && invoicedDebits.every((entry) => entry.paid)) {
-        setEmptyHint("All invoiced items are already marked paid.");
+      if (invoicedDebits.length > 0 && invoicedDebits.every((entry) => isLedgerLineFullyPaid(entry))) {
+        setEmptyHint("All invoiced items are fully paid.");
       } else if (invoicedCredits.length > 0 && invoicedDebits.length === 0) {
         setEmptyHint(
           "Invoiced items exist, but they are credits. Payments is for debit lines — invoice debit ledger entries from the Invoicing page."
@@ -151,7 +150,6 @@ export default function PaymentsPage() {
       for (const entry of unpaidDebits) {
         next[entry.id] = current[entry.id] ?? {
           selected: false,
-          paid: true,
           date_paid: entry.date_paid ?? today,
           paid_to: entry.paid_to ?? defaultPaidTo,
           payment_type: entry.payment_type ?? defaultPaymentType,
@@ -173,7 +171,7 @@ export default function PaymentsPage() {
     () => ({
       count: entries.length,
       amount: roundMoney(
-        entries.reduce((sum, entry) => sum + getLedgerCustomerPrice(entry), 0)
+        entries.reduce((sum, entry) => sum + getLedgerOutstandingBalance(entry), 0)
       ),
     }),
     [entries]
@@ -207,7 +205,7 @@ export default function PaymentsPage() {
       roundMoney(
         filteredPaidEntries.reduce((sum, entry) => {
           const amount = Number(entry.payment_amount);
-          return sum + (amount > 0 ? amount : getLedgerCustomerPrice(entry));
+          return sum + (amount > 0 ? amount : getLedgerInvoicedAmount(entry));
         }, 0)
       ),
     [filteredPaidEntries]
@@ -279,14 +277,19 @@ export default function PaymentsPage() {
     const supabase = createClient();
 
     for (const { entry, draft } of rows) {
+      const paymentAmount = roundMoney(Number(draft.payment_amount) || 0);
+      const fullyPaid = isLedgerLineFullyPaid({
+        ...entry,
+        payment_amount: paymentAmount,
+      });
       const { error: updateError } = await supabase
         .from("ledger")
         .update({
-          paid: draft.paid,
-          date_paid: draft.date_paid || null,
+          paid: fullyPaid,
+          date_paid: fullyPaid ? draft.date_paid || null : null,
           paid_to: draft.paid_to,
           payment_type: draft.payment_type,
-          payment_amount: Number(draft.payment_amount) || 0,
+          payment_amount: paymentAmount,
           payment_fee: Number(draft.payment_fee) || 0,
         })
         .eq("id", entry.id);
@@ -314,7 +317,7 @@ export default function PaymentsPage() {
     <AppShell>
       <PageHeader
         title="Payments"
-        description="Select invoiced debit items, record payment details, and update the ledger."
+        description="Record payments against invoiced amounts. Items stay open until payment equals invoiced amount."
       />
 
       {needsDbSetup && (
@@ -440,22 +443,34 @@ export default function PaymentsPage() {
                     </p>
                     <p className="mt-1 text-sm text-slate-700">{entry.description || "—"}</p>
                     <p className="mt-1 text-sm font-medium text-brand-800">
-                      Designer cost: {formatCurrency(getLedgerTotalDesignerCost(entry))}
+                      Invoiced: {formatCurrency(getLedgerInvoicedAmount(entry))}
+                    </p>
+                    <p className="text-sm text-amber-800">
+                      Outstanding:{" "}
+                      {formatCurrency(
+                        getLedgerOutstandingBalance({
+                          ...entry,
+                          payment_amount: draft.payment_amount,
+                        })
+                      )}
                     </p>
                   </div>
                 </label>
 
                 <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={draft.paid}
-                      disabled={!draft.selected}
-                      onChange={(event) => updateDraft(entry.id, { paid: event.target.checked })}
-                      className="size-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 disabled:opacity-50"
-                    />
-                    <span>Mark paid</span>
-                  </label>
+                  <p className="text-sm text-slate-600">
+                    Status:{" "}
+                    <span className="font-medium text-slate-900">
+                      {isLedgerLineFullyPaid({
+                        ...entry,
+                        payment_amount: draft.payment_amount,
+                      })
+                        ? "Paid in full"
+                        : Number(draft.payment_amount) > 0
+                          ? "Partial payment"
+                          : "Unpaid"}
+                    </span>
+                  </p>
                   <label className="block text-sm">
                     <span className="mb-1 block text-slate-600">Date paid</span>
                     <input
@@ -547,8 +562,9 @@ export default function PaymentsPage() {
                 <th className="px-3 py-3">Date</th>
                 <th className="px-3 py-3">Invoice ID</th>
                 <th className="px-3 py-3">Description</th>
-                <th className="px-3 py-3">Total Designer Cost</th>
-                <th className="px-3 py-3">Paid</th>
+                <th className="px-3 py-3">Invoiced Amount</th>
+                <th className="px-3 py-3">Outstanding</th>
+                <th className="px-3 py-3">Status</th>
                 <th className="px-3 py-3">Date Paid</th>
                 <th className="px-3 py-3">Paid To</th>
                 <th className="px-3 py-3">Payment Amount</th>
@@ -579,17 +595,26 @@ export default function PaymentsPage() {
                     <td className="px-3 py-3">{formatDate(entry.entry_date)}</td>
                     <td className="px-3 py-3">{entry.invoice_id ?? "—"}</td>
                     <td className="px-3 py-3">{entry.description || "—"}</td>
-                    <td className="px-3 py-3 font-medium text-brand-800">
-                      {formatCurrency(getLedgerTotalDesignerCost(entry))}
+                    <td className="px-3 py-3 font-medium">
+                      {formatCurrency(getLedgerInvoicedAmount(entry))}
+                    </td>
+                    <td className="px-3 py-3 font-medium text-amber-800">
+                      {formatCurrency(
+                        getLedgerOutstandingBalance({
+                          ...entry,
+                          payment_amount: draft.payment_amount,
+                        })
+                      )}
                     </td>
                     <td className="px-3 py-3">
-                      <input
-                        type="checkbox"
-                        checked={draft.paid}
-                        disabled={!draft.selected}
-                        onChange={(event) => updateDraft(entry.id, { paid: event.target.checked })}
-                        className="size-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 disabled:opacity-50"
-                      />
+                      {isLedgerLineFullyPaid({
+                        ...entry,
+                        payment_amount: draft.payment_amount,
+                      })
+                        ? "Paid in full"
+                        : Number(draft.payment_amount) > 0
+                          ? "Partial"
+                          : "Unpaid"}
                     </td>
                     <td className="px-3 py-3">
                       <input
@@ -739,7 +764,7 @@ export default function PaymentsPage() {
                         <dt className="text-slate-500">Amount</dt>
                         <dd className="font-medium text-brand-800">
                           {formatCurrency(
-                            paymentAmount > 0 ? paymentAmount : getLedgerCustomerPrice(entry)
+                            paymentAmount > 0 ? paymentAmount : getLedgerInvoicedAmount(entry)
                           )}
                         </dd>
                       </div>
@@ -787,7 +812,7 @@ export default function PaymentsPage() {
                         <td className="px-3 py-3">{entry.description || "—"}</td>
                         <td className="px-3 py-3 font-medium text-brand-800">
                           {formatCurrency(
-                            paymentAmount > 0 ? paymentAmount : getLedgerCustomerPrice(entry)
+                            paymentAmount > 0 ? paymentAmount : getLedgerInvoicedAmount(entry)
                           )}
                         </td>
                         <td className="px-3 py-3">{entry.paid_to ?? "—"}</td>

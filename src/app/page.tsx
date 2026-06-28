@@ -3,7 +3,12 @@ import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/server";
 import { formatCurrency, formatDate, currentMonthKey, getLedgerCustomerPrice, getLedgerTotalDesignerCost, groupTaxDueByMonth, sumLedgerCreditsAndDebits } from "@/lib/utils";
-import { summarizeInvoicedUnpaid, summarizeJobsByStatus, summarizeToBeInvoiced } from "@/lib/invoice-utils";
+import {
+  isLedgerLineFullyPaid,
+  summarizeInvoicedUnpaid,
+  summarizeJobsByStatus,
+  summarizeToBeInvoiced,
+} from "@/lib/invoice-utils";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 
 export default async function DashboardPage() {
@@ -204,7 +209,9 @@ export default async function DashboardPage() {
               {formatCurrency(invoicedUnpaid.amount)}
             </p>
             <p className="mt-1 text-sm text-slate-600">
-              Unpaid Invoices
+              {invoicedUnpaid.count === 0
+                ? "No outstanding payment balance"
+                : `${invoicedUnpaid.count} ${invoicedUnpaid.count === 1 ? "item" : "items"} with balance due`}
             </p>
           </Link>
         </div>
@@ -213,7 +220,7 @@ export default async function DashboardPage() {
       <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
         <h2 className="text-lg font-semibold text-slate-900">P&amp;L Details</h2>
         <p className="mt-1 hidden text-sm text-slate-600 sm:block">
-          For each invoiced line: <strong>Revenue</strong> = customer price (invoice amount),{" "}
+          For each invoiced line: <strong>Revenue</strong> = payments received,{" "}
           <strong>Cost of goods sold</strong> = total designer cost. <strong>Gross profit</strong> =
           revenue − cost (before expenses & loans). Uninvoiced debit costs are included in
           cost of goods sold only.
@@ -425,7 +432,13 @@ export default async function DashboardPage() {
                   </div>
                   <div>
                     <dt className="text-slate-500">Paid</dt>
-                    <dd>{entry.paid ? "Yes" : "No"}</dd>
+                    <dd>
+                      {entry.credit_debit === "debit"
+                        ? isLedgerLineFullyPaid(entry)
+                          ? "Yes"
+                          : "No"
+                        : "—"}
+                    </dd>
                   </div>
                   <div>
                     <dt className="text-slate-500">Invoice ID</dt>
@@ -481,7 +494,11 @@ export default async function DashboardPage() {
                     <td className="py-3 pr-4">{entry.invoiced ? "Yes" : "No"}</td>
                     <td className="py-3 pr-4">{entry.invoice_id ?? "—"}</td>
                     <td className="py-3 pr-4">
-                      {entry.credit_debit === "debit" ? (entry.paid ? "Yes" : "No") : "—"}
+                      {entry.credit_debit === "debit"
+                        ? isLedgerLineFullyPaid(entry)
+                          ? "Yes"
+                          : "No"
+                        : "—"}
                     </td>
                   </tr>
                 ))

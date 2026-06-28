@@ -9,9 +9,10 @@ import { ledgerFormToDb } from "@/lib/ledger-db";
 import type { Client, Invoice, LedgerEntry, Purchaser, TradePartner } from "@/lib/types";
 import {
   calculateCustomerPrice,
-  calculateWholesaleTax,
+  calculateTaxFromRetailPrice,
   defaultLedgerDiscountPercent,
   formatCurrency,
+  getLedgerInvoicedAmount,
 } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 import {
@@ -23,7 +24,9 @@ import {
 
 const schema = z.object({
   entry_date: z.string().min(1, "Date is required"),
-  designer_cost: z.coerce.number().positive("Designer cost must be greater than 0"),
+  designer_cost: z.coerce
+    .number({ invalid_type_error: "Designer cost is required" })
+    .positive("Designer cost must be greater than 0"),
   quantity: z.coerce
     .number()
     .int("Quantity must be a whole number")
@@ -37,6 +40,9 @@ const schema = z.object({
     .min(0)
     .max(100, "Discount cannot exceed 100%"),
   shipping_receiving_amount: z.coerce.number().min(0),
+  retail_price: z.coerce
+    .number({ invalid_type_error: "Retail price is required" })
+    .positive("Retail price must be greater than 0"),
   tax_amount: z.coerce.number().min(0),
   invoiced: z.boolean(),
   sales_and_use_tax_paid: z.boolean(),
@@ -87,6 +93,7 @@ export function LedgerForm({
       trade_partner_id: initial?.trade_partner_id ?? "",
       discount_percent: initial?.discount_percent ?? 0,
       shipping_receiving_amount: initial?.shipping_receiving_amount ?? 0,
+      retail_price: initial?.retail_price ?? ("" as unknown as number),
       tax_amount: initial?.tax_amount ?? 0,
       invoiced: initial?.invoiced ?? false,
       sales_and_use_tax_paid: initial?.sales_and_use_tax_paid ?? false,
@@ -98,28 +105,28 @@ export function LedgerForm({
 
   const selectedClientId = useWatch({ control, name: "client_id" });
   const selectedTradePartnerId = useWatch({ control, name: "trade_partner_id" });
-  const designerCost = useWatch({ control, name: "designer_cost" });
   const quantity = useWatch({ control, name: "quantity" });
   const discountPercent = useWatch({ control, name: "discount_percent" });
   const wholesaleRetail = useWatch({ control, name: "wholesale_retail" });
   const shippingAmount = useWatch({ control, name: "shipping_receiving_amount" });
+  const retailPrice = useWatch({ control, name: "retail_price" });
   const taxAmount = useWatch({ control, name: "tax_amount" });
   const skipPoReset = useRef(true);
   const skipDiscountReset = useRef(!!initial);
   const taxManuallyEdited = useRef(false);
 
-  const numericCost = Number(designerCost) || 0;
   const numericQty = Number(quantity) || 0;
   const numericDiscount = Number(discountPercent) || 0;
   const numericShipping = Number(shippingAmount) || 0;
+  const numericRetailPrice = Number(retailPrice) || 0;
   const isWholesale = wholesaleRetail === "wholesale";
 
   const autoTax = useMemo(
     () =>
       isWholesale
-        ? calculateWholesaleTax(numericCost, numericDiscount, numericQty)
+        ? calculateTaxFromRetailPrice(numericRetailPrice, numericQty)
         : 0,
-    [isWholesale, numericCost, numericDiscount, numericQty]
+    [isWholesale, numericRetailPrice, numericQty]
   );
 
   const effectiveTax = isWholesale
@@ -134,15 +141,30 @@ export function LedgerForm({
   );
 
   const customerPrice = useMemo(
+    () => calculateCustomerPrice(numericRetailPrice, numericQty, numericDiscount),
+    [numericRetailPrice, numericQty, numericDiscount]
+  );
+
+  const invoicedAmount = useMemo(
     () =>
-      calculateCustomerPrice(
-        numericCost,
-        numericQty,
-        numericDiscount,
-        effectiveTax,
-        numericShipping
-      ),
-    [numericCost, numericQty, numericDiscount, effectiveTax, numericShipping]
+      getLedgerInvoicedAmount({
+        retail_price: numericRetailPrice,
+        quantity: numericQty,
+        discount_percent: numericDiscount,
+        tax_amount: effectiveTax,
+        shipping_receiving_amount: numericShipping,
+        wholesale_retail: wholesaleRetail,
+        payment_fee: initial?.payment_fee ?? 0,
+      }),
+    [
+      numericRetailPrice,
+      numericQty,
+      numericDiscount,
+      effectiveTax,
+      numericShipping,
+      wholesaleRetail,
+      initial?.payment_fee,
+    ]
   );
 
   useEffect(() => {
@@ -202,6 +224,7 @@ export function LedgerForm({
       trade_partner_id: values.trade_partner_id,
       discount_percent: values.discount_percent,
       shipping_receiving_amount: values.shipping_receiving_amount,
+      retail_price: values.retail_price,
       tax_amount: values.tax_amount,
       tax_manually_edited: taxManuallyEdited.current,
       invoiced: initial ? initial.invoiced : false,
@@ -272,12 +295,10 @@ export function LedgerForm({
           type="number"
           step="0.01"
           min="0.01"
+          required
           placeholder="0.00"
           error={errors.designer_cost?.message}
-          {...register("designer_cost", {
-            valueAsNumber: true,
-            onChange: resetAutoTax,
-          })}
+          {...register("designer_cost", { valueAsNumber: true })}
         />
         <InputField
           label="Quantity"
@@ -342,7 +363,18 @@ export function LedgerForm({
           max="100"
           hint="Defaults to half of the trade partner discount. You can override."
           error={errors.discount_percent?.message}
-          {...register("discount_percent", {
+          {...register("discount_percent", { valueAsNumber: true })}
+        />
+        <InputField
+          label="Retail Price"
+          type="number"
+          step="0.01"
+          min="0.01"
+          required
+          placeholder="0.00"
+          hint="Used to calculate tax: retail price × quantity × 0.06."
+          error={errors.retail_price?.message}
+          {...register("retail_price", {
             valueAsNumber: true,
             onChange: resetAutoTax,
           })}
@@ -363,7 +395,7 @@ export function LedgerForm({
                 label="Tax Amount"
                 type="number"
                 step="0.01"
-                hint="Auto-calculated: quantity × designer cost × (1 + discount%) × 0.06. You can override."
+                hint="Auto-calculated: retail price × quantity × 0.06. You can override."
                 error={errors.tax_amount?.message}
                 name={field.name}
                 value={
@@ -388,11 +420,18 @@ export function LedgerForm({
           />
         )}
         <InputField
-          label="Customer Price"
+          label="Customer Price × Qty"
           value={formatCurrency(customerPrice)}
           readOnly
           disabled
-          hint="(Designer cost × qty) + (Discount % × designer cost × qty) + tax + shipping"
+          hint="(Retail price × qty) − (Discount % × retail price × qty)"
+        />
+        <InputField
+          label="Invoiced Amount"
+          value={formatCurrency(invoicedAmount)}
+          readOnly
+          disabled
+          hint="Customer price + tax + shipping + payment fee"
           className="sm:col-span-2"
         />
         <CheckboxField

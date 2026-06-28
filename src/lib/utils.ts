@@ -17,45 +17,62 @@ export function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
-/** Wholesale tax: quantity × designer cost × (1 + discount%) × 0.06 */
-export function calculateWholesaleTax(
-  designerCost: number,
-  discountPercent: number,
-  quantity: number
-) {
-  const discountRate = discountPercent / 100;
-  return roundMoney(quantity * designerCost * (1 + discountRate) * 0.06);
+/** Sales/use tax: retail price × quantity × 0.06 */
+export function calculateTaxFromRetailPrice(retailPrice: number, quantity: number) {
+  const qty = Math.max(1, Math.round(Number(quantity) || 1));
+  return roundMoney(Number(retailPrice) * qty * 0.06);
 }
 
-/** (cost × qty) + (discount% × cost × qty) + tax + shipping */
-export function calculateCustomerPrice(
-  designerCost: number,
-  quantity: number,
-  discountPercent: number,
-  taxAmount: number,
-  shippingAmount: number
-) {
-  const subtotal = designerCost * quantity;
-  const discountLine = (discountPercent / 100) * subtotal;
-  return roundMoney(subtotal + discountLine + taxAmount + shippingAmount);
+/** Discounted retail subtotal: (retail × qty) − (discount% × retail × qty) */
+export function getLedgerMerchandiseAmount(entry: {
+  retail_price: number;
+  quantity: number;
+  discount_percent: number;
+}) {
+  const qty = Math.max(1, Math.round(Number(entry.quantity) || 1));
+  const retailSubtotal = Number(entry.retail_price) * qty;
+  const discountAmount = (Number(entry.discount_percent) / 100) * retailSubtotal;
+  return roundMoney(retailSubtotal - discountAmount);
 }
 
+/** Discounted retail only: (retail × qty) − (discount% × retail × qty) */
 export function getLedgerCustomerPrice(entry: {
-  designer_cost: number;
+  retail_price: number;
+  quantity: number;
+  discount_percent: number;
+}) {
+  return getLedgerMerchandiseAmount(entry);
+}
+
+/** Form helper — discounted retail subtotal only. */
+export function calculateCustomerPrice(
+  retailPrice: number,
+  quantity: number,
+  discountPercent: number
+) {
+  return getLedgerMerchandiseAmount({
+    retail_price: retailPrice,
+    quantity,
+    discount_percent: discountPercent,
+  });
+}
+
+/** Customer price + tax + shipping + payment fee. */
+export function getLedgerInvoicedAmount(entry: {
+  retail_price: number;
   quantity: number;
   discount_percent: number;
   tax_amount: number;
   shipping_receiving_amount: number;
   wholesale_retail: "wholesale" | "retail";
+  payment_fee?: number;
 }) {
   const tax =
     entry.wholesale_retail === "wholesale" ? Number(entry.tax_amount) : 0;
-  return calculateCustomerPrice(
-    Number(entry.designer_cost),
-    Number(entry.quantity),
-    Number(entry.discount_percent),
-    tax,
-    Number(entry.shipping_receiving_amount)
+  const shipping = Number(entry.shipping_receiving_amount) || 0;
+  const fee = Number(entry.payment_fee ?? 0);
+  return roundMoney(
+    getLedgerCustomerPrice(entry) + tax + shipping + fee
   );
 }
 
@@ -66,10 +83,20 @@ export function getLedgerTotalDesignerCost(entry: {
   return roundMoney(Number(entry.designer_cost) * (Number(entry.quantity) || 1));
 }
 
+/** Unit retail price × quantity (before discount). */
+export function getLedgerRetailSubtotal(entry: {
+  retail_price: number;
+  quantity: number;
+}) {
+  const qty = Math.max(1, Math.round(Number(entry.quantity) || 1));
+  return roundMoney(Number(entry.retail_price) * qty);
+}
+
 type LedgerBalanceEntry = {
   client_id?: string;
   po_number?: string | null;
   designer_cost: number;
+  retail_price: number;
   quantity: number;
   credit_debit: "credit" | "debit";
   invoiced?: boolean;
@@ -78,17 +105,12 @@ type LedgerBalanceEntry = {
   tax_amount?: number;
   shipping_receiving_amount?: number;
   wholesale_retail?: "wholesale" | "retail";
+  payment_fee?: number;
+  payment_amount?: number;
 };
 
-function ledgerInvoiceAmount(entry: LedgerBalanceEntry) {
-  return getLedgerCustomerPrice({
-    designer_cost: entry.designer_cost,
-    quantity: entry.quantity,
-    discount_percent: entry.discount_percent ?? 0,
-    tax_amount: entry.tax_amount ?? 0,
-    shipping_receiving_amount: entry.shipping_receiving_amount ?? 0,
-    wholesale_retail: entry.wholesale_retail ?? "retail",
-  });
+function ledgerRevenueAmount(entry: LedgerBalanceEntry) {
+  return roundMoney(Number(entry.payment_amount ?? 0));
 }
 
 function ledgerPoClientKey(clientId: string, po: string | null | undefined) {
@@ -105,7 +127,7 @@ function isInvoicedForBalance(
 }
 
 /**
- * Invoiced lines: credits = invoice (customer price), debits = designer cost.
+ * Invoiced lines: credits = payments received, debits = designer cost.
  * Net balance = credits − debits. Uninvoiced debits add designer cost only.
  */
 export function sumLedgerCreditsAndDebits(
@@ -115,10 +137,10 @@ export function sumLedgerCreditsAndDebits(
   return entries.reduce(
     (acc, entry) => {
       const designerTotal = getLedgerTotalDesignerCost(entry);
-      const invoiceAmount = ledgerInvoiceAmount(entry);
+      const revenue = ledgerRevenueAmount(entry);
 
       if (isInvoicedForBalance(entry, options?.invoicedPoKeys)) {
-        acc.credits += invoiceAmount;
+        acc.credits += revenue;
         acc.debits += designerTotal;
         return acc;
       }

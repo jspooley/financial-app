@@ -16,7 +16,7 @@ import {
   type InvoiceLineItem,
 } from "@/lib/invoice-utils";
 import type { Client, Invoice, LedgerEntry } from "@/lib/types";
-import { formatCurrency, formatDate, getLedgerCustomerPrice } from "@/lib/utils";
+import { formatCurrency, formatDate, getLedgerInvoicedAmount } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 import { CheckboxField, InputField, SelectField, TextareaField } from "@/components/ui/FormFields";
 import { InvoiceDetailView } from "@/components/invoicing/InvoiceDetailView";
@@ -435,7 +435,7 @@ export function InvoiceForm({
                     <li key={line.id}>
                       {formatDate(line.entry_date)} —{" "}
                       {line.description?.trim() || "Item"} —{" "}
-                      {formatCurrency(getLedgerCustomerPrice(line))}
+                      {formatCurrency(getLedgerInvoicedAmount(line))}
                     </li>
                   ))}
                 </ul>
@@ -474,7 +474,7 @@ export function InvoiceForm({
                 {linesForPo.map((line) => (
                   <li key={line.id}>
                     <CheckboxField
-                      label={`${formatDate(line.entry_date)} — ${line.description?.trim() || "Item"} — ${formatCurrency(getLedgerCustomerPrice(line))}`}
+                      label={`${formatDate(line.entry_date)} — ${line.description?.trim() || "Item"} — ${formatCurrency(getLedgerInvoicedAmount(line))}`}
                       checked={selectedLineIds.has(line.id)}
                       onChange={() => toggleLine(line.id)}
                     />

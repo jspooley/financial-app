@@ -1,5 +1,5 @@
 import type { LedgerEntry } from "./types";
-import { formatCurrency, formatDate, getLedgerCustomerPrice, roundMoney } from "./utils";
+import { formatCurrency, formatDate, getLedgerCustomerPrice, getLedgerInvoicedAmount, roundMoney } from "./utils";
 
 /** Short US date for printed invoices (e.g. 4/22/2026). */
 export function formatInvoiceDisplayDate(value?: string | Date | null): string {
@@ -43,12 +43,12 @@ export function isLedgerLineInvoiced(line: {
   return Boolean(line.invoiced || line.invoice_id);
 }
 
-export function isLedgerLineUnpaid(line: { paid?: boolean | null }): boolean {
-  return !line.paid;
+export function isLedgerLineUnpaid(line: LedgerAmountEntry): boolean {
+  return getLedgerOutstandingBalance(line) > 0;
 }
 
-type LedgerAmountEntry = {
-  designer_cost: number;
+export type LedgerAmountEntry = {
+  retail_price: number;
   quantity: number;
   discount_percent?: number;
   tax_amount?: number;
@@ -58,17 +58,32 @@ type LedgerAmountEntry = {
   invoiced?: boolean | null;
   invoice_id?: string | null;
   paid?: boolean | null;
+  payment_fee?: number;
+  payment_amount?: number;
 };
 
-function customerPriceForEntry(entry: LedgerAmountEntry) {
-  return getLedgerCustomerPrice({
-    designer_cost: entry.designer_cost,
+function invoicedAmountForEntry(entry: LedgerAmountEntry) {
+  return getLedgerInvoicedAmount({
+    retail_price: entry.retail_price,
     quantity: entry.quantity,
     discount_percent: entry.discount_percent ?? 0,
     tax_amount: entry.tax_amount ?? 0,
     shipping_receiving_amount: entry.shipping_receiving_amount ?? 0,
     wholesale_retail: entry.wholesale_retail ?? "retail",
+    payment_fee: entry.payment_fee ?? 0,
   });
+}
+
+/** Remaining balance when payment amount is less than invoiced amount. */
+export function getLedgerOutstandingBalance(entry: LedgerAmountEntry) {
+  const invoiced = invoicedAmountForEntry(entry);
+  const paid = roundMoney(Number(entry.payment_amount ?? 0));
+  return roundMoney(Math.max(0, invoiced - paid));
+}
+
+/** Paid only when cumulative payment amount meets or exceeds invoiced amount. */
+export function isLedgerLineFullyPaid(entry: LedgerAmountEntry) {
+  return getLedgerOutstandingBalance(entry) === 0;
 }
 
 export function summarizeToBeInvoiced(entries: LedgerAmountEntry[]) {
@@ -76,7 +91,7 @@ export function summarizeToBeInvoiced(entries: LedgerAmountEntry[]) {
   return {
     count: lines.length,
     amount: roundMoney(
-      lines.reduce((sum, entry) => sum + customerPriceForEntry(entry), 0)
+      lines.reduce((sum, entry) => sum + invoicedAmountForEntry(entry), 0)
     ),
   };
 }
@@ -91,7 +106,7 @@ export function summarizeInvoicedUnpaid(entries: LedgerAmountEntry[]) {
   return {
     count: lines.length,
     amount: roundMoney(
-      lines.reduce((sum, entry) => sum + customerPriceForEntry(entry), 0)
+      lines.reduce((sum, entry) => sum + getLedgerOutstandingBalance(entry), 0)
     ),
   };
 }
@@ -135,7 +150,8 @@ export function summarizeJobsByStatus(
     if (!key) continue;
 
     const complete =
-      isLineInvoicedForJob(entry, options?.invoicedPoKeys) && Boolean(entry.paid);
+      isLineInvoicedForJob(entry, options?.invoicedPoKeys) &&
+      isLedgerLineFullyPaid(entry);
     jobHasOpenLine.set(key, (jobHasOpenLine.get(key) ?? false) || !complete);
   }
 
@@ -225,7 +241,7 @@ export function groupLedgerByInvoiceId(
 }
 
 export function invoiceLineTotal(entry: InvoiceLineItem): number {
-  return getLedgerCustomerPrice(entry);
+  return getLedgerInvoicedAmount(entry);
 }
 
 export interface InvoiceLineBreakdown {
@@ -237,13 +253,8 @@ export interface InvoiceLineBreakdown {
 }
 
 export function getInvoiceLineBreakdown(entry: InvoiceLineItem): InvoiceLineBreakdown {
-  const quantity = Number(entry.quantity) || 1;
-  const designerCost = Number(entry.designer_cost) || 0;
-  const discountPercent = Number(entry.discount_percent) || 0;
   const shipping = Number(entry.shipping_receiving_amount) || 0;
-  const subtotal = designerCost * quantity;
-  const discountLine = (discountPercent / 100) * subtotal;
-  const merchandise = roundMoney(subtotal + discountLine);
+  const merchandise = getLedgerCustomerPrice(entry);
   const tax =
     entry.wholesale_retail === "wholesale" ? Number(entry.tax_amount) || 0 : 0;
 

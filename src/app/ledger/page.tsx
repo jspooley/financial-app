@@ -8,11 +8,152 @@ import { LedgerForm } from "@/components/forms/LedgerForm";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { isLedgerLineUninvoiced } from "@/lib/invoice-utils";
+import { isLedgerLineUninvoiced, getLedgerOutstandingBalance, isLedgerLineFullyPaid } from "@/lib/invoice-utils";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { Client, Invoice, LedgerEntry, TradePartner } from "@/lib/types";
-import { formatCurrency, formatDate, getLedgerCustomerPrice, getLedgerTotalDesignerCost, purchaserFromEmail } from "@/lib/utils";
+import { formatCurrency, formatDate, getLedgerCustomerPrice, getLedgerInvoicedAmount, getLedgerRetailSubtotal, getLedgerTotalDesignerCost, purchaserFromEmail } from "@/lib/utils";
+
+function ledgerTaxDisplay(entry: LedgerEntry) {
+  return entry.wholesale_retail === "retail"
+    ? "N/A"
+    : formatCurrency(Number(entry.tax_amount));
+}
+
+function ledgerDetailFields(entry: LedgerEntry) {
+  return [
+    { label: "Client", value: entry.clients?.name ?? "—" },
+    { label: "Date", value: formatDate(entry.entry_date) },
+    { label: "Retail Price", value: formatCurrency(Number(entry.retail_price ?? 0)) },
+    { label: "Quantity", value: String(Math.round(Number(entry.quantity))) },
+    {
+      label: "Retail Price × Qty",
+      value: formatCurrency(getLedgerRetailSubtotal(entry)),
+    },
+    { label: "Discount %", value: `${Number(entry.discount_percent)}%` },
+    { label: "Customer Price × Qty", value: formatCurrency(getLedgerCustomerPrice(entry)) },
+    { label: "Tax", value: ledgerTaxDisplay(entry) },
+    {
+      label: "Shipping",
+      value: formatCurrency(Number(entry.shipping_receiving_amount ?? 0)),
+    },
+    { label: "Payment Fee", value: formatCurrency(Number(entry.payment_fee ?? 0)) },
+    { label: "Invoiced Amount", value: formatCurrency(getLedgerInvoicedAmount(entry)) },
+    {
+      label: "Outstanding Balance",
+      value:
+        entry.credit_debit === "debit"
+          ? formatCurrency(getLedgerOutstandingBalance(entry))
+          : "—",
+    },
+    { label: "Invoiced", value: entry.invoiced ? "Yes" : "No" },
+    { label: "Invoice ID", value: entry.invoice_id ?? "—" },
+    {
+      label: "Paid Amount",
+      value:
+        entry.credit_debit === "debit"
+          ? formatCurrency(Number(entry.payment_amount ?? 0))
+          : "—",
+    },
+    {
+      label: "Paid",
+      value:
+        entry.credit_debit === "debit"
+          ? isLedgerLineFullyPaid(entry)
+            ? "Yes"
+            : "No"
+          : "—",
+    },
+    { label: "Purchaser", value: entry.purchaser },
+    {
+      label: "Paid To",
+      value: entry.credit_debit === "debit" ? (entry.paid_to ?? "—") : "—",
+    },
+    {
+      label: "Date Paid",
+      value:
+        entry.credit_debit === "debit" && entry.date_paid
+          ? formatDate(entry.date_paid)
+          : "—",
+    },
+    { label: "Designer Cost", value: formatCurrency(Number(entry.designer_cost)) },
+    {
+      label: "Total Designer Cost",
+      value: formatCurrency(getLedgerTotalDesignerCost(entry)),
+    },
+    { label: "PO", value: entry.po_number ?? "—" },
+    { label: "Type", value: `${entry.credit_debit} / ${entry.wholesale_retail}` },
+    {
+      label: "Sales and Use Tax Paid",
+      value: entry.sales_and_use_tax_paid ? "Yes" : "No",
+    },
+  ];
+}
+
+function mapLedgerTableRow(entry: LedgerEntry) {
+  return {
+    client: entry.clients?.name ?? "—",
+    date: formatDate(entry.entry_date),
+    retailPrice: formatCurrency(Number(entry.retail_price ?? 0)),
+    qty: Math.round(Number(entry.quantity)),
+    retailPriceQty: formatCurrency(getLedgerRetailSubtotal(entry)),
+    discount: `${Number(entry.discount_percent)}%`,
+    customerPrice: formatCurrency(getLedgerCustomerPrice(entry)),
+    tax: ledgerTaxDisplay(entry),
+    shipping: formatCurrency(Number(entry.shipping_receiving_amount ?? 0)),
+    paymentFee: formatCurrency(Number(entry.payment_fee ?? 0)),
+    invoicedAmount: formatCurrency(getLedgerInvoicedAmount(entry)),
+    outstandingBalance:
+      entry.credit_debit === "debit"
+        ? formatCurrency(getLedgerOutstandingBalance(entry))
+        : "—",
+    invoiced: entry.invoiced ? "Yes" : "No",
+    invoiceId: entry.invoice_id ?? "—",
+    paidAmount:
+      entry.credit_debit === "debit"
+        ? formatCurrency(Number(entry.payment_amount ?? 0))
+        : "—",
+    paid: entry.credit_debit === "debit" ? (isLedgerLineFullyPaid(entry) ? "Yes" : "No") : "—",
+    purchaser: entry.purchaser,
+    paidTo: entry.credit_debit === "debit" ? (entry.paid_to ?? "—") : "—",
+    datePaid:
+      entry.credit_debit === "debit" && entry.date_paid
+        ? formatDate(entry.date_paid)
+        : "—",
+    designerCost: formatCurrency(Number(entry.designer_cost)),
+    totalDesignerCost: formatCurrency(getLedgerTotalDesignerCost(entry)),
+    po: entry.po_number ?? "—",
+    type: `${entry.credit_debit} / ${entry.wholesale_retail}`,
+    salesUseTaxPaid: entry.sales_and_use_tax_paid ? "Yes" : "No",
+  };
+}
+
+const ledgerDetailColumns = [
+  { key: "client", label: "Client" },
+  { key: "date", label: "Date" },
+  { key: "retailPrice", label: "Retail Price" },
+  { key: "qty", label: "Quantity" },
+  { key: "retailPriceQty", label: "Retail Price × Qty" },
+  { key: "discount", label: "Discount %" },
+  { key: "customerPrice", label: "Customer Price × Qty" },
+  { key: "tax", label: "Tax" },
+  { key: "shipping", label: "Shipping" },
+  { key: "paymentFee", label: "Payment Fee" },
+  { key: "invoicedAmount", label: "Invoiced Amount" },
+  { key: "outstandingBalance", label: "Outstanding Balance" },
+  { key: "invoiced", label: "Invoiced" },
+  { key: "invoiceId", label: "Invoice ID" },
+  { key: "paidAmount", label: "Paid Amount" },
+  { key: "paid", label: "Paid" },
+  { key: "purchaser", label: "Purchaser" },
+  { key: "paidTo", label: "Paid To" },
+  { key: "datePaid", label: "Date Paid" },
+  { key: "designerCost", label: "Designer Cost" },
+  { key: "totalDesignerCost", label: "Total Designer Cost" },
+  { key: "po", label: "PO" },
+  { key: "type", label: "Type" },
+  { key: "salesUseTaxPaid", label: "Sales and Use Tax Paid" },
+] as const;
 
 export default function LedgerPage() {
   return (
@@ -250,68 +391,18 @@ function LedgerPageContent() {
                       className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
                     >
                       <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-medium text-slate-900">
-                            {entry.clients?.name ?? "—"}
-                          </p>
-                          <p className="text-sm text-slate-500">
-                            {formatDate(entry.entry_date)} · {entry.credit_debit} /{" "}
-                            {entry.wholesale_retail}
-                          </p>
-                        </div>
+                        <p className="text-sm font-medium text-slate-500">Invoiced Amount</p>
                         <p className="text-right font-semibold text-brand-800">
-                          {formatCurrency(getLedgerCustomerPrice(entry))}
+                          {formatCurrency(getLedgerInvoicedAmount(entry))}
                         </p>
                       </div>
                       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                        <div>
-                          <dt className="text-slate-500">Designer cost</dt>
-                          <dd>{formatCurrency(Number(entry.designer_cost))}</dd>
-                        </div>
-                        <div>
-                          <dt className="text-slate-500">Qty</dt>
-                          <dd>{Math.round(Number(entry.quantity))}</dd>
-                        </div>
-                        <div>
-                          <dt className="text-slate-500">Total designer cost</dt>
-                          <dd>{formatCurrency(getLedgerTotalDesignerCost(entry))}</dd>
-                        </div>
-                        <div>
-                          <dt className="text-slate-500">PO</dt>
-                          <dd>{entry.po_number ?? "—"}</dd>
-                        </div>
-                        <div>
-                          <dt className="text-slate-500">Purchaser</dt>
-                          <dd>{entry.purchaser}</dd>
-                        </div>
-                        {entry.credit_debit === "debit" && (
-                          <>
-                            <div>
-                              <dt className="text-slate-500">Paid</dt>
-                              <dd>{entry.paid ? "Yes" : "No"}</dd>
-                            </div>
-                            <div>
-                              <dt className="text-slate-500">Date Paid</dt>
-                              <dd>{entry.date_paid ? formatDate(entry.date_paid) : "—"}</dd>
-                            </div>
-                            <div>
-                              <dt className="text-slate-500">Paid To</dt>
-                              <dd>{entry.paid_to ?? "—"}</dd>
-                            </div>
-                            <div>
-                              <dt className="text-slate-500">Payment Amount</dt>
-                              <dd>{formatCurrency(Number(entry.payment_amount ?? 0))}</dd>
-                            </div>
-                            <div>
-                              <dt className="text-slate-500">Payment Type</dt>
-                              <dd>{entry.payment_type ?? "—"}</dd>
-                            </div>
-                            <div>
-                              <dt className="text-slate-500">Payment Fee</dt>
-                              <dd>{formatCurrency(Number(entry.payment_fee ?? 0))}</dd>
-                            </div>
-                          </>
-                        )}
+                        {ledgerDetailFields(entry).map((field) => (
+                          <div key={field.label}>
+                            <dt className="text-slate-500">{field.label}</dt>
+                            <dd>{field.value}</dd>
+                          </div>
+                        ))}
                       </dl>
                       <div className="mt-4 border-t border-slate-100 pt-4">{entryActions(entry)}</div>
                     </article>
@@ -333,52 +424,11 @@ function LedgerPageContent() {
                 stickyLastColumn
                 rowKey={(_, index) => debitEntries[index]?.id ?? String(index)}
                 columns={[
-                  { key: "date", label: "Date" },
-                  { key: "client", label: "Client" },
-                  { key: "type", label: "Type" },
-                  { key: "designerCost", label: "Designer Cost" },
-                  { key: "qty", label: "Qty" },
-                  { key: "totalDesignerCost", label: "Total Designer Cost" },
-                  { key: "discount", label: "Discount %" },
-                  { key: "customerPrice", label: "Customer Price" },
-                  { key: "po", label: "PO" },
-                  { key: "tax", label: "Tax" },
-                  { key: "invoiced", label: "Invoiced" },
-                  { key: "invoiceId", label: "Invoice ID" },
-                  { key: "paid", label: "Paid" },
-                  { key: "datePaid", label: "Date Paid" },
-                  { key: "paidTo", label: "Paid To" },
-                  { key: "paymentAmount", label: "Payment Amount" },
-                  { key: "paymentType", label: "Payment Type" },
-                  { key: "paymentFee", label: "Payment Fee" },
-                  { key: "salesUseTaxPaid", label: "Sales and Use Tax Paid" },
-                  { key: "purchaser", label: "Purchaser" },
+                  ...ledgerDetailColumns,
                   { key: "actions", label: "Actions", className: "text-right" },
                 ]}
                 rows={debitEntries.map((entry) => ({
-                  date: formatDate(entry.entry_date),
-                  client: entry.clients?.name ?? "—",
-                  type: `${entry.credit_debit} / ${entry.wholesale_retail}`,
-                  designerCost: formatCurrency(Number(entry.designer_cost)),
-                  qty: Math.round(Number(entry.quantity)),
-                  totalDesignerCost: formatCurrency(getLedgerTotalDesignerCost(entry)),
-                  discount: `${Number(entry.discount_percent)}%`,
-                  customerPrice: formatCurrency(getLedgerCustomerPrice(entry)),
-                  po: entry.po_number ?? "—",
-                  tax:
-                    entry.wholesale_retail === "retail"
-                      ? "N/A"
-                      : formatCurrency(Number(entry.tax_amount)),
-                  invoiced: entry.invoiced ? "Yes" : "No",
-                  invoiceId: entry.invoice_id ?? "—",
-                  paid: entry.paid ? "Yes" : "No",
-                  datePaid: entry.date_paid ? formatDate(entry.date_paid) : "—",
-                  paidTo: entry.paid_to ?? "—",
-                  paymentAmount: formatCurrency(Number(entry.payment_amount ?? 0)),
-                  paymentType: entry.payment_type ?? "—",
-                  paymentFee: formatCurrency(Number(entry.payment_fee ?? 0)),
-                  salesUseTaxPaid: entry.sales_and_use_tax_paid ? "Yes" : "No",
-                  purchaser: entry.purchaser,
+                  ...mapLedgerTableRow(entry),
                   actions: entryActions(entry),
                 }))}
                 emptyMessage="No debit entries yet."
@@ -394,40 +444,11 @@ function LedgerPageContent() {
               stickyLastColumn
               rowKey={(_, index) => creditEntries[index]?.id ?? String(index)}
               columns={[
-                { key: "date", label: "Date" },
-                { key: "client", label: "Client" },
-                { key: "type", label: "Type" },
-                { key: "designerCost", label: "Designer Cost" },
-                { key: "qty", label: "Qty" },
-                { key: "totalDesignerCost", label: "Total Designer Cost" },
-                { key: "discount", label: "Discount %" },
-                { key: "customerPrice", label: "Customer Price" },
-                { key: "po", label: "PO" },
-                { key: "tax", label: "Tax" },
-                { key: "invoiced", label: "Invoiced" },
-                { key: "invoiceId", label: "Invoice ID" },
-                { key: "salesUseTaxPaid", label: "Sales and Use Tax Paid" },
-                { key: "purchaser", label: "Purchaser" },
+                ...ledgerDetailColumns,
                 { key: "actions", label: "Actions", className: "text-right" },
               ]}
               rows={creditEntries.map((entry) => ({
-                date: formatDate(entry.entry_date),
-                client: entry.clients?.name ?? "—",
-                type: `${entry.credit_debit} / ${entry.wholesale_retail}`,
-                designerCost: formatCurrency(Number(entry.designer_cost)),
-                qty: Math.round(Number(entry.quantity)),
-                totalDesignerCost: formatCurrency(getLedgerTotalDesignerCost(entry)),
-                discount: `${Number(entry.discount_percent)}%`,
-                customerPrice: formatCurrency(getLedgerCustomerPrice(entry)),
-                po: entry.po_number ?? "—",
-                tax:
-                  entry.wholesale_retail === "retail"
-                    ? "N/A"
-                    : formatCurrency(Number(entry.tax_amount)),
-                invoiced: entry.invoiced ? "Yes" : "No",
-                invoiceId: entry.invoice_id ?? "—",
-                salesUseTaxPaid: entry.sales_and_use_tax_paid ? "Yes" : "No",
-                purchaser: entry.purchaser,
+                ...mapLedgerTableRow(entry),
                 actions: entryActions(entry),
               }))}
               emptyMessage="No credit entries yet."

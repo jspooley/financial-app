@@ -7,7 +7,7 @@ import type {
   Purchaser,
   WholesaleRetail,
 } from "./types";
-import { calculateWholesaleTax } from "./utils";
+import { calculateTaxFromRetailPrice } from "./utils";
 
 export type { LedgerDbRow, LedgerInsert };
 
@@ -49,6 +49,7 @@ export function normalizeLedgerRow(
     trade_partner_id: r.trade_partner_id,
     discount_percent: Number(r.discount_amount ?? r.discount_percent ?? 0),
     shipping_receiving_amount: Number(r.shipping_receiving_amount ?? 0),
+    retail_price: Number(r.retail_price ?? 0),
     tax_amount: Number(r.tax_amount ?? 0),
     invoiced: Boolean(r.invoiced ?? false),
     sales_and_use_tax_paid: Boolean(
@@ -82,6 +83,7 @@ export function ledgerFormToDb(values: {
   trade_partner_id?: string;
   discount_percent: number;
   shipping_receiving_amount: number;
+  retail_price: number;
   tax_amount: number;
   invoiced: boolean;
   sales_and_use_tax_paid: boolean;
@@ -94,11 +96,12 @@ export function ledgerFormToDb(values: {
   const quantity = Math.max(1, Math.round(Number(values.quantity) || 1));
   const designerCost = Number(values.designer_cost) || 0;
   const discountPercent = Number(values.discount_percent) || 0;
+  const retailPrice = Number(values.retail_price) || 0;
   const tax =
     values.wholesale_retail === "wholesale"
       ? values.tax_manually_edited
         ? Number(values.tax_amount) || 0
-        : calculateWholesaleTax(designerCost, discountPercent, quantity)
+        : calculateTaxFromRetailPrice(retailPrice, quantity)
       : 0;
 
   return {
@@ -111,6 +114,7 @@ export function ledgerFormToDb(values: {
     trade_partner_id: values.trade_partner_id || null,
     discount_amount: discountPercent,
     shipping_receiving_amount: values.shipping_receiving_amount,
+    retail_price: retailPrice,
     tax_amount: tax,
     client_id: values.client_id,
     po_number: values.po_number?.trim() || null,

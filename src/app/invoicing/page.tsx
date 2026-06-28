@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { InvoiceForm } from "@/components/forms/InvoiceForm";
 import { DeleteInvoiceDialog } from "@/components/invoicing/DeleteInvoiceDialog";
@@ -9,10 +10,11 @@ import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/client";
-import { normalizeLedgerRow } from "@/lib/ledger-db";
+import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { InvoiceLineItem } from "@/lib/invoice-utils";
+import { summarizeInvoicedUnpaid } from "@/lib/invoice-utils";
 import type { Client, Invoice } from "@/lib/types";
-import { formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
 
 export default function InvoicingPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -29,19 +31,29 @@ export default function InvoicingPage() {
     lines: InvoiceLineItem[];
   } | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [outstandingPayments, setOutstandingPayments] = useState({
+    count: 0,
+    amount: 0,
+  });
 
   const loadData = useCallback(async () => {
     setLoading(true);
     const supabase = createClient();
-    const [{ data: invoiceData }, { data: clientData }] = await Promise.all([
+    const [{ data: invoiceData }, { data: clientData }, { data: ledgerData }] =
+      await Promise.all([
       supabase
         .from("invoicing")
         .select("*, clients(name, address)")
         .order("created_at", { ascending: false }),
       supabase.from("clients").select("*").order("name", { ascending: true }),
+      supabase.from("ledger").select("*"),
     ]);
     setInvoices((invoiceData ?? []) as Invoice[]);
     setClients(clientData ?? []);
+    const ledgerEntries = (ledgerData ?? []).map((row) =>
+      normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
+    );
+    setOutstandingPayments(summarizeInvoicedUnpaid(ledgerEntries));
     setLoading(false);
   }, []);
 
@@ -116,6 +128,30 @@ export default function InvoicingPage() {
           )
         }
       />
+
+      {!showForm && (
+        <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs uppercase tracking-wide text-slate-500">
+            Outstanding Payments
+          </p>
+          <p className="mt-1 text-2xl font-semibold text-amber-800">
+            {formatCurrency(outstandingPayments.amount)}
+          </p>
+          <p className="mt-1 text-sm text-slate-600">
+            {outstandingPayments.count === 0
+              ? "No outstanding balance on invoiced items"
+              : `${outstandingPayments.count} ${outstandingPayments.count === 1 ? "item" : "items"} awaiting full payment`}
+          </p>
+          {outstandingPayments.count > 0 && (
+            <Link
+              href="/payments"
+              className="mt-2 inline-block text-sm font-medium text-brand-700 hover:underline"
+            >
+              Record payments →
+            </Link>
+          )}
+        </div>
+      )}
 
       {showForm ? (
         clients.length === 0 ? (
