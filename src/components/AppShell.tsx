@@ -7,12 +7,12 @@ import { createClient } from "@/lib/supabase/client";
 import { Button } from "./ui/Button";
 
 const navItems = [
-  { href: "/", label: "Maison Joy Business Overview", icon: "⌂" },
-  { href: "/appointments", label: "Appointments", icon: "📅" },
-  { href: "/clients", label: "Clients", icon: "👤" },
-  { href: "/ledger", label: "Ledger", icon: "₿" },
-  { href: "/payments", label: "Payments", icon: "💵" },
-  { href: "/invoicing", label: "Invoicing", icon: "📄" },
+  { href: "/", label: "Maison Joy Business Overview", shortLabel: "Overview", icon: "⌂" },
+  { href: "/appointments", label: "Appointments", shortLabel: "Appts", icon: "📅" },
+  { href: "/clients", label: "Clients", shortLabel: "Clients", icon: "👤" },
+  { href: "/ledger", label: "Ledger", shortLabel: "Ledger", icon: "₿" },
+  { href: "/payments", label: "Payments", shortLabel: "Pay", icon: "💵" },
+  { href: "/invoicing", label: "Invoicing", shortLabel: "Invoice", icon: "📄" },
 ];
 
 const tradePartnersHref = "/trade-partners";
@@ -80,26 +80,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-brand-stone-50">
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-          <Link href="/" className="flex items-center gap-3">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-2 sm:py-3">
+          <Link href="/" className="flex min-w-0 items-center gap-2 sm:gap-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/maison-joy-logo-tagline.png"
               alt="Maison Joy"
-              className="h-14 w-auto"
+              className="h-10 w-auto shrink-0 sm:h-14"
             />
-            <div>
-              <p className="text-sm font-semibold text-brand-600">Maison Joy Financial Manager</p>
-              <p className="text-sm text-slate-500">Shared business ledger</p>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-brand-600 sm:whitespace-normal">
+                Maison Joy Financial Manager
+              </p>
+              <p className="hidden text-sm text-slate-500 sm:block">Shared business ledger</p>
             </div>
           </Link>
-          <Button variant="ghost" onClick={handleSignOut} className="hidden sm:inline-flex">
+          <Button variant="ghost" onClick={handleSignOut} className="hidden shrink-0 sm:inline-flex">
             Sign out
           </Button>
         </div>
       </header>
 
-      <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-6 pb-24 md:flex-row md:pb-6">
+      <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-4 pb-28 sm:gap-6 sm:py-6 md:flex-row md:pb-6">
         <nav className="hidden w-56 shrink-0 md:block">
           <ul className="space-y-1 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
             {navItems.map((item) => {
@@ -128,11 +130,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </nav>
 
-        <main className="min-w-0 flex-1">
-          <div className="mb-4 md:hidden">
+        <main className="min-w-0 flex-1 overflow-x-hidden">
+          {children}
+          <div className="mt-4 md:hidden">
             <TradeAccountBox count={tradeAccountCount} pathname={pathname} />
           </div>
-          {children}
         </main>
       </div>
 
@@ -151,7 +153,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <span className="text-base" aria-hidden>
                     {item.icon}
                   </span>
-                  {item.label}
+                  <span className="max-w-[3.25rem] truncate leading-tight">
+                    {item.shortLabel}
+                  </span>
                 </Link>
               </li>
             );

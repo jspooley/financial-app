@@ -141,16 +141,18 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
         {cards.map((card) => (
           <Link
             key={card.label}
             href={card.href}
-            className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-brand-200"
+            className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition hover:border-brand-200 sm:p-4"
           >
-            <p className="text-sm text-slate-500">{card.label}</p>
-            <p className="mt-1 text-2xl font-semibold text-slate-900">{card.value}</p>
-            {card.hint && <p className="mt-1 text-xs text-slate-500">{card.hint}</p>}
+            <p className="text-xs text-slate-500 sm:text-sm">{card.label}</p>
+            <p className="mt-1 text-xl font-semibold text-slate-900 sm:text-2xl">{card.value}</p>
+            {card.hint && (
+              <p className="mt-1 hidden text-xs text-slate-500 sm:block">{card.hint}</p>
+            )}
           </Link>
         ))}
       </div>
@@ -210,13 +212,13 @@ export default async function DashboardPage() {
 
       <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
         <h2 className="text-lg font-semibold text-slate-900">P&amp;L Details</h2>
-        <p className="mt-1 text-sm text-slate-600">
+        <p className="mt-1 hidden text-sm text-slate-600 sm:block">
           For each invoiced line: <strong>Revenue</strong> = customer price (invoice amount),{" "}
           <strong>Cost of goods sold</strong> = total designer cost. <strong>Gross profit</strong> =
           revenue − cost (before expenses & loans). Uninvoiced debit costs are included in
           cost of goods sold only.
         </p>
-        <div className="mt-4 grid gap-4 sm:grid-cols-3">
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
           <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
             <p className="text-xs uppercase tracking-wide text-slate-500">Revenue</p>
             <p className="mt-1 text-xl font-semibold text-brand-800">
@@ -252,7 +254,7 @@ export default async function DashboardPage() {
               Unpaid sales and use tax from ledger entries where Sales and Use Tax Paid is unchecked.
             </p>
           </div>
-          <div className="flex flex-wrap justify-end gap-4 text-right sm:gap-6">
+          <div className="flex flex-wrap gap-3 text-right sm:justify-end sm:gap-6">
             <div>
               <p className="text-xs uppercase tracking-wide text-slate-500">Jess (this month)</p>
               <p className="text-xl font-semibold text-brand-800">
@@ -274,7 +276,55 @@ export default async function DashboardPage() {
           </div>
         </div>
 
-        <div className="mt-4 overflow-x-auto">
+        <div className="mt-4 space-y-3 md:hidden">
+          {taxDueByMonth.length === 0 ? (
+            <p className="py-4 text-center text-sm text-slate-500">No unpaid tax recorded yet.</p>
+          ) : (
+            <>
+              {taxDueByMonth.map((row) => (
+                <div
+                  key={row.monthKey}
+                  className="rounded-lg border border-slate-100 bg-slate-50 p-3"
+                >
+                  <p className="font-medium text-slate-900">{row.label}</p>
+                  <dl className="mt-2 grid grid-cols-3 gap-2 text-sm">
+                    <div>
+                      <dt className="text-slate-500">Jess</dt>
+                      <dd className="font-medium">{formatCurrency(row.jess)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-slate-500">Molly</dt>
+                      <dd className="font-medium">{formatCurrency(row.molly)}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-slate-500">Total</dt>
+                      <dd className="font-medium">{formatCurrency(row.amount)}</dd>
+                    </div>
+                  </dl>
+                </div>
+              ))}
+              <div className="rounded-lg border border-slate-200 bg-white p-3 font-semibold text-slate-900">
+                <p>Total unpaid tax</p>
+                <dl className="mt-2 grid grid-cols-3 gap-2 text-sm">
+                  <div>
+                    <dt className="font-normal text-slate-500">Jess</dt>
+                    <dd>{formatCurrency(totalJessTaxDue)}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-normal text-slate-500">Molly</dt>
+                    <dd>{formatCurrency(totalMollyTaxDue)}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-normal text-slate-500">Total</dt>
+                    <dd>{formatCurrency(totalTaxDue)}</dd>
+                  </div>
+                </dl>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="mt-4 hidden overflow-x-auto md:block">
           <table className="min-w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100 text-left text-slate-500">
@@ -337,7 +387,56 @@ export default async function DashboardPage() {
             Open full Ledger →
           </Link>
         </div>
-        <div className="mt-4 overflow-x-auto">
+        <div className="mt-4 space-y-3 md:hidden">
+          {(recentEntries.length === 0) ? (
+            <p className="py-4 text-center text-sm text-slate-500">
+              No ledger entries yet.{" "}
+              <Link href="/ledger" className="text-brand-700 underline">
+                Add your first entry
+              </Link>
+            </p>
+          ) : (
+            recentEntries.map((entry) => (
+              <article
+                key={entry.id}
+                className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-sm"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-medium text-slate-900">
+                      {entry.clients?.name ?? "—"}
+                    </p>
+                    <p className="text-slate-500">
+                      {formatDate(entry.entry_date)} · {entry.credit_debit}
+                    </p>
+                  </div>
+                  <p className="shrink-0 font-semibold text-brand-800">
+                    {formatCurrency(getLedgerCustomerPrice(entry))}
+                  </p>
+                </div>
+                <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                  <div>
+                    <dt className="text-slate-500">PO</dt>
+                    <dd>{entry.po_number ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Invoiced</dt>
+                    <dd>{entry.invoiced ? "Yes" : "No"}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Paid</dt>
+                    <dd>{entry.paid ? "Yes" : "No"}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Invoice ID</dt>
+                    <dd className="truncate">{entry.invoice_id ?? "—"}</dd>
+                  </div>
+                </dl>
+              </article>
+            ))
+          )}
+        </div>
+        <div className="mt-4 hidden overflow-x-auto md:block">
           <table className="min-w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100 text-left text-slate-500">

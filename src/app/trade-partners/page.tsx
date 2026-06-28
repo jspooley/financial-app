@@ -81,6 +81,7 @@ export default function TradePartnersPage() {
         <p className="text-sm text-slate-500">Loading trade partners...</p>
       ) : (
         <DataTable
+          mobileTitleKey="company"
           columns={[
             { key: "company", label: "Company" },
             { key: "discount", label: "Discount (%)" },

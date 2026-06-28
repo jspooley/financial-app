@@ -169,6 +169,7 @@ function AppointmentsPageContent() {
         </div>
       ) : (
         <DataTable
+          mobileTitleKey="client"
           columns={[
             { key: "date", label: "Date" },
             { key: "client", label: "Client" },

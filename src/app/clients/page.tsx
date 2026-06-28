@@ -103,6 +103,7 @@ function ClientsPageContent() {
         </div>
       ) : (
         <DataTable
+          mobileTitleKey="name"
           columns={[
             { key: "name", label: "Name" },
             { key: "email", label: "Email" },

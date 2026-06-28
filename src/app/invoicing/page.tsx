@@ -142,6 +142,7 @@ export default function InvoicingPage() {
         <p className="text-sm text-slate-500">Loading invoices...</p>
       ) : (
         <DataTable
+          mobileTitleKey="client"
           stickyLastColumn
           rowKey={(_, index) => invoices[index]?.id ?? String(index)}
           columns={[

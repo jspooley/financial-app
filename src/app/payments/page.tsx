@@ -411,7 +411,134 @@ export default function PaymentsPage() {
           No unpaid debit items for this client.
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+        <>
+        <div className="space-y-3 md:hidden">
+          {filteredEntries.map((entry) => {
+            const draft = drafts[entry.id];
+            if (!draft) return null;
+            const clientName =
+              entry.clients?.name ?? clientNames.get(entry.client_id) ?? "—";
+
+            return (
+              <article
+                key={entry.id}
+                className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+              >
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={draft.selected}
+                    onChange={(event) =>
+                      updateDraft(entry.id, { selected: event.target.checked })
+                    }
+                    className="mt-1 size-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium text-slate-900">{clientName}</p>
+                    <p className="text-sm text-slate-500">
+                      {formatDate(entry.entry_date)} · {entry.invoice_id ?? "No invoice ID"}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-700">{entry.description || "—"}</p>
+                    <p className="mt-1 text-sm font-medium text-brand-800">
+                      Designer cost: {formatCurrency(getLedgerTotalDesignerCost(entry))}
+                    </p>
+                  </div>
+                </label>
+
+                <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={draft.paid}
+                      disabled={!draft.selected}
+                      onChange={(event) => updateDraft(entry.id, { paid: event.target.checked })}
+                      className="size-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 disabled:opacity-50"
+                    />
+                    <span>Mark paid</span>
+                  </label>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-slate-600">Date paid</span>
+                    <input
+                      type="date"
+                      value={draft.date_paid}
+                      disabled={!draft.selected}
+                      onChange={(event) =>
+                        updateDraft(entry.id, { date_paid: event.target.value })
+                      }
+                      className="min-h-11 w-full rounded-lg border border-slate-300 px-3 disabled:opacity-50"
+                    />
+                  </label>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-slate-600">Paid to</span>
+                    <select
+                      className="min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 disabled:opacity-50"
+                      value={draft.paid_to}
+                      disabled={!draft.selected}
+                      onChange={(event) =>
+                        updateDraft(entry.id, { paid_to: event.target.value as Purchaser })
+                      }
+                    >
+                      <option value="Jess">Jess</option>
+                      <option value="Molly">Molly</option>
+                    </select>
+                  </label>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-slate-600">Payment amount</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={draft.payment_amount}
+                      disabled={!draft.selected}
+                      onChange={(event) =>
+                        updateDraft(entry.id, {
+                          payment_amount: Number(event.target.value) || 0,
+                        })
+                      }
+                      className="min-h-11 w-full rounded-lg border border-slate-300 px-3 disabled:opacity-50"
+                    />
+                  </label>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-slate-600">Payment type</span>
+                    <select
+                      className="min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 disabled:opacity-50"
+                      value={draft.payment_type}
+                      disabled={!draft.selected}
+                      onChange={(event) =>
+                        updateDraft(entry.id, {
+                          payment_type: event.target.value as PaymentType,
+                        })
+                      }
+                    >
+                      <option value="Cash">Cash</option>
+                      <option value="Check">Check</option>
+                      <option value="CC">CC</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </label>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-slate-600">Payment fee</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={draft.payment_fee}
+                      disabled={!draft.selected}
+                      onChange={(event) =>
+                        updateDraft(entry.id, {
+                          payment_fee: Number(event.target.value) || 0,
+                        })
+                      }
+                      className="min-h-11 w-full rounded-lg border border-slate-300 px-3 disabled:opacity-50"
+                    />
+                  </label>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+
+        <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-slate-600">
               <tr>
@@ -541,6 +668,7 @@ export default function PaymentsPage() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {clientsWithUnpaid.length > 0 && (
@@ -582,7 +710,57 @@ export default function PaymentsPage() {
               <p>No paid invoiced items recorded yet.</p>
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+            <>
+            <div className="space-y-3 md:hidden">
+              {filteredPaidEntries.map((entry) => {
+                const paymentAmount = Number(entry.payment_amount);
+                return (
+                  <article
+                    key={entry.id}
+                    className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm text-sm"
+                  >
+                    <p className="font-medium text-slate-900">
+                      {entry.clients?.name ?? clientNames.get(entry.client_id) ?? "—"}
+                    </p>
+                    <dl className="mt-3 space-y-2">
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-slate-500">Date paid</dt>
+                        <dd>{formatDate(entry.date_paid)}</dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-slate-500">Invoice ID</dt>
+                        <dd>{entry.invoice_id ?? "—"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-slate-500">Description</dt>
+                        <dd className="text-right">{entry.description || "—"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-slate-500">Amount</dt>
+                        <dd className="font-medium text-brand-800">
+                          {formatCurrency(
+                            paymentAmount > 0 ? paymentAmount : getLedgerCustomerPrice(entry)
+                          )}
+                        </dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-slate-500">Paid to</dt>
+                        <dd>{entry.paid_to ?? "—"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-slate-500">Type</dt>
+                        <dd>{entry.payment_type ?? "—"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-slate-500">Fee</dt>
+                        <dd>{formatCurrency(Number(entry.payment_fee ?? 0))}</dd>
+                      </div>
+                    </dl>
+                  </article>
+                );
+              })}
+            </div>
+            <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-50 text-left text-slate-600">
                   <tr>
@@ -623,6 +801,7 @@ export default function PaymentsPage() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
 
           {filteredPaidEntries.length > 0 && (
