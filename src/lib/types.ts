@@ -1,7 +1,15 @@
 export type CreditDebit = "credit" | "debit";
 export type WholesaleRetail = "wholesale" | "retail";
 export type Purchaser = "Jess" | "Molly";
-export type PaymentType = "Cash" | "Check" | "CC" | "Other";
+export type PaymentType = "Cash" | "Check" | "CC" | "Venmo" | "Other";
+
+export const PAYMENT_TYPE_OPTIONS: PaymentType[] = [
+  "Cash",
+  "Check",
+  "CC",
+  "Venmo",
+  "Other",
+];
 
 /** Columns sent to Supabase ledger table (matches your live database). */
 export type LedgerInsert = {

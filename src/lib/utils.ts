@@ -13,14 +13,50 @@ export function formatPercent(value: number) {
   }).format(value / 100);
 }
 
+import type { PaymentType } from "./types";
+
 export function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
-/** Sales/use tax: retail price × quantity × 0.06 */
-export function calculateTaxFromRetailPrice(retailPrice: number, quantity: number) {
-  const qty = Math.max(1, Math.round(Number(quantity) || 1));
-  return roundMoney(Number(retailPrice) * qty * 0.06);
+/** Venmo processing fee: 2.3% of payment amount. */
+export function calculateVenmoPaymentFee(paymentAmount: number) {
+  return roundMoney(Math.max(0, Number(paymentAmount) || 0) * 0.023);
+}
+
+/** Credit card processing fee: 2.6% of payment amount. */
+export function calculateCreditCardPaymentFee(paymentAmount: number) {
+  return roundMoney(Math.max(0, Number(paymentAmount) || 0) * 0.026);
+}
+
+export function paymentTypeHasAutoFee(paymentType: PaymentType) {
+  return paymentType === "Venmo" || paymentType === "CC";
+}
+
+/** Auto-calculated payment fee for Venmo (2.3%) or CC (2.6%). */
+export function calculateAutoPaymentFee(
+  paymentType: PaymentType,
+  paymentAmount: number
+) {
+  switch (paymentType) {
+    case "Venmo":
+      return calculateVenmoPaymentFee(paymentAmount);
+    case "CC":
+      return calculateCreditCardPaymentFee(paymentAmount);
+    default:
+      return 0;
+  }
+}
+
+/** Sales/use tax: customer price × qty × 0.06 (after discount). */
+export function calculateTaxFromCustomerPrice(
+  retailPrice: number,
+  quantity: number,
+  discountPercent: number
+) {
+  return roundMoney(
+    calculateCustomerPrice(retailPrice, quantity, discountPercent) * 0.06
+  );
 }
 
 /** Discounted retail subtotal: (retail × qty) − (discount% × retail × qty) */

@@ -13,11 +13,19 @@ import {
   isLedgerLineInvoiced,
 } from "@/lib/invoice-utils";
 import { normalizeLedgerRow, PAYMENTS_DB_SETUP_SQL, WRITE_OFF_DB_SETUP_SQL, type LedgerDbRow } from "@/lib/ledger-db";
-import type { Client, LedgerEntry, PaymentType, Purchaser } from "@/lib/types";
 import {
+  PAYMENT_TYPE_OPTIONS,
+  type Client,
+  type LedgerEntry,
+  type PaymentType,
+  type Purchaser,
+} from "@/lib/types";
+import {
+  calculateAutoPaymentFee,
   formatCurrency,
   formatDate,
   getLedgerInvoicedAmount,
+  paymentTypeHasAutoFee,
   roundMoney,
 } from "@/lib/utils";
 
@@ -31,26 +39,42 @@ type PaymentRowDraft = {
   payment_type: PaymentType;
   payment_amount: number;
   payment_fee: number;
+  payment_fee_manually_edited: boolean;
   write_off: boolean;
   write_off_amount: number;
 };
 
-function balanceFromDraft(entry: LedgerEntry, draft: PaymentRowDraft) {
-  return getLedgerOutstandingBalance({
+function entryFromDraft(entry: LedgerEntry, draft: PaymentRowDraft): LedgerEntry {
+  const hasWriteOff = draft.write_off || Number(draft.write_off_amount) > 0;
+  return {
     ...entry,
-    payment_amount: draft.payment_amount,
-    write_off: draft.write_off,
-    write_off_amount: draft.write_off_amount,
-  });
+    payment_amount: roundMoney(Number(draft.payment_amount) || 0),
+    payment_fee: Number(draft.payment_fee) || 0,
+    write_off: hasWriteOff,
+    write_off_amount: hasWriteOff ? roundMoney(Number(draft.write_off_amount) || 0) : 0,
+  };
+}
+
+function balanceFromDraft(entry: LedgerEntry, draft: PaymentRowDraft) {
+  return getLedgerOutstandingBalance(entryFromDraft(entry, draft));
 }
 
 function outstandingBeforeWriteOff(entry: LedgerEntry, draft: PaymentRowDraft) {
   return getLedgerOutstandingBalance({
-    ...entry,
-    payment_amount: draft.payment_amount,
+    ...entryFromDraft(entry, draft),
     write_off: false,
     write_off_amount: 0,
   });
+}
+
+function hasPaymentRecorded(entry: LedgerEntry) {
+  return Boolean(
+    entry.date_paid || Number(entry.payment_amount) > 0 || entry.paid
+  );
+}
+
+function clientLabel(entry: LedgerEntry, clientNames: Map<string, string>) {
+  return entry.clients?.name ?? clientNames.get(entry.client_id) ?? "Unknown client";
 }
 
 const defaultPaymentType: PaymentType = "Cash";
@@ -60,6 +84,39 @@ function defaultPaymentAmount(entry: LedgerEntry) {
   const saved = Number(entry.payment_amount);
   if (saved > 0) return saved;
   return getLedgerInvoicedAmount(entry);
+}
+
+function paymentDraftFromEntry(entry: LedgerEntry, today: string): PaymentRowDraft {
+  const paymentAmount = defaultPaymentAmount(entry);
+  const paymentType = entry.payment_type ?? defaultPaymentType;
+  const savedFee = Number(entry.payment_fee ?? 0);
+  const autoFee = calculateAutoPaymentFee(paymentType, paymentAmount);
+  const feeManuallyEdited = paymentTypeHasAutoFee(paymentType)
+    ? Math.abs(savedFee - autoFee) > 0.009
+    : savedFee > 0;
+
+  return {
+    selected: false,
+    editing: false,
+    date_paid: entry.date_paid ?? today,
+    paid_to: entry.paid_to ?? defaultPaidTo,
+    payment_type: paymentType,
+    payment_amount: paymentAmount,
+    payment_fee: savedFee,
+    payment_fee_manually_edited: feeManuallyEdited,
+    write_off: entry.write_off ?? false,
+    write_off_amount: Number(entry.write_off_amount ?? 0),
+  };
+}
+
+function paymentFeeHint(paymentType: PaymentType) {
+  if (paymentType === "Venmo") {
+    return "2.3% of payment amount. Edit to override.";
+  }
+  if (paymentType === "CC") {
+    return "2.6% of payment amount. Edit to override.";
+  }
+  return undefined;
 }
 
 function parsePaymentsDbSetupError(message: string) {
@@ -145,11 +202,11 @@ export default function PaymentsPage() {
         isLedgerLineInvoiced(entry) &&
         !isLedgerLineFullyPaid(entry)
     );
-    const paidDebits = allInvoiced.filter(
+    const paymentHistory = allInvoiced.filter(
       (entry) =>
         entry.credit_debit === "debit" &&
         isLedgerLineInvoiced(entry) &&
-        isLedgerLineFullyPaid(entry)
+        hasPaymentRecorded(entry)
     );
 
     if (unpaidDebits.length === 0) {
@@ -180,23 +237,13 @@ export default function PaymentsPage() {
     }
 
     setEntries(unpaidDebits);
-    setPaidEntries(paidDebits);
+    setPaidEntries(paymentHistory);
 
     const today = new Date().toISOString().slice(0, 10);
     setDrafts(() => {
       const next: Record<string, PaymentRowDraft> = {};
-      for (const entry of unpaidDebits) {
-        next[entry.id] = {
-          selected: false,
-          editing: false,
-          date_paid: entry.date_paid ?? today,
-          paid_to: entry.paid_to ?? defaultPaidTo,
-          payment_type: entry.payment_type ?? defaultPaymentType,
-          payment_amount: defaultPaymentAmount(entry),
-          payment_fee: Number(entry.payment_fee ?? 0),
-          write_off: entry.write_off ?? false,
-          write_off_amount: Number(entry.write_off_amount ?? 0),
-        };
+      for (const entry of [...unpaidDebits, ...paymentHistory]) {
+        next[entry.id] = paymentDraftFromEntry(entry, today);
       }
       return next;
     });
@@ -222,8 +269,7 @@ export default function PaymentsPage() {
     const byId = new Map<string, string>();
     for (const entry of paidEntries) {
       if (!entry.client_id) continue;
-      const name = entry.clients?.name ?? clientNames.get(entry.client_id);
-      if (name) byId.set(entry.client_id, name);
+      byId.set(entry.client_id, clientLabel(entry, clientNames));
     }
     return Array.from(byId.entries())
       .map(([id, name]) => ({ id, name }))
@@ -256,10 +302,7 @@ export default function PaymentsPage() {
     const byId = new Map<string, string>();
     for (const entry of entries) {
       if (!entry.client_id) continue;
-      const name = entry.clients?.name ?? clientNames.get(entry.client_id);
-      if (name) {
-        byId.set(entry.client_id, name);
-      }
+      byId.set(entry.client_id, clientLabel(entry, clientNames));
     }
     return Array.from(byId.entries())
       .map(([id, name]) => ({ id, name }))
@@ -279,6 +322,15 @@ export default function PaymentsPage() {
       setSelectedClientId("");
     }
   }, [clientsWithUnpaid, selectedClientId]);
+
+  useEffect(() => {
+    if (
+      historyClientId &&
+      !clientsWithPaid.some((client) => client.id === historyClientId)
+    ) {
+      setHistoryClientId("");
+    }
+  }, [clientsWithPaid, historyClientId]);
 
   const clientPaidHistory = useMemo(() => {
     if (!selectedClientId) return [];
@@ -301,11 +353,56 @@ export default function PaymentsPage() {
     [selectedEntries, drafts]
   );
 
+  const selectedHistoryEntries = useMemo(
+    () => filteredPaidEntries.filter((entry) => drafts[entry.id]?.selected),
+    [filteredPaidEntries, drafts]
+  );
+
+  const totalHistoryPaymentAmount = useMemo(
+    () =>
+      selectedHistoryEntries.reduce(
+        (sum, entry) => sum + (Number(drafts[entry.id]?.payment_amount) || 0),
+        0
+      ),
+    [selectedHistoryEntries, drafts]
+  );
+
+  function resetDraftFromEntry(entry: LedgerEntry) {
+    const today = new Date().toISOString().slice(0, 10);
+    updateDraft(entry.id, paymentDraftFromEntry(entry, today));
+  }
+
   function updateDraft(entryId: string, patch: Partial<PaymentRowDraft>) {
     setDrafts((current) => {
       const existing = current[entryId];
       if (!existing) return current;
-      return { ...current, [entryId]: { ...existing, ...patch } };
+
+      const next: PaymentRowDraft = { ...existing, ...patch };
+
+      if (
+        patch.payment_type !== undefined &&
+        patch.payment_type !== existing.payment_type
+      ) {
+        next.payment_fee_manually_edited = false;
+      }
+
+      if (!next.payment_fee_manually_edited) {
+        if (paymentTypeHasAutoFee(next.payment_type)) {
+          if (
+            patch.payment_type !== undefined ||
+            patch.payment_amount !== undefined
+          ) {
+            next.payment_fee = calculateAutoPaymentFee(
+              next.payment_type,
+              next.payment_amount
+            );
+          }
+        } else if (patch.payment_type !== undefined) {
+          next.payment_fee = 0;
+        }
+      }
+
+      return { ...current, [entryId]: next };
     });
   }
 
@@ -338,6 +435,7 @@ export default function PaymentsPage() {
             payment_type: defaultPaymentType,
             payment_amount: 0,
             payment_fee: 0,
+            payment_fee_manually_edited: false,
             write_off: false,
             write_off_amount: 0,
           }),
@@ -354,6 +452,7 @@ export default function PaymentsPage() {
         payment_type: defaultPaymentType,
         payment_amount: outstanding,
         payment_fee: 0,
+        payment_fee_manually_edited: false,
         write_off: false,
         write_off_amount: 0,
       };
@@ -428,6 +527,106 @@ export default function PaymentsPage() {
     setWriteOffModal({ entryId: entry.id, outstanding });
   }
 
+  function handleEditHistorySelected() {
+    setError(null);
+    if (selectedHistoryEntries.length === 0) {
+      setError("Select at least one payment to edit.");
+      return;
+    }
+    for (const entry of selectedHistoryEntries) {
+      updateDraft(entry.id, { editing: true });
+    }
+  }
+
+  function cancelHistoryEdit() {
+    setError(null);
+    for (const entry of filteredPaidEntries) {
+      if (drafts[entry.id]?.editing) {
+        resetDraftFromEntry(entry);
+      }
+    }
+  }
+
+  async function savePaymentDrafts(
+    rows: { entry: LedgerEntry; draft: PaymentRowDraft }[],
+    options?: { preserveDatePaid?: boolean }
+  ): Promise<boolean> {
+    setSaving(true);
+    const supabase = createClient();
+
+    for (const { entry, draft } of rows) {
+      const projected = entryFromDraft(entry, draft);
+      const paymentAmount = projected.payment_amount;
+      const writeOffAmount = projected.write_off_amount;
+      const hasWriteOff = projected.write_off;
+
+      if (hasWriteOff) {
+        const outstanding = outstandingBeforeWriteOff(entry, draft);
+        if (writeOffAmount > outstanding) {
+          setSaving(false);
+          setError("The write off amount must be less than the outstanding amount.");
+          return false;
+        }
+      }
+
+      const fullyPaid = isLedgerLineFullyPaid(projected);
+      const { error: updateError } = await supabase
+        .from("ledger")
+        .update({
+          paid: fullyPaid,
+          date_paid: options?.preserveDatePaid
+            ? draft.date_paid || null
+            : fullyPaid
+              ? draft.date_paid || null
+              : null,
+          paid_to: draft.paid_to,
+          payment_type: draft.payment_type,
+          payment_amount: paymentAmount,
+          payment_fee: projected.payment_fee,
+          write_off: hasWriteOff,
+          write_off_amount: hasWriteOff ? writeOffAmount : 0,
+        })
+        .eq("id", entry.id);
+
+      if (updateError) {
+        setSaving(false);
+        const setup = parsePaymentsDbSetupError(updateError.message);
+        if (setup.needsDbSetup) setNeedsDbSetup(true);
+        if (setup.needsWriteOffSetup) setNeedsWriteOffSetup(true);
+        setError(updateError.message);
+        return false;
+      }
+    }
+
+    setSaving(false);
+    return true;
+  }
+
+  async function submitHistoryUpdates() {
+    setSuccess(null);
+    setError(null);
+    const rows = selectedHistoryEntries
+      .map((entry) => ({ entry, draft: drafts[entry.id] }))
+      .filter((row) => row.draft);
+
+    if (rows.length === 0) {
+      setError("Select at least one payment, then click Edit.");
+      return;
+    }
+
+    const notEditing = rows.filter(({ draft }) => !draft.editing);
+    if (notEditing.length > 0) {
+      setError("Click Edit on selected payments before saving.");
+      return;
+    }
+
+    const ok = await savePaymentDrafts(rows, { preserveDatePaid: true });
+    if (!ok) return;
+
+    setSuccess(`Updated ${rows.length} payment${rows.length === 1 ? "" : "s"}.`);
+    await loadData();
+  }
+
   async function submitUpdates() {
     setSuccess(null);
     setError(null);
@@ -446,56 +645,9 @@ export default function PaymentsPage() {
       return;
     }
 
-    setSaving(true);
-    const supabase = createClient();
+    const ok = await savePaymentDrafts(rows);
+    if (!ok) return;
 
-    for (const { entry, draft } of rows) {
-      const paymentAmount = roundMoney(Number(draft.payment_amount) || 0);
-      const writeOffAmount = roundMoney(Number(draft.write_off_amount) || 0);
-      const hasWriteOff = draft.write_off || writeOffAmount > 0;
-
-      if (hasWriteOff) {
-        const outstanding = outstandingBeforeWriteOff(entry, draft);
-        if (writeOffAmount > outstanding) {
-          setSaving(false);
-          setError(
-            "The write off amount must be less than the outstanding amount."
-          );
-          return;
-        }
-      }
-
-      const fullyPaid = isLedgerLineFullyPaid({
-        ...entry,
-        payment_amount: paymentAmount,
-        write_off: hasWriteOff,
-        write_off_amount: hasWriteOff ? writeOffAmount : 0,
-      });
-      const { error: updateError } = await supabase
-        .from("ledger")
-        .update({
-          paid: fullyPaid,
-          date_paid: fullyPaid ? draft.date_paid || null : null,
-          paid_to: draft.paid_to,
-          payment_type: draft.payment_type,
-          payment_amount: paymentAmount,
-          payment_fee: Number(draft.payment_fee) || 0,
-          write_off: hasWriteOff,
-          write_off_amount: hasWriteOff ? writeOffAmount : 0,
-        })
-        .eq("id", entry.id);
-
-      if (updateError) {
-        setSaving(false);
-        const setup = parsePaymentsDbSetupError(updateError.message);
-        if (setup.needsDbSetup) setNeedsDbSetup(true);
-        if (setup.needsWriteOffSetup) setNeedsWriteOffSetup(true);
-        setError(updateError.message);
-        return;
-      }
-    }
-
-    setSaving(false);
     setSuccess(`Updated ${rows.length} item${rows.length === 1 ? "" : "s"}.`);
     await loadData();
   }
@@ -557,7 +709,7 @@ export default function PaymentsPage() {
             {paidEntries.length}
           </p>
           <p className="mt-1 text-sm text-slate-600">
-            Paid invoiced items in ledger history
+            Paid and partial payments in ledger history
           </p>
         </div>
       </div>
@@ -781,14 +933,20 @@ export default function PaymentsPage() {
                         })
                       }
                     >
-                      <option value="Cash">Cash</option>
-                      <option value="Check">Check</option>
-                      <option value="CC">CC</option>
-                      <option value="Other">Other</option>
+                      {PAYMENT_TYPE_OPTIONS.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
                     </select>
                   </label>
                   <label className="block text-sm">
                     <span className="mb-1 block text-slate-600">Payment fee</span>
+                    {paymentFeeHint(draft.payment_type) && (
+                      <span className="mb-1 block text-xs text-slate-500">
+                        {paymentFeeHint(draft.payment_type)}
+                      </span>
+                    )}
                     <input
                       type="number"
                       step="0.01"
@@ -798,6 +956,7 @@ export default function PaymentsPage() {
                       onChange={(event) =>
                         updateDraft(entry.id, {
                           payment_fee: Number(event.target.value) || 0,
+                          payment_fee_manually_edited: true,
                         })
                       }
                       className={fieldClass}
@@ -944,10 +1103,11 @@ export default function PaymentsPage() {
                           })
                         }
                       >
-                        <option value="Cash">Cash</option>
-                        <option value="Check">Check</option>
-                        <option value="CC">CC</option>
-                        <option value="Other">Other</option>
+                        {PAYMENT_TYPE_OPTIONS.map((type) => (
+                          <option key={type} value={type}>
+                            {type}
+                          </option>
+                        ))}
                       </select>
                     </td>
                     <td className="px-3 py-3">
@@ -960,6 +1120,7 @@ export default function PaymentsPage() {
                         onChange={(event) =>
                           updateDraft(entry.id, {
                             payment_fee: Number(event.target.value) || 0,
+                            payment_fee_manually_edited: true,
                           })
                         }
                         className={`min-h-10 w-24 px-2 text-sm ${editableControlClass}`}
@@ -1034,63 +1195,155 @@ export default function PaymentsPage() {
             <p className="text-sm text-slate-500">Loading payment history...</p>
           ) : filteredPaidEntries.length === 0 ? (
             <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
-              <p>No paid invoiced items recorded yet.</p>
+              <p>No payment history recorded yet.</p>
             </div>
           ) : (
             <>
+            <p className="mb-3 text-xs text-slate-500">
+              Select payments below, click Edit, make changes, then Save.
+            </p>
             <div className="space-y-3 md:hidden">
               {filteredPaidEntries.map((entry) => {
-                const paymentAmount = Number(entry.payment_amount);
+                const draft = drafts[entry.id];
+                if (!draft) return null;
+
                 return (
                   <article
                     key={entry.id}
                     className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm text-sm"
                   >
-                    <p className="font-medium text-slate-900">
-                      {entry.clients?.name ?? clientNames.get(entry.client_id) ?? "—"}
-                    </p>
-                    <dl className="mt-3 space-y-2">
-                      <div className="flex justify-between gap-3">
-                        <dt className="text-slate-500">Date paid</dt>
-                        <dd>{formatDate(entry.date_paid)}</dd>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <dt className="text-slate-500">Invoice ID</dt>
-                        <dd>{entry.invoice_id ?? "—"}</dd>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <dt className="text-slate-500">Description</dt>
-                        <dd className="text-right">{entry.description || "—"}</dd>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <dt className="text-slate-500">Amount</dt>
-                        <dd className="font-medium text-brand-800">
+                    <label className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={draft.selected}
+                        onChange={(event) =>
+                          updateDraft(entry.id, { selected: event.target.checked })
+                        }
+                        className="mt-1 size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium text-slate-900">
+                          {entry.clients?.name ?? clientNames.get(entry.client_id) ?? "—"}
+                        </p>
+                        <p className="text-slate-500">
+                          {formatDate(entry.date_paid)} · {entry.invoice_id ?? "—"}
+                        </p>
+                        <p className="mt-1 text-slate-700">{entry.description || "—"}</p>
+                        <p className="mt-1 font-medium text-brand-800">
                           {formatCurrency(
-                            paymentAmount > 0 ? paymentAmount : getLedgerInvoicedAmount(entry)
+                            Number(draft.payment_amount) > 0
+                              ? draft.payment_amount
+                              : getLedgerInvoicedAmount(entry)
                           )}
-                        </dd>
+                        </p>
+                        <p className="text-sm text-slate-600">
+                          {isLedgerLineFullyPaid(entryFromDraft(entry, draft))
+                            ? "Paid in full"
+                            : "Partial balance remaining"}
+                        </p>
                       </div>
-                      <div className="flex justify-between gap-3">
-                        <dt className="text-slate-500">Paid to</dt>
-                        <dd>{entry.paid_to ?? "—"}</dd>
+                    </label>
+
+                    {draft.editing && (
+                      <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
+                        <label className="block text-sm">
+                          <span className="mb-1 block text-slate-600">Date paid</span>
+                          <input
+                            type="date"
+                            value={draft.date_paid}
+                            onChange={(event) =>
+                              updateDraft(entry.id, { date_paid: event.target.value })
+                            }
+                            className={fieldClass}
+                          />
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block text-slate-600">Paid to</span>
+                          <select
+                            className={selectFieldClass}
+                            value={draft.paid_to}
+                            onChange={(event) =>
+                              updateDraft(entry.id, {
+                                paid_to: event.target.value as Purchaser,
+                              })
+                            }
+                          >
+                            <option value="Jess">Jess</option>
+                            <option value="Molly">Molly</option>
+                          </select>
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block text-slate-600">Payment amount</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={draft.payment_amount}
+                            onChange={(event) =>
+                              updateDraft(entry.id, {
+                                payment_amount: Number(event.target.value) || 0,
+                              })
+                            }
+                            className={fieldClass}
+                          />
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block text-slate-600">Payment type</span>
+                          <select
+                            className={selectFieldClass}
+                            value={draft.payment_type}
+                            onChange={(event) =>
+                              updateDraft(entry.id, {
+                                payment_type: event.target.value as PaymentType,
+                              })
+                            }
+                          >
+                            {PAYMENT_TYPE_OPTIONS.map((type) => (
+                              <option key={type} value={type}>
+                                {type}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block text-slate-600">Payment fee</span>
+                          {paymentFeeHint(draft.payment_type) && (
+                            <span className="mb-1 block text-xs text-slate-500">
+                              {paymentFeeHint(draft.payment_type)}
+                            </span>
+                          )}
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={draft.payment_fee}
+                            onChange={(event) =>
+                              updateDraft(entry.id, {
+                                payment_fee: Number(event.target.value) || 0,
+                                payment_fee_manually_edited: true,
+                              })
+                            }
+                            className={fieldClass}
+                          />
+                        </label>
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={draft.write_off}
+                            onChange={(event) =>
+                              handleWriteOffToggle(entry, draft, event.target.checked)
+                            }
+                            className="size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
+                          />
+                          <span className="text-slate-700">Write off</span>
+                        </label>
+                        {draft.write_off && (
+                          <p className="text-sm text-slate-600">
+                            Write off amount: {formatCurrency(draft.write_off_amount)}
+                          </p>
+                        )}
                       </div>
-                      <div className="flex justify-between gap-3">
-                        <dt className="text-slate-500">Type</dt>
-                        <dd>{entry.payment_type ?? "—"}</dd>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <dt className="text-slate-500">Fee</dt>
-                        <dd>{formatCurrency(Number(entry.payment_fee ?? 0))}</dd>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <dt className="text-slate-500">Write off</dt>
-                        <dd>{entry.write_off ? "Yes" : "No"}</dd>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <dt className="text-slate-500">Write off amount</dt>
-                        <dd>{formatCurrency(Number(entry.write_off_amount ?? 0))}</dd>
-                      </div>
-                    </dl>
+                    )}
                   </article>
                 );
               })}
@@ -1099,11 +1352,13 @@ export default function PaymentsPage() {
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-50 text-left text-slate-600">
                   <tr>
+                    <th className="px-3 py-3">Select</th>
                     <th className="px-3 py-3">Client</th>
                     <th className="px-3 py-3">Date Paid</th>
                     <th className="px-3 py-3">Invoice ID</th>
                     <th className="px-3 py-3">Description</th>
                     <th className="px-3 py-3">Payment Amount</th>
+                    <th className="px-3 py-3">Status</th>
                     <th className="px-3 py-3">Paid To</th>
                     <th className="px-3 py-3">Payment Type</th>
                     <th className="px-3 py-3">Payment Fee</th>
@@ -1113,34 +1368,171 @@ export default function PaymentsPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filteredPaidEntries.map((entry) => {
-                    const paymentAmount = Number(entry.payment_amount);
+                    const draft = drafts[entry.id];
+                    if (!draft) return null;
+
                     return (
                       <tr key={entry.id}>
                         <td className="px-3 py-3">
+                          <input
+                            type="checkbox"
+                            checked={draft.selected}
+                            onChange={(event) =>
+                              updateDraft(entry.id, { selected: event.target.checked })
+                            }
+                            className="size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
+                          />
+                        </td>
+                        <td className="px-3 py-3">
                           {entry.clients?.name ?? clientNames.get(entry.client_id) ?? "—"}
                         </td>
-                        <td className="px-3 py-3">{formatDate(entry.date_paid)}</td>
+                        <td className="px-3 py-3">
+                          {draft.editing ? (
+                            <input
+                              type="date"
+                              value={draft.date_paid}
+                              onChange={(event) =>
+                                updateDraft(entry.id, { date_paid: event.target.value })
+                              }
+                              className={`min-h-10 px-2 text-sm ${editableControlClass}`}
+                            />
+                          ) : (
+                            formatDate(entry.date_paid)
+                          )}
+                        </td>
                         <td className="px-3 py-3">{entry.invoice_id ?? "—"}</td>
                         <td className="px-3 py-3">{entry.description || "—"}</td>
                         <td className="px-3 py-3 font-medium text-brand-800">
-                          {formatCurrency(
-                            paymentAmount > 0 ? paymentAmount : getLedgerInvoicedAmount(entry)
+                          {draft.editing ? (
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={draft.payment_amount}
+                              onChange={(event) =>
+                                updateDraft(entry.id, {
+                                  payment_amount: Number(event.target.value) || 0,
+                                })
+                              }
+                              className={`min-h-10 w-28 px-2 text-sm ${editableControlClass}`}
+                            />
+                          ) : (
+                            formatCurrency(
+                              Number(draft.payment_amount) > 0
+                                ? draft.payment_amount
+                                : getLedgerInvoicedAmount(entry)
+                            )
                           )}
                         </td>
-                        <td className="px-3 py-3">{entry.paid_to ?? "—"}</td>
-                        <td className="px-3 py-3">{entry.payment_type ?? "—"}</td>
                         <td className="px-3 py-3">
-                          {formatCurrency(Number(entry.payment_fee ?? 0))}
+                          {isLedgerLineFullyPaid(entryFromDraft(entry, draft))
+                            ? "Paid in full"
+                            : "Partial"}
                         </td>
-                        <td className="px-3 py-3">{entry.write_off ? "Yes" : "No"}</td>
                         <td className="px-3 py-3">
-                          {formatCurrency(Number(entry.write_off_amount ?? 0))}
+                          {draft.editing ? (
+                            <select
+                              className={`min-h-10 min-w-28 cursor-pointer appearance-none bg-white bg-[length:1rem] bg-[right_0.5rem_center] bg-no-repeat px-2 py-2 pr-8 text-sm ${selectChevron} ${editableControlClass}`}
+                              value={draft.paid_to}
+                              onChange={(event) =>
+                                updateDraft(entry.id, {
+                                  paid_to: event.target.value as Purchaser,
+                                })
+                              }
+                            >
+                              <option value="Jess">Jess</option>
+                              <option value="Molly">Molly</option>
+                            </select>
+                          ) : (
+                            (entry.paid_to ?? "—")
+                          )}
+                        </td>
+                        <td className="px-3 py-3">
+                          {draft.editing ? (
+                            <select
+                              className={`min-h-10 min-w-28 cursor-pointer appearance-none bg-white bg-[length:1rem] bg-[right_0.5rem_center] bg-no-repeat px-2 py-2 pr-8 text-sm ${selectChevron} ${editableControlClass}`}
+                              value={draft.payment_type}
+                              onChange={(event) =>
+                                updateDraft(entry.id, {
+                                  payment_type: event.target.value as PaymentType,
+                                })
+                              }
+                            >
+                              {PAYMENT_TYPE_OPTIONS.map((type) => (
+                                <option key={type} value={type}>
+                                  {type}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            (entry.payment_type ?? "—")
+                          )}
+                        </td>
+                        <td className="px-3 py-3">
+                          {draft.editing ? (
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={draft.payment_fee}
+                              onChange={(event) =>
+                                updateDraft(entry.id, {
+                                  payment_fee: Number(event.target.value) || 0,
+                                  payment_fee_manually_edited: true,
+                                })
+                              }
+                              className={`min-h-10 w-24 px-2 text-sm ${editableControlClass}`}
+                            />
+                          ) : (
+                            formatCurrency(Number(entry.payment_fee ?? 0))
+                          )}
+                        </td>
+                        <td className="px-3 py-3">
+                          {draft.editing ? (
+                            <input
+                              type="checkbox"
+                              checked={draft.write_off}
+                              onChange={(event) =>
+                                handleWriteOffToggle(entry, draft, event.target.checked)
+                              }
+                              className="size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
+                            />
+                          ) : (
+                            (entry.write_off ? "Yes" : "No")
+                          )}
+                        </td>
+                        <td className="px-3 py-3">
+                          {formatCurrency(
+                            draft.write_off ? draft.write_off_amount : Number(entry.write_off_amount ?? 0)
+                          )}
                         </td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  Selected payment total
+                </p>
+                <p className="text-xl font-semibold text-brand-800">
+                  {formatCurrency(totalHistoryPaymentAmount)}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="secondary" onClick={handleEditHistorySelected}>
+                  Edit
+                </Button>
+                <Button type="button" variant="secondary" onClick={cancelHistoryEdit}>
+                  Cancel
+                </Button>
+                <Button type="button" loading={saving} onClick={submitHistoryUpdates}>
+                  Save
+                </Button>
+              </div>
             </div>
             </>
           )}

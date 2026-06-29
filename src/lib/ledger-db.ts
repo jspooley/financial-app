@@ -7,7 +7,7 @@ import type {
   Purchaser,
   WholesaleRetail,
 } from "./types";
-import { calculateTaxFromRetailPrice } from "./utils";
+import { calculateTaxFromCustomerPrice } from "./utils";
 
 export type { LedgerDbRow, LedgerInsert };
 
@@ -21,8 +21,13 @@ ALTER TABLE ledger
   ADD COLUMN IF NOT EXISTS paid_to purchaser_type;
 
 ALTER TABLE ledger
-  ADD COLUMN IF NOT EXISTS payment_type TEXT
-  CHECK (payment_type IN ('Cash', 'Check', 'CC', 'Other'));
+  ADD COLUMN IF NOT EXISTS payment_type TEXT;
+
+ALTER TABLE ledger DROP CONSTRAINT IF EXISTS ledger_payment_type_check;
+
+ALTER TABLE ledger
+  ADD CONSTRAINT ledger_payment_type_check
+  CHECK (payment_type IS NULL OR payment_type IN ('Cash', 'Check', 'CC', 'Venmo', 'Other'));
 
 ALTER TABLE ledger
   ADD COLUMN IF NOT EXISTS payment_fee NUMERIC(12, 2) NOT NULL DEFAULT 0;
@@ -117,7 +122,7 @@ export function ledgerFormToDb(values: {
     values.wholesale_retail === "wholesale"
       ? values.tax_manually_edited
         ? Number(values.tax_amount) || 0
-        : calculateTaxFromRetailPrice(retailPrice, quantity)
+        : calculateTaxFromCustomerPrice(retailPrice, quantity, discountPercent)
       : 0;
 
   return {

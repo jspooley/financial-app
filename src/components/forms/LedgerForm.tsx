@@ -15,7 +15,7 @@ import {
 import {
   calculateCustomerPrice,
   calculateDesignerCostFromTradePartner,
-  calculateTaxFromRetailPrice,
+  calculateTaxFromCustomerPrice,
   defaultLedgerDiscountPercent,
   formatCurrency,
   formatDate,
@@ -248,9 +248,13 @@ export function LedgerForm({
   const autoTax = useMemo(
     () =>
       isWholesale
-        ? calculateTaxFromRetailPrice(numericRetailPrice, numericQty)
+        ? calculateTaxFromCustomerPrice(
+            numericRetailPrice,
+            numericQty,
+            numericDiscount
+          )
         : 0,
-    [isWholesale, numericRetailPrice, numericQty]
+    [isWholesale, numericRetailPrice, numericQty, numericDiscount]
   );
 
   const selectedTradePartner = useMemo(
@@ -626,7 +630,7 @@ export function LedgerForm({
             name="retail_price"
             label="Retail Price"
             required
-            hint="Used to calculate tax: retail price × quantity × 0.06."
+            hint="Per-unit retail price before discount."
             error={errors.retail_price?.message}
             onValueChange={resetAutoCalculatedFields}
           />
@@ -694,7 +698,10 @@ export function LedgerForm({
               required
               hint="Defaults to half of the trade partner discount."
               error={errors.discount_percent?.message}
-              {...register("discount_percent", { valueAsNumber: true })}
+              {...register("discount_percent", {
+                valueAsNumber: true,
+                onChange: resetAutoCalculatedFields,
+              })}
             />
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
@@ -713,7 +720,7 @@ export function LedgerForm({
                 name="tax_amount"
                 label="Tax Amount"
                 allowZero
-                hint="Retail price × quantity × 0.06"
+                hint="Customer price × qty × 0.06"
                 error={errors.tax_amount?.message}
                 computedValue={
                   taxManuallyEdited.current ? undefined : autoTax
