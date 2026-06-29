@@ -2,7 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/server";
-import { formatCurrency, formatDate, currentMonthKey, getLedgerInvoicedAmount, getSalesUseTaxLineItems, groupTaxDueByMonth, isSalesUseTaxPaid, sumLedgerCreditsAndDebits } from "@/lib/utils";
+import { formatCurrency, formatDate, currentMonthKey, getLedgerInvoicedAmount, getPaidSalesUseTaxLineItems, groupTaxDueByMonth, roundMoney, sumLedgerCreditsAndDebits } from "@/lib/utils";
 import {
   summarizeInvoicedUnpaid,
   summarizeJobsByStatus,
@@ -14,26 +14,49 @@ import { normalizeLedgerRow } from "@/lib/ledger-db";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+type SummaryCardData = {
+  label: string;
+  value: string | number;
+  hint?: string;
+  href: string;
+};
+
+function SummaryCard({ card }: { card: SummaryCardData }) {
+  return (
+    <Link
+      href={card.href}
+      className="flex h-full min-h-[6.5rem] flex-col rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition hover:border-brand-200 sm:min-h-[7.25rem] sm:p-4"
+    >
+      <p className="text-xs text-slate-500 sm:text-sm">{card.label}</p>
+      <p className="mt-1 text-xl font-semibold text-slate-900 sm:text-2xl">{card.value}</p>
+      <p className="mt-auto hidden min-h-[2.5rem] pt-1 text-xs leading-snug text-slate-500 sm:block">
+        {card.hint ?? ""}
+      </p>
+    </Link>
+  );
+}
+
 export default async function DashboardPage() {
   const supabase = await createClient();
 
   const [
     { count: clientCount },
-    { count: pendingAppointments },
+    { count: totalAppointments },
     { count: wonAppointments },
     { count: lostAppointments },
+    { count: proposalSentAppointments },
     { data: recentLedger },
     { data: ledgerTotals },
     { data: invoiceHeaders },
   ] = await Promise.all([
     supabase.from("clients").select("*", { count: "exact", head: true }),
+    supabase.from("appointments").select("*", { count: "exact", head: true }),
+    supabase.from("appointments").select("*", { count: "exact", head: true }).eq("job_won", true),
+    supabase.from("appointments").select("*", { count: "exact", head: true }).eq("job_lost", true),
     supabase
       .from("appointments")
       .select("*", { count: "exact", head: true })
-      .eq("job_won", false)
-      .eq("job_lost", false),
-    supabase.from("appointments").select("*", { count: "exact", head: true }).eq("job_won", true),
-    supabase.from("appointments").select("*", { count: "exact", head: true }).eq("job_lost", true),
+      .eq("proposal_sent", true),
     supabase
       .from("ledger")
       .select("*, clients(name)")
@@ -63,6 +86,12 @@ export default async function DashboardPage() {
   const toBeInvoiced = summarizeToBeInvoiced(allLedgerEntries);
   const invoicedUnpaid = summarizeInvoicedUnpaid(allLedgerEntries);
   const jobSummary = summarizeJobsByStatus(allLedgerEntries, { invoicedPoKeys });
+  const totalWriteOffAmount = roundMoney(
+    allLedgerEntries.reduce((sum, entry) => sum + Number(entry.write_off_amount ?? 0), 0)
+  );
+  const writeOffCount = allLedgerEntries.filter(
+    (entry) => Number(entry.write_off_amount ?? 0) > 0
+  ).length;
 
   const taxDueByMonth = groupTaxDueByMonth(allLedgerEntries);
   const totalTaxDue = taxDueByMonth.reduce((sum, row) => sum + row.amount, 0);
@@ -73,19 +102,13 @@ export default async function DashboardPage() {
   const currentMonthTaxDue = currentMonthTax?.amount ?? 0;
   const currentMonthJessTaxDue = currentMonthTax?.jess ?? 0;
   const currentMonthMollyTaxDue = currentMonthTax?.molly ?? 0;
-  const salesUseTaxLines = getSalesUseTaxLineItems(allLedgerEntries);
+  const paidSalesUseTaxLines = getPaidSalesUseTaxLineItems(allLedgerEntries);
 
-  const cards: Array<{
-    label: string;
-    value: string | number;
-    hint?: string;
-    href: string;
-  }> = [
+  const summaryCards: SummaryCardData[] = [
     {
-      label: "Pending Appointments",
-      value: pendingAppointments ?? 0,
-      hint: "Neither won nor lost",
-      href: "/appointments?status=pending",
+      label: "Appointments",
+      value: totalAppointments ?? 0,
+      href: "/appointments",
     },
     {
       label: "Won",
@@ -98,40 +121,38 @@ export default async function DashboardPage() {
       href: "/appointments?status=lost",
     },
     {
+      label: "Proposal Sent",
+      value: proposalSentAppointments ?? 0,
+      href: "/appointments?status=proposal_sent",
+    },
+    {
       label: "Open Jobs",
       value: jobSummary.openJobs,
-      hint: "Client + PO with uninvoiced or unpaid debit items",
+      hint: "Ongoing jobs or unpaid invoices",
       href: "/ledger",
     },
     {
       label: "Closed Jobs",
       value: jobSummary.closedJobs,
-      hint: "All debit items invoiced and paid",
+      hint: "All invoices paid",
       href: "/ledger",
     },
   ];
+
+  const [
+    pendingCard,
+    wonCard,
+    lostCard,
+    proposalSentCard,
+    openJobsCard,
+    closedJobsCard,
+  ] = summaryCards;
 
   return (
     <AppShell>
       <PageHeader
         title="Maison Joy Business Overview"
         description="Overview of expenses, receivables, tax due, and recent activity."
-        action={
-          <div className="flex flex-wrap gap-2">
-            <Link
-              href="/clients?add=1"
-              className="inline-flex min-h-11 items-center rounded-lg border border-brand-600 bg-white px-4 py-2 text-sm font-medium text-brand-700 hover:bg-brand-50"
-            >
-              Add Client
-            </Link>
-            <Link
-              href="/ledger?add=1"
-              className="inline-flex min-h-11 items-center rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
-            >
-              New Ledger Entry
-            </Link>
-          </div>
-        }
       />
 
       {(clientCount ?? 0) === 0 && (
@@ -150,20 +171,13 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
-        {cards.map((card) => (
-          <Link
-            key={card.label}
-            href={card.href}
-            className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition hover:border-brand-200 sm:p-4"
-          >
-            <p className="text-xs text-slate-500 sm:text-sm">{card.label}</p>
-            <p className="mt-1 text-xl font-semibold text-slate-900 sm:text-2xl">{card.value}</p>
-            {card.hint && (
-              <p className="mt-1 hidden text-xs text-slate-500 sm:block">{card.hint}</p>
-            )}
-          </Link>
-        ))}
+      <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 lg:grid-flow-col lg:grid-rows-2">
+        <SummaryCard card={pendingCard} />
+        <SummaryCard card={proposalSentCard} />
+        <SummaryCard card={wonCard} />
+        <SummaryCard card={lostCard} />
+        <SummaryCard card={openJobsCard} />
+        <SummaryCard card={closedJobsCard} />
       </div>
 
       <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
@@ -229,7 +243,7 @@ export default async function DashboardPage() {
           revenue − cost (before expenses & loans). Uninvoiced debit costs are included in
           cost of goods sold only.
         </p>
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 sm:gap-4">
           <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
             <p className="text-xs uppercase tracking-wide text-slate-500">Revenue</p>
             <p className="mt-1 text-xl font-semibold text-brand-800">
@@ -242,6 +256,20 @@ export default async function DashboardPage() {
               {formatCurrency(ledgerBalances.debits)}
             </p>
           </div>
+          <Link
+            href="/payments"
+            className="rounded-lg border border-slate-100 bg-slate-50 p-4 transition hover:border-brand-200"
+          >
+            <p className="text-xs uppercase tracking-wide text-slate-500">Write Off Amount</p>
+            <p className="mt-1 text-xl font-semibold text-slate-900">
+              {formatCurrency(totalWriteOffAmount)}
+            </p>
+            <p className="mt-1 text-sm text-slate-600">
+              {writeOffCount === 0
+                ? "No write-offs recorded"
+                : `Total across ${writeOffCount} ledger ${writeOffCount === 1 ? "entry" : "entries"}`}
+            </p>
+          </Link>
           <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
             <p className="text-sm font-semibold leading-snug text-slate-700">
               GROSS PROFIT
@@ -382,16 +410,12 @@ export default async function DashboardPage() {
           </table>
         </div>
 
+        {paidSalesUseTaxLines.length > 0 && (
         <div className="mt-6">
           <h3 className="text-sm font-semibold text-slate-900">Tax by ledger entry</h3>
-          <p className="mt-1 text-sm text-slate-600">
-            Wholesale tax amounts and whether sales and use tax has been paid.
-          </p>
+          <p className="mt-1 text-sm text-slate-600">Wholesale tax amounts paid.</p>
           <div className="mt-3 space-y-3 md:hidden">
-            {salesUseTaxLines.length === 0 ? (
-              <p className="py-4 text-center text-sm text-slate-500">No tax entries yet.</p>
-            ) : (
-              salesUseTaxLines.slice(0, 20).map((entry) => (
+              {paidSalesUseTaxLines.slice(0, 20).map((entry) => (
                 <div
                   key={entry.id ?? `${entry.entry_date}-${entry.tax_amount}`}
                   className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-sm"
@@ -399,7 +423,7 @@ export default async function DashboardPage() {
                   <p className="font-medium text-slate-900">
                     {entry.clients?.name ?? "—"} · {formatDate(entry.entry_date)}
                   </p>
-                  <dl className="mt-2 grid grid-cols-3 gap-2">
+                  <dl className="mt-2 grid grid-cols-2 gap-2">
                     <div>
                       <dt className="text-slate-500">Tax</dt>
                       <dd className="font-medium">{formatCurrency(Number(entry.tax_amount))}</dd>
@@ -408,14 +432,9 @@ export default async function DashboardPage() {
                       <dt className="text-slate-500">Purchaser</dt>
                       <dd>{entry.purchaser ?? "—"}</dd>
                     </div>
-                    <div>
-                      <dt className="text-slate-500">Paid</dt>
-                      <dd>{isSalesUseTaxPaid(entry) ? "Yes" : "No"}</dd>
-                    </div>
                   </dl>
                 </div>
-              ))
-            )}
+              ))}
           </div>
           <div className="mt-3 hidden overflow-x-auto md:block">
             <table className="min-w-full text-sm">
@@ -425,18 +444,10 @@ export default async function DashboardPage() {
                   <th className="py-2 pr-4">Client</th>
                   <th className="py-2 pr-4 text-right">Tax</th>
                   <th className="py-2 pr-4">Purchaser</th>
-                  <th className="py-2 pr-4">Paid</th>
                 </tr>
               </thead>
               <tbody>
-                {salesUseTaxLines.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="py-6 text-center text-slate-500">
-                      No tax entries yet.
-                    </td>
-                  </tr>
-                ) : (
-                  salesUseTaxLines.slice(0, 20).map((entry) => (
+                  {paidSalesUseTaxLines.slice(0, 20).map((entry) => (
                     <tr
                       key={entry.id ?? `${entry.entry_date}-${entry.tax_amount}`}
                       className="border-b border-slate-50"
@@ -449,16 +460,13 @@ export default async function DashboardPage() {
                         {formatCurrency(Number(entry.tax_amount))}
                       </td>
                       <td className="py-3 pr-4">{entry.purchaser ?? "—"}</td>
-                      <td className="py-3 pr-4">
-                        {isSalesUseTaxPaid(entry) ? "Yes" : "No"}
-                      </td>
                     </tr>
-                  ))
-                )}
+                  ))}
               </tbody>
             </table>
           </div>
         </div>
+        )}
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">

@@ -60,6 +60,8 @@ export type LedgerAmountEntry = {
   paid?: boolean | null;
   payment_fee?: number;
   payment_amount?: number;
+  write_off?: boolean | null;
+  write_off_amount?: number | null;
 };
 
 function invoicedAmountForEntry(entry: LedgerAmountEntry) {
@@ -74,11 +76,12 @@ function invoicedAmountForEntry(entry: LedgerAmountEntry) {
   });
 }
 
-/** Remaining balance when payment amount is less than invoiced amount. */
+/** Remaining balance after payments and write-offs. */
 export function getLedgerOutstandingBalance(entry: LedgerAmountEntry) {
   const invoiced = invoicedAmountForEntry(entry);
   const paid = roundMoney(Number(entry.payment_amount ?? 0));
-  return roundMoney(Math.max(0, invoiced - paid));
+  const writeOff = roundMoney(Math.max(0, Number(entry.write_off_amount ?? 0)));
+  return roundMoney(Math.max(0, invoiced - paid - writeOff));
 }
 
 /** Paid only when cumulative payment amount meets or exceeds invoiced amount. */
@@ -138,7 +141,10 @@ function isLineInvoicedForJob(
 /** Jobs are grouped by client + PO. Open = any debit line not both invoiced and paid. */
 export function summarizeJobsByStatus(
   entries: Array<
-    LedgerAmountEntry & { client_id?: string; po_number?: string | null }
+    LedgerAmountEntry & {
+      client_id?: string;
+      po_number?: string | null;
+    }
   >,
   options?: { invoicedPoKeys?: Set<string> }
 ) {
@@ -157,8 +163,8 @@ export function summarizeJobsByStatus(
 
   let openJobs = 0;
   let closedJobs = 0;
-  for (const hasOpenLine of jobHasOpenLine.values()) {
-    if (hasOpenLine) openJobs += 1;
+  for (const [, hasOpen] of jobHasOpenLine) {
+    if (hasOpen) openJobs += 1;
     else closedJobs += 1;
   }
 
@@ -248,6 +254,7 @@ export interface InvoiceLineBreakdown {
   merchandise: number;
   tax: number;
   shipping: number;
+  paymentFee: number;
   total: number;
   taxLabel: string;
 }
@@ -257,12 +264,14 @@ export function getInvoiceLineBreakdown(entry: InvoiceLineItem): InvoiceLineBrea
   const merchandise = getLedgerCustomerPrice(entry);
   const tax =
     entry.wholesale_retail === "wholesale" ? Number(entry.tax_amount) || 0 : 0;
+  const paymentFee = Number(entry.payment_fee ?? 0);
 
   return {
     merchandise,
     tax,
     shipping,
-    total: roundMoney(merchandise + tax + shipping),
+    paymentFee,
+    total: roundMoney(merchandise + tax + shipping + paymentFee),
     taxLabel: entry.wholesale_retail === "retail" ? "N/A" : formatCurrency(tax),
   };
 }
@@ -275,11 +284,12 @@ export function sumInvoiceLineBreakdowns(entries: InvoiceLineItem[]): InvoiceLin
         merchandise: roundMoney(acc.merchandise + line.merchandise),
         tax: roundMoney(acc.tax + line.tax),
         shipping: roundMoney(acc.shipping + line.shipping),
+        paymentFee: roundMoney(acc.paymentFee + line.paymentFee),
         total: roundMoney(acc.total + line.total),
         taxLabel: "",
       };
     },
-    { merchandise: 0, tax: 0, shipping: 0, total: 0, taxLabel: "" }
+    { merchandise: 0, tax: 0, shipping: 0, paymentFee: 0, total: 0, taxLabel: "" }
   );
 }
 

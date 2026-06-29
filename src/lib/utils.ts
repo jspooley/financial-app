@@ -159,6 +159,15 @@ export function defaultLedgerDiscountPercent(tradePartnerPercent: number) {
   return roundMoney(tradePartnerPercent / 2);
 }
 
+/** Unit designer cost: retail price × (1 − trade partner discount %). */
+export function calculateDesignerCostFromTradePartner(
+  retailPrice: number,
+  tradePartnerDiscountPercent: number
+) {
+  const discountRate = Number(tradePartnerDiscountPercent) / 100;
+  return roundMoney(Number(retailPrice) * (1 - discountRate));
+}
+
 export function formatDate(value: string | null) {
   if (!value) return "—";
   return new Intl.DateTimeFormat("en-US", {
@@ -224,6 +233,10 @@ export function getSalesUseTaxLineItems(entries: TaxDueEntry[]) {
         entry.wholesale_retail !== "retail" && Number(entry.tax_amount) > 0
     )
     .sort((a, b) => b.entry_date.localeCompare(a.entry_date));
+}
+
+export function getPaidSalesUseTaxLineItems(entries: TaxDueEntry[]) {
+  return getSalesUseTaxLineItems(entries).filter(isSalesUseTaxPaid);
 }
 
 export function groupTaxDueByMonth(entries: TaxDueEntry[]): MonthlyTaxDue[] {

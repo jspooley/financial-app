@@ -54,6 +54,17 @@ export function ledgerDetailFields(entry: LedgerEntry) {
           : "—",
     },
     {
+      label: "Write Off",
+      value: entry.credit_debit === "debit" ? (entry.write_off ? "Yes" : "No") : "—",
+    },
+    {
+      label: "Write Off Amount",
+      value:
+        entry.credit_debit === "debit"
+          ? formatCurrency(Number(entry.write_off_amount ?? 0))
+          : "—",
+    },
+    {
       label: "Paid",
       value:
         entry.credit_debit === "debit"
@@ -111,6 +122,11 @@ export function mapLedgerTableRow(entry: LedgerEntry) {
       entry.credit_debit === "debit"
         ? formatCurrency(Number(entry.payment_amount ?? 0))
         : "—",
+    writeOff: entry.credit_debit === "debit" ? (entry.write_off ? "Yes" : "No") : "—",
+    writeOffAmount:
+      entry.credit_debit === "debit"
+        ? formatCurrency(Number(entry.write_off_amount ?? 0))
+        : "—",
     paid: entry.credit_debit === "debit" ? (isLedgerLineFullyPaid(entry) ? "Yes" : "No") : "—",
     purchaser: entry.purchaser,
     paidTo: entry.credit_debit === "debit" ? (entry.paid_to ?? "—") : "—",
@@ -142,6 +158,8 @@ export const ledgerDetailColumns = [
   { key: "invoiced", label: "Invoiced" },
   { key: "invoiceId", label: "Invoice ID" },
   { key: "paidAmount", label: "Paid Amount" },
+  { key: "writeOff", label: "Write Off" },
+  { key: "writeOffAmount", label: "Write Off Amount" },
   { key: "paid", label: "Paid" },
   { key: "purchaser", label: "Purchaser" },
   { key: "paidTo", label: "Paid To" },

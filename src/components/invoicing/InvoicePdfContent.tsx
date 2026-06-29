@@ -229,6 +229,7 @@ export const InvoicePdfContent = forwardRef<HTMLDivElement, InvoicePdfContentPro
                 ["Product Subtotal:", totals.merchandise],
                 ["Shipping:", totals.shipping],
                 ["Taxes:", totals.tax],
+                ["Payment Fee:", totals.paymentFee],
                 ["Grand Total:", totals.total, true],
               ].map(([label, amount, bold]) => (
                 <tr key={String(label)}>

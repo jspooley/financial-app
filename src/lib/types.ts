@@ -6,18 +6,18 @@ export type PaymentType = "Cash" | "Check" | "CC" | "Other";
 /** Columns sent to Supabase ledger table (matches your live database). */
 export type LedgerInsert = {
   entry_date: string;
-  cost: number;
+  designer_cost: number;
   quantity: number;
   credit_debit: CreditDebit;
   description: string | null;
   wholesale_retail: WholesaleRetail;
   trade_partner_id: string | null;
-  discount_amount: number;
+  discount_percent: number;
   shipping_receiving_amount: number;
   retail_price: number;
   tax_amount: number;
   client_id: string;
-  po_number: string | null;
+  po_number: string;
   purchaser: Purchaser;
   invoiced?: boolean;
   invoice_id?: string | null;
@@ -27,6 +27,10 @@ export type LedgerInsert = {
   payment_type?: PaymentType | null;
   payment_fee?: number | null;
   payment_amount?: number | null;
+  sales_and_use_tax_paid?: boolean;
+  sand_u_tax_paid?: boolean;
+  write_off?: boolean;
+  write_off_amount?: number | null;
 };
 
 export interface LedgerDbRow extends Omit<
@@ -40,6 +44,9 @@ export interface LedgerDbRow extends Omit<
   | "payment_type"
   | "payment_fee"
   | "payment_amount"
+  | "sand_u_tax_paid"
+  | "write_off"
+  | "write_off_amount"
 > {
   id?: string;
   quantity?: number | null;
@@ -51,6 +58,10 @@ export interface LedgerDbRow extends Omit<
   payment_type?: PaymentType | null;
   payment_fee?: number | null;
   payment_amount?: number | null;
+  sand_u_tax_paid?: boolean | null;
+  sales_and_use_tax_paid?: boolean | null;
+  write_off?: boolean | null;
+  write_off_amount?: number | null;
   created_at?: string;
   updated_at?: string;
   clients?: { name: string } | null;
@@ -94,6 +105,8 @@ export interface Appointment {
   notes: string | null;
   job_won: boolean;
   job_lost: boolean;
+  proposal_sent: boolean;
+  client_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -150,6 +163,8 @@ export interface LedgerEntry {
   payment_type: PaymentType | null;
   payment_fee: number;
   payment_amount: number;
+  write_off: boolean;
+  write_off_amount: number;
   created_at: string;
   updated_at: string;
   clients?: Pick<Client, "name"> | null;

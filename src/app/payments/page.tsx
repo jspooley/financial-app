@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { WriteOffModal } from "@/components/payments/WriteOffModal";
 import { Button } from "@/components/ui/Button";
-import { SelectField } from "@/components/ui/FormFields";
+import { SelectField, editableControlClass, fieldClass, selectChevron, selectFieldClass } from "@/components/ui/FormFields";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -11,7 +12,7 @@ import {
   isLedgerLineFullyPaid,
   isLedgerLineInvoiced,
 } from "@/lib/invoice-utils";
-import { normalizeLedgerRow, PAYMENTS_DB_SETUP_SQL, type LedgerDbRow } from "@/lib/ledger-db";
+import { normalizeLedgerRow, PAYMENTS_DB_SETUP_SQL, WRITE_OFF_DB_SETUP_SQL, type LedgerDbRow } from "@/lib/ledger-db";
 import type { Client, LedgerEntry, PaymentType, Purchaser } from "@/lib/types";
 import {
   formatCurrency,
@@ -24,12 +25,33 @@ type PaymentView = "outstanding" | "history";
 
 type PaymentRowDraft = {
   selected: boolean;
+  editing: boolean;
   date_paid: string;
   paid_to: Purchaser;
   payment_type: PaymentType;
   payment_amount: number;
   payment_fee: number;
+  write_off: boolean;
+  write_off_amount: number;
 };
+
+function balanceFromDraft(entry: LedgerEntry, draft: PaymentRowDraft) {
+  return getLedgerOutstandingBalance({
+    ...entry,
+    payment_amount: draft.payment_amount,
+    write_off: draft.write_off,
+    write_off_amount: draft.write_off_amount,
+  });
+}
+
+function outstandingBeforeWriteOff(entry: LedgerEntry, draft: PaymentRowDraft) {
+  return getLedgerOutstandingBalance({
+    ...entry,
+    payment_amount: draft.payment_amount,
+    write_off: false,
+    write_off_amount: 0,
+  });
+}
 
 const defaultPaymentType: PaymentType = "Cash";
 const defaultPaidTo: Purchaser = "Jess";
@@ -38,6 +60,25 @@ function defaultPaymentAmount(entry: LedgerEntry) {
   const saved = Number(entry.payment_amount);
   if (saved > 0) return saved;
   return getLedgerInvoicedAmount(entry);
+}
+
+function parsePaymentsDbSetupError(message: string) {
+  const lower = message.toLowerCase();
+  if (!lower.includes("column") && !lower.includes("schema cache")) {
+    return { needsDbSetup: false, needsWriteOffSetup: false };
+  }
+
+  const missingWriteOff = lower.includes("write_off");
+  const missingPayment =
+    lower.includes("paid") ||
+    lower.includes("payment_amount") ||
+    lower.includes("payment_fee") ||
+    lower.includes("payment_type");
+
+  return {
+    needsDbSetup: missingPayment || !missingWriteOff,
+    needsWriteOffSetup: missingWriteOff,
+  };
 }
 
 export default function PaymentsPage() {
@@ -52,13 +93,19 @@ export default function PaymentsPage() {
   const [historyClientId, setHistoryClientId] = useState("");
   const [drafts, setDrafts] = useState<Record<string, PaymentRowDraft>>({});
   const [needsDbSetup, setNeedsDbSetup] = useState(false);
+  const [needsWriteOffSetup, setNeedsWriteOffSetup] = useState(false);
   const [emptyHint, setEmptyHint] = useState<string | null>(null);
   const [clientNames, setClientNames] = useState<Map<string, string>>(new Map());
+  const [writeOffModal, setWriteOffModal] = useState<{
+    entryId: string;
+    outstanding: number;
+  } | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     setNeedsDbSetup(false);
+    setNeedsWriteOffSetup(false);
     const supabase = createClient();
     const [{ data, error: dbError }, { data: clientData, error: clientError }, { data: invoiceData }] =
       await Promise.all([
@@ -78,18 +125,9 @@ export default function PaymentsPage() {
 
     if (dbError ?? clientError) {
       const message = (dbError ?? clientError)!.message;
-      const lower = message.toLowerCase();
-      const missingColumn =
-        lower.includes("column") || lower.includes("schema cache");
-      if (
-        missingColumn &&
-        (lower.includes("paid") ||
-          lower.includes("payment_amount") ||
-          lower.includes("payment_fee") ||
-          lower.includes("payment_type"))
-      ) {
-        setNeedsDbSetup(true);
-      }
+      const setup = parsePaymentsDbSetupError(message);
+      if (setup.needsDbSetup) setNeedsDbSetup(true);
+      if (setup.needsWriteOffSetup) setNeedsWriteOffSetup(true);
       setError(message);
       setEntries([]);
       setPaidEntries([]);
@@ -145,16 +183,19 @@ export default function PaymentsPage() {
     setPaidEntries(paidDebits);
 
     const today = new Date().toISOString().slice(0, 10);
-    setDrafts((current) => {
+    setDrafts(() => {
       const next: Record<string, PaymentRowDraft> = {};
       for (const entry of unpaidDebits) {
-        next[entry.id] = current[entry.id] ?? {
+        next[entry.id] = {
           selected: false,
+          editing: false,
           date_paid: entry.date_paid ?? today,
           paid_to: entry.paid_to ?? defaultPaidTo,
           payment_type: entry.payment_type ?? defaultPaymentType,
           payment_amount: defaultPaymentAmount(entry),
           payment_fee: Number(entry.payment_fee ?? 0),
+          write_off: entry.write_off ?? false,
+          write_off_amount: Number(entry.write_off_amount ?? 0),
         };
       }
       return next;
@@ -239,6 +280,13 @@ export default function PaymentsPage() {
     }
   }, [clientsWithUnpaid, selectedClientId]);
 
+  const clientPaidHistory = useMemo(() => {
+    if (!selectedClientId) return [];
+    return paidEntries
+      .filter((entry) => entry.client_id === selectedClientId)
+      .sort((a, b) => (b.date_paid ?? b.entry_date).localeCompare(a.date_paid ?? a.entry_date));
+  }, [paidEntries, selectedClientId]);
+
   const selectedEntries = useMemo(
     () => filteredEntries.filter((entry) => drafts[entry.id]?.selected),
     [filteredEntries, drafts]
@@ -261,6 +309,125 @@ export default function PaymentsPage() {
     });
   }
 
+  function handleAddPayment() {
+    setError(null);
+    setSuccess(null);
+    if (!selectedClientId) {
+      setError("Select a client first.");
+      return;
+    }
+    if (filteredEntries.length === 0) {
+      setError("No unpaid items for this client.");
+      return;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const target =
+      filteredEntries.find((entry) => !drafts[entry.id]?.selected) ?? filteredEntries[0];
+    const outstanding = getLedgerOutstandingBalance(target);
+
+    setDrafts((current) => {
+      const next = { ...current };
+      for (const entry of filteredEntries) {
+        next[entry.id] = {
+          ...(next[entry.id] ?? {
+            selected: false,
+            editing: false,
+            date_paid: today,
+            paid_to: defaultPaidTo,
+            payment_type: defaultPaymentType,
+            payment_amount: 0,
+            payment_fee: 0,
+            write_off: false,
+            write_off_amount: 0,
+          }),
+          selected: entry.id === target.id,
+          editing: entry.id === target.id,
+        };
+      }
+      next[target.id] = {
+        ...next[target.id],
+        selected: true,
+        editing: true,
+        date_paid: today,
+        paid_to: defaultPaidTo,
+        payment_type: defaultPaymentType,
+        payment_amount: outstanding,
+        payment_fee: 0,
+        write_off: false,
+        write_off_amount: 0,
+      };
+      return next;
+    });
+  }
+
+  function handleEditSelected() {
+    setError(null);
+    if (selectedEntries.length === 0) {
+      setError("Select at least one item to edit.");
+      return;
+    }
+    for (const entry of selectedEntries) {
+      updateDraft(entry.id, { editing: true });
+    }
+  }
+
+  async function handleDeleteSelected() {
+    if (selectedEntries.length === 0) {
+      setError("Select at least one item to delete.");
+      return;
+    }
+    if (!confirm(`Clear payment and write-off for ${selectedEntries.length} item(s)?`)) return;
+
+    setError(null);
+    setSuccess(null);
+    setSaving(true);
+    const supabase = createClient();
+
+    for (const entry of selectedEntries) {
+      const { error: updateError } = await supabase
+        .from("ledger")
+        .update({
+          paid: false,
+          date_paid: null,
+          payment_amount: 0,
+          payment_fee: 0,
+          write_off: false,
+          write_off_amount: 0,
+        })
+        .eq("id", entry.id);
+
+      if (updateError) {
+        setSaving(false);
+        const setup = parsePaymentsDbSetupError(updateError.message);
+        if (setup.needsDbSetup) setNeedsDbSetup(true);
+        if (setup.needsWriteOffSetup) setNeedsWriteOffSetup(true);
+        setError(updateError.message);
+        return;
+      }
+    }
+
+    setSaving(false);
+    setSuccess(`Cleared ${selectedEntries.length} item${selectedEntries.length === 1 ? "" : "s"}.`);
+    await loadData();
+  }
+
+  function handleWriteOffToggle(entry: LedgerEntry, draft: PaymentRowDraft, checked: boolean) {
+    if (!checked) {
+      updateDraft(entry.id, { write_off: false, write_off_amount: 0 });
+      return;
+    }
+
+    const outstanding = outstandingBeforeWriteOff(entry, draft);
+    if (outstanding <= 0) {
+      setError("Nothing outstanding to write off.");
+      return;
+    }
+
+    updateDraft(entry.id, { selected: true, editing: true });
+    setWriteOffModal({ entryId: entry.id, outstanding });
+  }
+
   async function submitUpdates() {
     setSuccess(null);
     setError(null);
@@ -269,7 +436,13 @@ export default function PaymentsPage() {
       .filter((row) => row.draft);
 
     if (rows.length === 0) {
-      setError("Select at least one item to update.");
+      setError("Select at least one item, then click Edit or Add Payment.");
+      return;
+    }
+
+    const notEditing = rows.filter(({ draft }) => !draft.editing);
+    if (notEditing.length > 0) {
+      setError("Click Edit on selected items before saving.");
       return;
     }
 
@@ -278,9 +451,25 @@ export default function PaymentsPage() {
 
     for (const { entry, draft } of rows) {
       const paymentAmount = roundMoney(Number(draft.payment_amount) || 0);
+      const writeOffAmount = roundMoney(Number(draft.write_off_amount) || 0);
+      const hasWriteOff = draft.write_off || writeOffAmount > 0;
+
+      if (hasWriteOff) {
+        const outstanding = outstandingBeforeWriteOff(entry, draft);
+        if (writeOffAmount > outstanding) {
+          setSaving(false);
+          setError(
+            "The write off amount must be less than the outstanding amount."
+          );
+          return;
+        }
+      }
+
       const fullyPaid = isLedgerLineFullyPaid({
         ...entry,
         payment_amount: paymentAmount,
+        write_off: hasWriteOff,
+        write_off_amount: hasWriteOff ? writeOffAmount : 0,
       });
       const { error: updateError } = await supabase
         .from("ledger")
@@ -291,18 +480,16 @@ export default function PaymentsPage() {
           payment_type: draft.payment_type,
           payment_amount: paymentAmount,
           payment_fee: Number(draft.payment_fee) || 0,
+          write_off: hasWriteOff,
+          write_off_amount: hasWriteOff ? writeOffAmount : 0,
         })
         .eq("id", entry.id);
 
       if (updateError) {
         setSaving(false);
-        const lower = updateError.message.toLowerCase();
-        if (
-          lower.includes("payment_amount") &&
-          (lower.includes("column") || lower.includes("schema cache"))
-        ) {
-          setNeedsDbSetup(true);
-        }
+        const setup = parsePaymentsDbSetupError(updateError.message);
+        if (setup.needsDbSetup) setNeedsDbSetup(true);
+        if (setup.needsWriteOffSetup) setNeedsWriteOffSetup(true);
         setError(updateError.message);
         return;
       }
@@ -320,15 +507,36 @@ export default function PaymentsPage() {
         description="Record payments against invoiced amounts. Items stay open until payment equals invoiced amount."
       />
 
-      {needsDbSetup && (
+      {(needsWriteOffSetup || needsDbSetup) && (
         <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
           <p className="font-semibold">Database setup required for Payments</p>
-          <p className="mt-2">
-            Run the SQL below in Supabase SQL Editor, then refresh this page.
-          </p>
-          <pre className="mt-3 overflow-x-auto rounded-md border border-amber-200 bg-white p-3 text-xs text-slate-800">
-            {PAYMENTS_DB_SETUP_SQL}
-          </pre>
+          {needsWriteOffSetup && (
+            <>
+              <p className="mt-2">
+                Write-offs need <code className="rounded bg-amber-100 px-1">write_off</code> and{" "}
+                <code className="rounded bg-amber-100 px-1">write_off_amount</code> on the ledger
+                table. Run this in Supabase SQL Editor, then refresh:
+              </p>
+              <pre className="mt-3 overflow-x-auto rounded-md border border-amber-200 bg-white p-3 text-xs text-slate-800">
+                {WRITE_OFF_DB_SETUP_SQL}
+              </pre>
+            </>
+          )}
+          {needsDbSetup && !needsWriteOffSetup && (
+            <>
+              <p className="mt-2">
+                Run the SQL below in Supabase SQL Editor, then refresh this page.
+              </p>
+              <pre className="mt-3 overflow-x-auto rounded-md border border-amber-200 bg-white p-3 text-xs text-slate-800">
+                {PAYMENTS_DB_SETUP_SQL}
+              </pre>
+            </>
+          )}
+          {needsDbSetup && needsWriteOffSetup && (
+            <p className="mt-3 text-xs text-amber-900">
+              If payment columns are already set up, only the write-off SQL above is required.
+            </p>
+          )}
         </div>
       )}
 
@@ -374,19 +582,34 @@ export default function PaymentsPage() {
       {view === "outstanding" ? (
         <>
       <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <SelectField
-          label="Client"
-          hint="Only clients with unpaid invoiced debit items are listed."
-          value={selectedClientId}
-          onChange={(event) => setSelectedClientId(event.target.value)}
-        >
-          <option value="">Select client...</option>
-          {clientsWithUnpaid.map((client) => (
-            <option key={client.id} value={client.id}>
-              {client.name}
-            </option>
-          ))}
-        </SelectField>
+        <label className="block">
+          <span className="text-sm font-medium text-slate-700">Client</span>
+          <div className="mt-1.5 flex flex-row items-center gap-3">
+            <select
+              className={`${selectFieldClass} min-w-0 flex-1`}
+              value={selectedClientId}
+              onChange={(event) => setSelectedClientId(event.target.value)}
+            >
+              <option value="">Select client...</option>
+              {clientsWithUnpaid.map((client) => (
+                <option key={client.id} value={client.id}>
+                  {client.name}
+                </option>
+              ))}
+            </select>
+            <Button
+              type="button"
+              className="min-h-11 shrink-0 whitespace-nowrap"
+              disabled={!selectedClientId || loading}
+              onClick={handleAddPayment}
+            >
+              Add Payment
+            </Button>
+          </div>
+          <span className="mt-1.5 block text-xs text-slate-500">
+            Select a client to view payments or add a new one.
+          </span>
+        </label>
       </div>
 
       {loading ? (
@@ -415,6 +638,43 @@ export default function PaymentsPage() {
         </div>
       ) : (
         <>
+        {selectedClientId && clientPaidHistory.length > 0 && (
+          <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-sm font-semibold text-slate-900">Existing payments</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Fully paid items for this client.
+            </p>
+            <ul className="mt-3 divide-y divide-slate-100 text-sm">
+              {clientPaidHistory.map((entry) => {
+                const paymentAmount = Number(entry.payment_amount);
+                return (
+                  <li key={entry.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                    <div>
+                      <span className="font-medium text-slate-800">
+                        {formatDate(entry.date_paid ?? entry.entry_date)}
+                      </span>
+                      <span className="text-slate-500"> · {entry.invoice_id ?? "—"}</span>
+                      <span className="text-slate-500"> · {entry.description || "—"}</span>
+                    </div>
+                    <span className="font-medium text-brand-800">
+                      {formatCurrency(
+                        paymentAmount > 0 ? paymentAmount : getLedgerInvoicedAmount(entry)
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
+        <div className="mb-2">
+          <h2 className="text-sm font-semibold text-slate-900">Unpaid items</h2>
+          <p className="text-xs text-slate-500">
+            Select items below, then use Edit, Delete, or Save at the bottom.
+          </p>
+        </div>
+
         <div className="space-y-3 md:hidden">
           {filteredEntries.map((entry) => {
             const draft = drafts[entry.id];
@@ -434,7 +694,7 @@ export default function PaymentsPage() {
                     onChange={(event) =>
                       updateDraft(entry.id, { selected: event.target.checked })
                     }
-                    className="mt-1 size-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                    className="mt-1 size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
                   />
                   <div className="min-w-0 flex-1">
                     <p className="font-medium text-slate-900">{clientName}</p>
@@ -446,13 +706,7 @@ export default function PaymentsPage() {
                       Invoiced: {formatCurrency(getLedgerInvoicedAmount(entry))}
                     </p>
                     <p className="text-sm text-amber-800">
-                      Outstanding:{" "}
-                      {formatCurrency(
-                        getLedgerOutstandingBalance({
-                          ...entry,
-                          payment_amount: draft.payment_amount,
-                        })
-                      )}
+                      Outstanding: {formatCurrency(balanceFromDraft(entry, draft))}
                     </p>
                   </div>
                 </label>
@@ -464,9 +718,11 @@ export default function PaymentsPage() {
                       {isLedgerLineFullyPaid({
                         ...entry,
                         payment_amount: draft.payment_amount,
+                        write_off: draft.write_off,
+                        write_off_amount: draft.write_off_amount,
                       })
                         ? "Paid in full"
-                        : Number(draft.payment_amount) > 0
+                        : Number(draft.payment_amount) > 0 || draft.write_off
                           ? "Partial payment"
                           : "Unpaid"}
                     </span>
@@ -476,19 +732,19 @@ export default function PaymentsPage() {
                     <input
                       type="date"
                       value={draft.date_paid}
-                      disabled={!draft.selected}
+                      disabled={!draft.editing}
                       onChange={(event) =>
                         updateDraft(entry.id, { date_paid: event.target.value })
                       }
-                      className="min-h-11 w-full rounded-lg border border-slate-300 px-3 disabled:opacity-50"
+                      className={fieldClass}
                     />
                   </label>
                   <label className="block text-sm">
                     <span className="mb-1 block text-slate-600">Paid to</span>
                     <select
-                      className="min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 disabled:opacity-50"
+                      className={selectFieldClass}
                       value={draft.paid_to}
-                      disabled={!draft.selected}
+                      disabled={!draft.editing}
                       onChange={(event) =>
                         updateDraft(entry.id, { paid_to: event.target.value as Purchaser })
                       }
@@ -504,21 +760,21 @@ export default function PaymentsPage() {
                       step="0.01"
                       min="0"
                       value={draft.payment_amount}
-                      disabled={!draft.selected}
+                      disabled={!draft.editing}
                       onChange={(event) =>
                         updateDraft(entry.id, {
                           payment_amount: Number(event.target.value) || 0,
                         })
                       }
-                      className="min-h-11 w-full rounded-lg border border-slate-300 px-3 disabled:opacity-50"
+                      className={fieldClass}
                     />
                   </label>
                   <label className="block text-sm">
                     <span className="mb-1 block text-slate-600">Payment type</span>
                     <select
-                      className="min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 disabled:opacity-50"
+                      className={selectFieldClass}
                       value={draft.payment_type}
-                      disabled={!draft.selected}
+                      disabled={!draft.editing}
                       onChange={(event) =>
                         updateDraft(entry.id, {
                           payment_type: event.target.value as PaymentType,
@@ -538,13 +794,36 @@ export default function PaymentsPage() {
                       step="0.01"
                       min="0"
                       value={draft.payment_fee}
-                      disabled={!draft.selected}
+                      disabled={!draft.editing}
                       onChange={(event) =>
                         updateDraft(entry.id, {
                           payment_fee: Number(event.target.value) || 0,
                         })
                       }
-                      className="min-h-11 w-full rounded-lg border border-slate-300 px-3 disabled:opacity-50"
+                      className={fieldClass}
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={draft.write_off}
+                      disabled={!draft.editing}
+                      onChange={(event) =>
+                        handleWriteOffToggle(entry, draft, event.target.checked)
+                      }
+                      className="size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500 disabled:border-slate-300 disabled:opacity-50"
+                    />
+                    <span className="text-slate-700">Write off</span>
+                  </label>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-slate-600">Write off amount</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={draft.write_off_amount}
+                      readOnly
+                      className="min-h-11 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 text-slate-500"
                     />
                   </label>
                 </div>
@@ -570,6 +849,8 @@ export default function PaymentsPage() {
                 <th className="px-3 py-3">Payment Amount</th>
                 <th className="px-3 py-3">Payment Type</th>
                 <th className="px-3 py-3">Payment Fee</th>
+                <th className="px-3 py-3">Write Off</th>
+                <th className="px-3 py-3">Write Off Amount</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -586,7 +867,7 @@ export default function PaymentsPage() {
                         onChange={(event) =>
                           updateDraft(entry.id, { selected: event.target.checked })
                         }
-                        className="size-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                        className="size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
                       />
                     </td>
                     <td className="px-3 py-3">
@@ -599,20 +880,17 @@ export default function PaymentsPage() {
                       {formatCurrency(getLedgerInvoicedAmount(entry))}
                     </td>
                     <td className="px-3 py-3 font-medium text-amber-800">
-                      {formatCurrency(
-                        getLedgerOutstandingBalance({
-                          ...entry,
-                          payment_amount: draft.payment_amount,
-                        })
-                      )}
+                      {formatCurrency(balanceFromDraft(entry, draft))}
                     </td>
                     <td className="px-3 py-3">
                       {isLedgerLineFullyPaid({
                         ...entry,
                         payment_amount: draft.payment_amount,
+                        write_off: draft.write_off,
+                        write_off_amount: draft.write_off_amount,
                       })
                         ? "Paid in full"
-                        : Number(draft.payment_amount) > 0
+                        : Number(draft.payment_amount) > 0 || draft.write_off
                           ? "Partial"
                           : "Unpaid"}
                     </td>
@@ -620,18 +898,18 @@ export default function PaymentsPage() {
                       <input
                         type="date"
                         value={draft.date_paid}
-                        disabled={!draft.selected}
+                        disabled={!draft.editing}
                         onChange={(event) =>
                           updateDraft(entry.id, { date_paid: event.target.value })
                         }
-                        className="min-h-10 rounded-lg border border-slate-300 px-2 text-sm disabled:opacity-50"
+                        className={`min-h-10 px-2 text-sm ${editableControlClass}`}
                       />
                     </td>
                     <td className="px-3 py-3">
                       <select
-                        className="min-h-10 min-w-28 rounded-lg border border-slate-300 bg-white px-2 text-sm disabled:opacity-50"
+                        className={`min-h-10 min-w-28 cursor-pointer appearance-none bg-white bg-[length:1rem] bg-[right_0.5rem_center] bg-no-repeat px-2 py-2 pr-8 text-sm ${selectChevron} ${editableControlClass} disabled:cursor-not-allowed`}
                         value={draft.paid_to}
-                        disabled={!draft.selected}
+                        disabled={!draft.editing}
                         onChange={(event) =>
                           updateDraft(entry.id, { paid_to: event.target.value as Purchaser })
                         }
@@ -646,20 +924,20 @@ export default function PaymentsPage() {
                         step="0.01"
                         min="0"
                         value={draft.payment_amount}
-                        disabled={!draft.selected}
+                        disabled={!draft.editing}
                         onChange={(event) =>
                           updateDraft(entry.id, {
                             payment_amount: Number(event.target.value) || 0,
                           })
                         }
-                        className="min-h-10 w-28 rounded-lg border border-slate-300 px-2 text-sm disabled:opacity-50"
+                        className={`min-h-10 w-28 px-2 text-sm ${editableControlClass}`}
                       />
                     </td>
                     <td className="px-3 py-3">
                       <select
-                        className="min-h-10 min-w-28 rounded-lg border border-slate-300 bg-white px-2 text-sm disabled:opacity-50"
+                        className={`min-h-10 min-w-28 cursor-pointer appearance-none bg-white bg-[length:1rem] bg-[right_0.5rem_center] bg-no-repeat px-2 py-2 pr-8 text-sm ${selectChevron} ${editableControlClass} disabled:cursor-not-allowed`}
                         value={draft.payment_type}
-                        disabled={!draft.selected}
+                        disabled={!draft.editing}
                         onChange={(event) =>
                           updateDraft(entry.id, {
                             payment_type: event.target.value as PaymentType,
@@ -678,14 +956,30 @@ export default function PaymentsPage() {
                         step="0.01"
                         min="0"
                         value={draft.payment_fee}
-                        disabled={!draft.selected}
+                        disabled={!draft.editing}
                         onChange={(event) =>
                           updateDraft(entry.id, {
                             payment_fee: Number(event.target.value) || 0,
                           })
                         }
-                        className="min-h-10 w-24 rounded-lg border border-slate-300 px-2 text-sm disabled:opacity-50"
+                        className={`min-h-10 w-24 px-2 text-sm ${editableControlClass}`}
                       />
+                    </td>
+                    <td className="px-3 py-3">
+                      <input
+                        type="checkbox"
+                        checked={draft.write_off}
+                        disabled={!draft.editing}
+                        onChange={(event) =>
+                          handleWriteOffToggle(entry, draft, event.target.checked)
+                        }
+                        className="size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500 disabled:border-slate-300 disabled:opacity-50"
+                      />
+                    </td>
+                    <td className="px-3 py-3">
+                      {draft.write_off
+                        ? formatCurrency(draft.write_off_amount)
+                        : formatCurrency(0)}
                     </td>
                   </tr>
                 );
@@ -696,7 +990,7 @@ export default function PaymentsPage() {
         </>
       )}
 
-      {clientsWithUnpaid.length > 0 && (
+      {clientsWithUnpaid.length > 0 && selectedClientId && filteredEntries.length > 0 && (
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div>
           <p className="text-xs uppercase tracking-wide text-slate-500">Selected Payment Total</p>
@@ -704,9 +998,17 @@ export default function PaymentsPage() {
             {formatCurrency(totalPaymentAmount)}
           </p>
         </div>
-        <Button type="button" loading={saving} onClick={submitUpdates}>
-          Submit Payments
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="secondary" onClick={handleEditSelected}>
+            Edit
+          </Button>
+          <Button type="button" variant="danger" loading={saving} onClick={handleDeleteSelected}>
+            Delete
+          </Button>
+          <Button type="button" loading={saving} onClick={submitUpdates}>
+            Save
+          </Button>
+        </div>
       </div>
       )}
         </>
@@ -780,6 +1082,14 @@ export default function PaymentsPage() {
                         <dt className="text-slate-500">Fee</dt>
                         <dd>{formatCurrency(Number(entry.payment_fee ?? 0))}</dd>
                       </div>
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-slate-500">Write off</dt>
+                        <dd>{entry.write_off ? "Yes" : "No"}</dd>
+                      </div>
+                      <div className="flex justify-between gap-3">
+                        <dt className="text-slate-500">Write off amount</dt>
+                        <dd>{formatCurrency(Number(entry.write_off_amount ?? 0))}</dd>
+                      </div>
                     </dl>
                   </article>
                 );
@@ -797,6 +1107,8 @@ export default function PaymentsPage() {
                     <th className="px-3 py-3">Paid To</th>
                     <th className="px-3 py-3">Payment Type</th>
                     <th className="px-3 py-3">Payment Fee</th>
+                    <th className="px-3 py-3">Write Off</th>
+                    <th className="px-3 py-3">Write Off Amount</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -819,6 +1131,10 @@ export default function PaymentsPage() {
                         <td className="px-3 py-3">{entry.payment_type ?? "—"}</td>
                         <td className="px-3 py-3">
                           {formatCurrency(Number(entry.payment_fee ?? 0))}
+                        </td>
+                        <td className="px-3 py-3">{entry.write_off ? "Yes" : "No"}</td>
+                        <td className="px-3 py-3">
+                          {formatCurrency(Number(entry.write_off_amount ?? 0))}
                         </td>
                       </tr>
                     );
@@ -844,6 +1160,22 @@ export default function PaymentsPage() {
 
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       {success && <p className="mt-3 text-sm text-brand-700">{success}</p>}
+
+      {writeOffModal && (
+        <WriteOffModal
+          outstanding={writeOffModal.outstanding}
+          onConfirm={(amount) => {
+            updateDraft(writeOffModal.entryId, {
+              write_off: true,
+              write_off_amount: amount,
+              selected: true,
+              editing: true,
+            });
+            setWriteOffModal(null);
+          }}
+          onCancel={() => setWriteOffModal(null)}
+        />
+      )}
     </AppShell>
   );
 }

@@ -30,7 +30,24 @@ ALTER TABLE ledger
 ALTER TABLE ledger
   ADD COLUMN IF NOT EXISTS payment_amount NUMERIC(12, 2) NOT NULL DEFAULT 0;
 
+ALTER TABLE ledger
+  ADD COLUMN IF NOT EXISTS write_off BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE ledger
+  ADD COLUMN IF NOT EXISTS write_off_amount NUMERIC(12, 2) NOT NULL DEFAULT 0;
+
 CREATE INDEX IF NOT EXISTS idx_ledger_paid ON ledger(paid);
+CREATE INDEX IF NOT EXISTS idx_ledger_write_off ON ledger(write_off);
+
+NOTIFY pgrst, 'reload schema';`;
+
+export const WRITE_OFF_DB_SETUP_SQL = `ALTER TABLE ledger
+  ADD COLUMN IF NOT EXISTS write_off BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE ledger
+  ADD COLUMN IF NOT EXISTS write_off_amount NUMERIC(12, 2) NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_ledger_write_off ON ledger(write_off);
 
 NOTIFY pgrst, 'reload schema';`;
 
@@ -56,7 +73,7 @@ export function normalizeLedgerRow(
       r.sand_u_tax_paid ?? r.sales_and_use_tax_paid ?? false
     ),
     client_id: r.client_id,
-    po_number: r.po_number,
+    po_number: (r.po_number as string | null)?.trim() || null,
     invoice_id: (r.invoice_id as string | null) ?? null,
     purchaser: r.purchaser,
     paid: Boolean(r.paid ?? false),
@@ -65,6 +82,8 @@ export function normalizeLedgerRow(
     payment_type: (r.payment_type as PaymentType | null) ?? null,
     payment_fee: Number(r.payment_fee ?? 0),
     payment_amount: Number(r.payment_amount ?? 0),
+    write_off: Boolean(r.write_off ?? false),
+    write_off_amount: Number(r.write_off_amount ?? 0),
     created_at: r.created_at as string,
     updated_at: r.updated_at as string,
     clients: r.clients ?? null,
@@ -72,7 +91,7 @@ export function normalizeLedgerRow(
   };
 }
 
-/** Maps form values to DB columns for insert/update. */
+/** Maps editable form values to DB columns for insert/update. */
 export function ledgerFormToDb(values: {
   entry_date: string;
   designer_cost: number;
@@ -85,13 +104,10 @@ export function ledgerFormToDb(values: {
   shipping_receiving_amount: number;
   retail_price: number;
   tax_amount: number;
-  invoiced: boolean;
-  sales_and_use_tax_paid: boolean;
   client_id: string;
-  po_number?: string;
+  po_number: string;
   purchaser: Purchaser;
   tax_manually_edited?: boolean;
-  invoice_id?: string | null;
 }): LedgerInsert {
   const quantity = Math.max(1, Math.round(Number(values.quantity) || 1));
   const designerCost = Number(values.designer_cost) || 0;
@@ -106,20 +122,18 @@ export function ledgerFormToDb(values: {
 
   return {
     entry_date: values.entry_date,
-    cost: designerCost,
+    designer_cost: designerCost,
     quantity,
     credit_debit: values.credit_debit,
     description: values.description || null,
     wholesale_retail: values.wholesale_retail,
     trade_partner_id: values.trade_partner_id || null,
-    discount_amount: discountPercent,
+    discount_percent: discountPercent,
     shipping_receiving_amount: values.shipping_receiving_amount,
     retail_price: retailPrice,
     tax_amount: tax,
     client_id: values.client_id,
-    po_number: values.po_number?.trim() || null,
+    po_number: values.po_number.trim(),
     purchaser: values.purchaser,
-    invoiced: values.invoiced,
-    ...(values.invoice_id !== undefined ? { invoice_id: values.invoice_id } : {}),
   };
 }

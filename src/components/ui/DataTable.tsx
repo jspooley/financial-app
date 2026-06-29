@@ -4,6 +4,7 @@ interface DataTableProps {
   emptyMessage?: string;
   rowKey?: (row: Record<string, React.ReactNode>, index: number) => string;
   stickyLastColumn?: boolean;
+  stickyFirstColumn?: boolean;
   /** Primary field shown as card title on mobile (defaults to first column). */
   mobileTitleKey?: string;
 }
@@ -14,6 +15,7 @@ export function DataTable({
   emptyMessage = "No records yet.",
   rowKey,
   stickyLastColumn = false,
+  stickyFirstColumn = false,
   mobileTitleKey,
 }: DataTableProps) {
   if (rows.length === 0) {
@@ -24,15 +26,23 @@ export function DataTable({
     );
   }
 
+  const firstColumnKey = columns[0]?.key;
   const lastColumnKey = columns[columns.length - 1]?.key;
-  const titleKey = mobileTitleKey ?? columns[0]?.key;
-  const stickyCell =
+  const titleKey =
+    mobileTitleKey ?? (firstColumnKey === "actions" ? columns[1]?.key : firstColumnKey);
+  const stickyLeftCell =
+    "sticky left-0 z-10 bg-white shadow-[4px_0_8px_-4px_rgba(0,0,0,0.08)]";
+  const stickyLeftHeader =
+    "sticky left-0 z-10 bg-slate-50 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.08)]";
+  const stickyRightCell =
     "sticky right-0 z-10 bg-white shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]";
-  const stickyHeader = "sticky right-0 z-10 bg-slate-50 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]";
+  const stickyRightHeader =
+    "sticky right-0 z-10 bg-slate-50 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]";
   const detailColumns = columns.filter(
     (column) => column.key !== titleKey && column.key !== "actions"
   );
   const actionsColumn = columns.find((column) => column.key === "actions");
+  const actionsFirst = firstColumnKey === "actions";
 
   return (
     <>
@@ -42,6 +52,9 @@ export function DataTable({
             key={rowKey?.(row, index) ?? index}
             className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
           >
+            {actionsFirst && actionsColumn && row.actions != null && (
+              <div className="mb-4 border-b border-slate-100 pb-4">{row.actions}</div>
+            )}
             {titleKey && row[titleKey] != null && (
               <p className="font-medium text-slate-900">{row[titleKey]}</p>
             )}
@@ -53,7 +66,7 @@ export function DataTable({
                 </div>
               ))}
             </dl>
-            {actionsColumn && row.actions != null && (
+            {!actionsFirst && actionsColumn && row.actions != null && (
               <div className="mt-4 border-t border-slate-100 pt-4">{row.actions}</div>
             )}
           </article>
@@ -68,7 +81,9 @@ export function DataTable({
                 <th
                   key={column.key}
                   className={`px-4 py-3 text-left font-medium text-slate-600 ${column.className ?? ""} ${
-                    stickyLastColumn && column.key === lastColumnKey ? stickyHeader : ""
+                    stickyFirstColumn && column.key === firstColumnKey ? stickyLeftHeader : ""
+                  } ${
+                    stickyLastColumn && column.key === lastColumnKey ? stickyRightHeader : ""
                   }`}
                 >
                   {column.label}
@@ -83,8 +98,12 @@ export function DataTable({
                   <td
                     key={column.key}
                     className={`px-4 py-3 text-slate-800 ${column.className ?? ""} ${
+                      stickyFirstColumn && column.key === firstColumnKey
+                        ? `${stickyLeftCell} group-hover:bg-slate-50/80`
+                        : ""
+                    } ${
                       stickyLastColumn && column.key === lastColumnKey
-                        ? `${stickyCell} group-hover:bg-slate-50/80`
+                        ? `${stickyRightCell} group-hover:bg-slate-50/80`
                         : ""
                     }`}
                   >

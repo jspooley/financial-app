@@ -26,9 +26,10 @@ const schema = z
     client_address: z.string().optional(),
     referred_by: z.string().optional(),
     referral_source: z.union([referralSourceSchema, z.literal("")]).optional(),
-    notes: z.string().max(100, "Notes must be 100 characters or less").optional(),
+    notes: z.string().max(500, "Notes must be 500 characters or less").optional(),
     job_won: z.boolean(),
     job_lost: z.boolean(),
+    proposal_sent: z.boolean(),
   })
   .refine((values) => !(values.job_won && values.job_lost), {
     message: "An appointment cannot be marked both won and lost",
@@ -64,16 +65,40 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
       notes: initial?.notes ?? "",
       job_won: initial?.job_won ?? false,
       job_lost: initial?.job_lost ?? false,
+      proposal_sent: initial?.proposal_sent ?? false,
     },
   });
 
   const jobWon = watch("job_won");
   const jobLost = watch("job_lost");
+  const proposalSent = watch("proposal_sent");
   const notesLength = watch("notes")?.length ?? 0;
 
   async function onSubmit(values: FormValues) {
     setError(null);
     const supabase = createClient();
+    let clientId = initial?.client_id ?? null;
+
+    if (values.job_won && !clientId) {
+      const { data: newClient, error: clientError } = await supabase
+        .from("clients")
+        .insert({
+          name: values.client_name,
+          phone: values.client_phone || null,
+          email: values.client_email || null,
+          address: values.client_address || null,
+        })
+        .select("id")
+        .single();
+
+      if (clientError) {
+        setError(clientError.message);
+        return;
+      }
+
+      clientId = newClient.id;
+    }
+
     const payload = {
       appointment_date: values.appointment_date,
       client_name: values.client_name,
@@ -87,6 +112,8 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
       notes: values.notes?.trim() ? values.notes.trim() : null,
       job_won: values.job_won,
       job_lost: values.job_lost,
+      proposal_sent: values.proposal_sent,
+      client_id: clientId,
     };
 
     const { error: dbError } = initial
@@ -150,8 +177,8 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
         <TextareaField
           label="Notes"
           className="sm:col-span-2"
-          maxLength={100}
-          hint={`${notesLength}/100 characters`}
+          maxLength={500}
+          hint={`${notesLength}/500 characters`}
           error={errors.notes?.message}
           {...register("notes")}
         />
@@ -173,6 +200,11 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
             setValue("job_lost", checked, { shouldValidate: true });
             if (checked) setValue("job_won", false, { shouldValidate: true });
           }}
+        />
+        <CheckboxField
+          label="Proposal Sent"
+          checked={proposalSent}
+          onChange={(event) => setValue("proposal_sent", event.target.checked)}
         />
       </div>
 

@@ -12,19 +12,16 @@ import { createClient } from "@/lib/supabase/client";
 import type { Appointment } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 
-type AppointmentFilter = "all" | "pending" | "won" | "lost";
-
-function appointmentStatus(appointment: Appointment) {
-  if (appointment.job_won) return "Won";
-  if (appointment.job_lost) return "Lost";
-  return "Pending";
-}
+type AppointmentFilter = "all" | "pending" | "won" | "lost" | "proposal_sent";
 
 function AppointmentsPageContent() {
   const searchParams = useSearchParams();
   const filterParam = searchParams.get("status");
   const filter: AppointmentFilter =
-    filterParam === "pending" || filterParam === "won" || filterParam === "lost"
+    filterParam === "pending" ||
+    filterParam === "won" ||
+    filterParam === "lost" ||
+    filterParam === "proposal_sent"
       ? filterParam
       : "all";
 
@@ -73,6 +70,9 @@ function AppointmentsPageContent() {
     if (filter === "lost") {
       return appointments.filter((row) => row.job_lost);
     }
+    if (filter === "proposal_sent") {
+      return appointments.filter((row) => row.proposal_sent);
+    }
     return appointments;
   }, [appointments, filter]);
 
@@ -94,7 +94,9 @@ function AppointmentsPageContent() {
         ? "Won appointments"
         : filter === "lost"
           ? "Lost appointments"
-          : null;
+          : filter === "proposal_sent"
+            ? "Appointments with proposal sent"
+            : null;
 
   return (
     <AppShell>
@@ -170,16 +172,40 @@ function AppointmentsPageContent() {
       ) : (
         <DataTable
           mobileTitleKey="client"
+          stickyFirstColumn
           columns={[
+            { key: "actions", label: "" },
             { key: "date", label: "Date" },
             { key: "client", label: "Client" },
             { key: "contact", label: "Contact" },
             { key: "referral", label: "Referral" },
-            { key: "status", label: "Status" },
+            { key: "proposalSent", label: "Proposal Sent" },
+            { key: "won", label: "Won" },
+            { key: "lost", label: "Lost" },
             { key: "notes", label: "Notes" },
-            { key: "actions", label: "Actions", className: "text-right" },
           ]}
           rows={visibleAppointments.map((appointment) => ({
+            actions: (
+              <div className="flex w-20 flex-col gap-1">
+                <Button
+                  variant="secondary"
+                  className="min-h-9 w-full px-2 py-1 text-xs"
+                  onClick={() => {
+                    setEditing(appointment);
+                    setShowForm(true);
+                  }}
+                >
+                  Edit
+                </Button>
+                <Button
+                  variant="danger"
+                  className="min-h-9 w-full px-2 py-1 text-xs"
+                  onClick={() => handleDelete(appointment)}
+                >
+                  Delete
+                </Button>
+              </div>
+            ),
             date: formatDate(appointment.appointment_date),
             client: appointment.client_name,
             contact: (
@@ -194,24 +220,10 @@ function AppointmentsPageContent() {
                 <div className="text-slate-500">{appointment.referral_source ?? "—"}</div>
               </div>
             ),
-            status: appointmentStatus(appointment),
+            proposalSent: appointment.proposal_sent ? "Yes" : "No",
+            won: appointment.job_won ? "Yes" : "No",
+            lost: appointment.job_lost ? "Yes" : "No",
             notes: appointment.notes ?? "—",
-            actions: (
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    setEditing(appointment);
-                    setShowForm(true);
-                  }}
-                >
-                  Edit
-                </Button>
-                <Button variant="danger" onClick={() => handleDelete(appointment)}>
-                  Delete
-                </Button>
-              </div>
-            ),
           }))}
         />
       )}
