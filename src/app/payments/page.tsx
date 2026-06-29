@@ -11,6 +11,7 @@ import {
   getLedgerOutstandingBalance,
   isLedgerLineFullyPaid,
   isLedgerLineInvoiced,
+  summarizePaymentsByInvoiceId,
 } from "@/lib/invoice-utils";
 import { normalizeLedgerRow, PAYMENTS_DB_SETUP_SQL, WRITE_OFF_DB_SETUP_SQL, type LedgerDbRow } from "@/lib/ledger-db";
 import {
@@ -55,8 +56,32 @@ function entryFromDraft(entry: LedgerEntry, draft: PaymentRowDraft): LedgerEntry
   };
 }
 
-function balanceFromDraft(entry: LedgerEntry, draft: PaymentRowDraft) {
-  return getLedgerOutstandingBalance(entryFromDraft(entry, draft));
+function paymentLineForDisplay(entry: LedgerEntry, draft: PaymentRowDraft) {
+  return draft.editing ? entryFromDraft(entry, draft) : entry;
+}
+
+function lineOutstandingBalance(entry: LedgerEntry, draft: PaymentRowDraft) {
+  const line = paymentLineForDisplay(entry, draft);
+  return roundMoney(
+    getLedgerInvoicedAmount(entry) - Number(line.payment_amount ?? 0)
+  );
+}
+
+function outstandingBalanceClass(amount: number) {
+  if (amount < 0) return "text-brand-800";
+  if (amount > 0) return "text-amber-800";
+  return "text-slate-600";
+}
+
+function invoiceIdWithItemCount(invoiceId: string, lineCount: number) {
+  return `${invoiceId} (${lineCount} ${lineCount === 1 ? "item" : "items"})`;
+}
+
+function paymentStatusLabel(entry: LedgerEntry, draft: PaymentRowDraft) {
+  const line = paymentLineForDisplay(entry, draft);
+  const balance = getLedgerOutstandingBalance(line);
+  if (balance >= 0) return "Paid in full";
+  return Number(line.payment_amount) > 0 || line.write_off ? "Partial payment" : "Unpaid";
 }
 
 function outstandingBeforeWriteOff(entry: LedgerEntry, draft: PaymentRowDraft) {
@@ -65,12 +90,6 @@ function outstandingBeforeWriteOff(entry: LedgerEntry, draft: PaymentRowDraft) {
     write_off: false,
     write_off_amount: 0,
   });
-}
-
-function hasPaymentRecorded(entry: LedgerEntry) {
-  return Boolean(
-    entry.date_paid || Number(entry.payment_amount) > 0 || entry.paid
-  );
 }
 
 function clientLabel(entry: LedgerEntry, clientNames: Map<string, string>) {
@@ -141,6 +160,7 @@ function parsePaymentsDbSetupError(message: string) {
 export default function PaymentsPage() {
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [paidEntries, setPaidEntries] = useState<LedgerEntry[]>([]);
+  const [invoicedDebits, setInvoicedDebits] = useState<LedgerEntry[]>([]);
   const [view, setView] = useState<PaymentView>("outstanding");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -188,6 +208,7 @@ export default function PaymentsPage() {
       setError(message);
       setEntries([]);
       setPaidEntries([]);
+      setInvoicedDebits([]);
       setEmptyHint(null);
       setLoading(false);
       return;
@@ -196,17 +217,15 @@ export default function PaymentsPage() {
     const allInvoiced = (data ?? []).map((row) =>
       normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
     );
-    const unpaidDebits = allInvoiced.filter(
+    const allInvoicedDebits = allInvoiced.filter(
       (entry) =>
-        entry.credit_debit === "debit" &&
-        isLedgerLineInvoiced(entry) &&
-        !isLedgerLineFullyPaid(entry)
+        entry.credit_debit === "debit" && isLedgerLineInvoiced(entry)
     );
-    const paymentHistory = allInvoiced.filter(
-      (entry) =>
-        entry.credit_debit === "debit" &&
-        isLedgerLineInvoiced(entry) &&
-        hasPaymentRecorded(entry)
+    const unpaidDebits = allInvoicedDebits.filter(
+      (entry) => !isLedgerLineFullyPaid(entry)
+    );
+    const paymentHistory = allInvoicedDebits.filter((entry) =>
+      isLedgerLineFullyPaid(entry)
     );
 
     if (unpaidDebits.length === 0) {
@@ -238,6 +257,7 @@ export default function PaymentsPage() {
 
     setEntries(unpaidDebits);
     setPaidEntries(paymentHistory);
+    setInvoicedDebits(allInvoicedDebits);
 
     const today = new Date().toISOString().slice(0, 10);
     setDrafts(() => {
@@ -254,16 +274,6 @@ export default function PaymentsPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
-
-  const outstandingSummary = useMemo(
-    () => ({
-      count: entries.length,
-      amount: roundMoney(
-        entries.reduce((sum, entry) => sum + getLedgerOutstandingBalance(entry), 0)
-      ),
-    }),
-    [entries]
-  );
 
   const clientsWithPaid = useMemo(() => {
     const byId = new Map<string, string>();
@@ -314,6 +324,36 @@ export default function PaymentsPage() {
     return entries.filter((entry) => entry.client_id === selectedClientId);
   }, [entries, selectedClientId]);
 
+  const allClientInvoicedDebits = useMemo(() => {
+    if (!selectedClientId) return [];
+    return invoicedDebits.filter((entry) => entry.client_id === selectedClientId);
+  }, [invoicedDebits, selectedClientId]);
+
+  const clientInvoiceSummaries = useMemo(
+    () =>
+      summarizePaymentsByInvoiceId(allClientInvoicedDebits, (entry) => {
+        const draft = drafts[entry.id];
+        if (draft?.editing) return entryFromDraft(entry, draft);
+        return entry;
+      }),
+    [allClientInvoicedDebits, drafts]
+  );
+
+  const clientInvoiceTotals = useMemo(
+    () => ({
+      invoiced: roundMoney(
+        clientInvoiceSummaries.reduce((sum, row) => sum + row.invoicedTotal, 0)
+      ),
+      paid: roundMoney(
+        clientInvoiceSummaries.reduce((sum, row) => sum + row.paidTotal, 0)
+      ),
+      outstanding: roundMoney(
+        clientInvoiceSummaries.reduce((sum, row) => sum + row.outstandingTotal, 0)
+      ),
+    }),
+    [clientInvoiceSummaries]
+  );
+
   useEffect(() => {
     if (
       selectedClientId &&
@@ -331,13 +371,6 @@ export default function PaymentsPage() {
       setHistoryClientId("");
     }
   }, [clientsWithPaid, historyClientId]);
-
-  const clientPaidHistory = useMemo(() => {
-    if (!selectedClientId) return [];
-    return paidEntries
-      .filter((entry) => entry.client_id === selectedClientId)
-      .sort((a, b) => (b.date_paid ?? b.entry_date).localeCompare(a.date_paid ?? a.entry_date));
-  }, [paidEntries, selectedClientId]);
 
   const selectedEntries = useMemo(
     () => filteredEntries.filter((entry) => drafts[entry.id]?.selected),
@@ -421,7 +454,8 @@ export default function PaymentsPage() {
     const today = new Date().toISOString().slice(0, 10);
     const target =
       filteredEntries.find((entry) => !drafts[entry.id]?.selected) ?? filteredEntries[0];
-    const outstanding = getLedgerOutstandingBalance(target);
+    const balance = getLedgerOutstandingBalance(target);
+    const amountOwed = balance < 0 ? roundMoney(-balance) : 0;
 
     setDrafts((current) => {
       const next = { ...current };
@@ -450,7 +484,7 @@ export default function PaymentsPage() {
         date_paid: today,
         paid_to: defaultPaidTo,
         payment_type: defaultPaymentType,
-        payment_amount: outstanding,
+        payment_amount: amountOwed,
         payment_fee: 0,
         payment_fee_manually_edited: false,
         write_off: false,
@@ -517,14 +551,14 @@ export default function PaymentsPage() {
       return;
     }
 
-    const outstanding = outstandingBeforeWriteOff(entry, draft);
-    if (outstanding <= 0) {
+    const balance = outstandingBeforeWriteOff(entry, draft);
+    if (balance === 0) {
       setError("Nothing outstanding to write off.");
       return;
     }
 
     updateDraft(entry.id, { selected: true, editing: true });
-    setWriteOffModal({ entryId: entry.id, outstanding });
+    setWriteOffModal({ entryId: entry.id, outstanding: roundMoney(Math.abs(balance)) });
   }
 
   function handleEditHistorySelected() {
@@ -692,28 +726,6 @@ export default function PaymentsPage() {
         </div>
       )}
 
-      <div className="mb-4 grid gap-4 sm:grid-cols-2">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-xs uppercase tracking-wide text-slate-500">Outstanding Payments</p>
-          <p className="mt-1 text-2xl font-semibold text-amber-800">
-            {formatCurrency(outstandingSummary.amount)}
-          </p>
-          <p className="mt-1 text-sm text-slate-600">
-            {outstandingSummary.count}{" "}
-            {outstandingSummary.count === 1 ? "item" : "items"} awaiting payment
-          </p>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-xs uppercase tracking-wide text-slate-500">Payments Recorded</p>
-          <p className="mt-1 text-2xl font-semibold text-brand-800">
-            {paidEntries.length}
-          </p>
-          <p className="mt-1 text-sm text-slate-600">
-            Paid and partial payments in ledger history
-          </p>
-        </div>
-      </div>
-
       <div className="mb-4 flex flex-wrap gap-2">
         <Button
           type="button"
@@ -784,42 +796,118 @@ export default function PaymentsPage() {
         <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
           Select a client to view unpaid debit items.
         </div>
-      ) : filteredEntries.length === 0 ? (
+      ) : (
+        <>
+        {clientInvoiceSummaries.length > 0 && (
+        <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-900">Totals by invoice ID</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Combined invoiced, paid, and outstanding (invoiced − paid) for each invoice.
+          </p>
+          <div className="mt-3 space-y-3 md:hidden">
+            {clientInvoiceSummaries.map((summary) => (
+              <div
+                key={summary.invoiceId}
+                className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-sm"
+              >
+                <p className="font-medium text-slate-900">
+                  {invoiceIdWithItemCount(summary.invoiceId, summary.lineCount)}
+                </p>
+                <dl className="mt-2 grid grid-cols-3 gap-2">
+                  <div>
+                    <dt className="text-slate-500">Invoiced</dt>
+                    <dd className="font-medium">{formatCurrency(summary.invoicedTotal)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Paid</dt>
+                    <dd className="font-medium text-brand-800">
+                      {formatCurrency(summary.paidTotal)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Outstanding</dt>
+                    <dd className={`font-medium ${outstandingBalanceClass(summary.outstandingTotal)}`}>
+                      {formatCurrency(summary.outstandingTotal)}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            ))}
+            <div className="rounded-lg border border-slate-200 bg-white p-3 font-semibold text-slate-900">
+              <p>Total</p>
+              <dl className="mt-2 grid grid-cols-3 gap-2 text-sm">
+                <div>
+                  <dt className="font-normal text-slate-500">Invoiced</dt>
+                  <dd>{formatCurrency(clientInvoiceTotals.invoiced)}</dd>
+                </div>
+                <div>
+                  <dt className="font-normal text-slate-500">Paid</dt>
+                  <dd className="text-brand-800">{formatCurrency(clientInvoiceTotals.paid)}</dd>
+                </div>
+                <div>
+                  <dt className="font-normal text-slate-500">Outstanding</dt>
+                  <dd className={outstandingBalanceClass(clientInvoiceTotals.outstanding)}>
+                    {formatCurrency(clientInvoiceTotals.outstanding)}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+          <div className="mt-3 hidden overflow-x-auto md:block">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-left text-slate-500">
+                  <th className="py-2 pr-4">Invoice ID</th>
+                  <th className="py-2 pr-4 text-right">Invoiced</th>
+                  <th className="py-2 pr-4 text-right">Paid</th>
+                  <th className="py-2 pr-4 text-right">Outstanding</th>
+                </tr>
+              </thead>
+              <tbody>
+                {clientInvoiceSummaries.map((summary) => (
+                  <tr key={summary.invoiceId} className="border-b border-slate-50">
+                    <td className="py-3 pr-4 font-medium text-slate-900">
+                      {invoiceIdWithItemCount(summary.invoiceId, summary.lineCount)}
+                    </td>
+                    <td className="py-3 pr-4 text-right">{formatCurrency(summary.invoicedTotal)}</td>
+                    <td className="py-3 pr-4 text-right font-medium text-brand-800">
+                      {formatCurrency(summary.paidTotal)}
+                    </td>
+                    <td
+                      className={`py-3 pr-4 text-right font-medium ${outstandingBalanceClass(summary.outstandingTotal)}`}
+                    >
+                      {formatCurrency(summary.outstandingTotal)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-slate-200 font-semibold text-slate-900">
+                  <td className="py-3 pr-4">Total</td>
+                  <td className="py-3 pr-4 text-right">
+                    {formatCurrency(clientInvoiceTotals.invoiced)}
+                  </td>
+                  <td className="py-3 pr-4 text-right text-brand-800">
+                    {formatCurrency(clientInvoiceTotals.paid)}
+                  </td>
+                  <td
+                    className={`py-3 pr-4 text-right ${outstandingBalanceClass(clientInvoiceTotals.outstanding)}`}
+                  >
+                    {formatCurrency(clientInvoiceTotals.outstanding)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+        )}
+
+      {filteredEntries.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
           No unpaid debit items for this client.
         </div>
       ) : (
         <>
-        {selectedClientId && clientPaidHistory.length > 0 && (
-          <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <h2 className="text-sm font-semibold text-slate-900">Existing payments</h2>
-            <p className="mt-1 text-xs text-slate-500">
-              Fully paid items for this client.
-            </p>
-            <ul className="mt-3 divide-y divide-slate-100 text-sm">
-              {clientPaidHistory.map((entry) => {
-                const paymentAmount = Number(entry.payment_amount);
-                return (
-                  <li key={entry.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
-                    <div>
-                      <span className="font-medium text-slate-800">
-                        {formatDate(entry.date_paid ?? entry.entry_date)}
-                      </span>
-                      <span className="text-slate-500"> · {entry.invoice_id ?? "—"}</span>
-                      <span className="text-slate-500"> · {entry.description || "—"}</span>
-                    </div>
-                    <span className="font-medium text-brand-800">
-                      {formatCurrency(
-                        paymentAmount > 0 ? paymentAmount : getLedgerInvoicedAmount(entry)
-                      )}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
-
         <div className="mb-2">
           <h2 className="text-sm font-semibold text-slate-900">Unpaid items</h2>
           <p className="text-xs text-slate-500">
@@ -858,7 +946,10 @@ export default function PaymentsPage() {
                       Invoiced: {formatCurrency(getLedgerInvoicedAmount(entry))}
                     </p>
                     <p className="text-sm text-amber-800">
-                      Outstanding: {formatCurrency(balanceFromDraft(entry, draft))}
+                      Outstanding:{" "}
+                      <span className={outstandingBalanceClass(lineOutstandingBalance(entry, draft))}>
+                        {formatCurrency(lineOutstandingBalance(entry, draft))}
+                      </span>
                     </p>
                   </div>
                 </label>
@@ -867,16 +958,7 @@ export default function PaymentsPage() {
                   <p className="text-sm text-slate-600">
                     Status:{" "}
                     <span className="font-medium text-slate-900">
-                      {isLedgerLineFullyPaid({
-                        ...entry,
-                        payment_amount: draft.payment_amount,
-                        write_off: draft.write_off,
-                        write_off_amount: draft.write_off_amount,
-                      })
-                        ? "Paid in full"
-                        : Number(draft.payment_amount) > 0 || draft.write_off
-                          ? "Partial payment"
-                          : "Unpaid"}
+                      {paymentStatusLabel(entry, draft)}
                     </span>
                   </p>
                   <label className="block text-sm">
@@ -1038,20 +1120,13 @@ export default function PaymentsPage() {
                     <td className="px-3 py-3 font-medium">
                       {formatCurrency(getLedgerInvoicedAmount(entry))}
                     </td>
-                    <td className="px-3 py-3 font-medium text-amber-800">
-                      {formatCurrency(balanceFromDraft(entry, draft))}
+                    <td
+                      className={`px-3 py-3 font-medium ${outstandingBalanceClass(lineOutstandingBalance(entry, draft))}`}
+                    >
+                      {formatCurrency(lineOutstandingBalance(entry, draft))}
                     </td>
                     <td className="px-3 py-3">
-                      {isLedgerLineFullyPaid({
-                        ...entry,
-                        payment_amount: draft.payment_amount,
-                        write_off: draft.write_off,
-                        write_off_amount: draft.write_off_amount,
-                      })
-                        ? "Paid in full"
-                        : Number(draft.payment_amount) > 0 || draft.write_off
-                          ? "Partial"
-                          : "Unpaid"}
+                      {paymentStatusLabel(entry, draft)}
                     </td>
                     <td className="px-3 py-3">
                       <input
@@ -1173,6 +1248,8 @@ export default function PaymentsPage() {
       </div>
       )}
         </>
+      )}
+        </>
       ) : (
         <>
           <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1195,7 +1272,7 @@ export default function PaymentsPage() {
             <p className="text-sm text-slate-500">Loading payment history...</p>
           ) : filteredPaidEntries.length === 0 ? (
             <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
-              <p>No payment history recorded yet.</p>
+              <p>No fully paid items yet.</p>
             </div>
           ) : (
             <>

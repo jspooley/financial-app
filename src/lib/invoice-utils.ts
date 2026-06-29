@@ -61,7 +61,7 @@ export function isLedgerLineInvoiced(line: {
 }
 
 export function isLedgerLineUnpaid(line: LedgerAmountEntry): boolean {
-  return getLedgerOutstandingBalance(line) > 0;
+  return getLedgerOutstandingBalance(line) < 0;
 }
 
 export type LedgerAmountEntry = {
@@ -93,17 +93,44 @@ function invoicedAmountForEntry(entry: LedgerAmountEntry) {
   });
 }
 
-/** Remaining balance after payments and write-offs. */
+/**
+ * Signed balance: payment − invoiced.
+ * Positive when overpaid, negative when underpaid. Write-off moves balance toward zero.
+ */
 export function getLedgerOutstandingBalance(entry: LedgerAmountEntry) {
   const invoiced = invoicedAmountForEntry(entry);
   const paid = roundMoney(Number(entry.payment_amount ?? 0));
-  const writeOff = roundMoney(Math.max(0, Number(entry.write_off_amount ?? 0)));
-  return roundMoney(Math.max(0, invoiced - paid - writeOff));
+  const writeOffApplied = entry.write_off
+    ? roundMoney(Math.max(0, Number(entry.write_off_amount ?? 0)))
+    : 0;
+
+  let balance = roundMoney(paid - invoiced);
+
+  if (writeOffApplied > 0) {
+    if (balance < 0) {
+      balance = roundMoney(Math.min(0, balance + writeOffApplied));
+    } else if (balance > 0) {
+      balance = roundMoney(Math.max(0, balance - writeOffApplied));
+    }
+  }
+
+  return balance;
 }
 
-/** Paid only when cumulative payment amount meets or exceeds invoiced amount. */
+/** Underpayment still owed (positive), or zero when balanced/overpaid. */
+export function getLedgerUnderpaymentAmount(entry: LedgerAmountEntry) {
+  const balance = getLedgerOutstandingBalance(entry);
+  return balance < 0 ? roundMoney(-balance) : 0;
+}
+
+/** Alias for amount still owed on a line (always >= 0). */
+export function getLineAmountStillOwed(entry: LedgerAmountEntry) {
+  return getLedgerUnderpaymentAmount(entry);
+}
+
+/** Paid when cumulative payment (plus write-off) meets or exceeds invoiced amount. */
 export function isLedgerLineFullyPaid(entry: LedgerAmountEntry) {
-  return getLedgerOutstandingBalance(entry) === 0;
+  return getLedgerOutstandingBalance(entry) >= 0;
 }
 
 export function summarizeToBeInvoiced(entries: LedgerAmountEntry[]) {
@@ -126,7 +153,10 @@ export function summarizeInvoicedUnpaid(entries: LedgerAmountEntry[]) {
   return {
     count: lines.length,
     amount: roundMoney(
-      lines.reduce((sum, entry) => sum + getLedgerOutstandingBalance(entry), 0)
+      lines.reduce(
+        (sum, entry) => sum + getLedgerUnderpaymentAmount(entry),
+        0
+      )
     ),
   };
 }
@@ -261,6 +291,49 @@ export function groupLedgerByInvoiceId(
     grouped.set(entry.invoice_id, list);
   }
   return grouped;
+}
+
+export interface InvoicePaymentSummary {
+  invoiceId: string;
+  lineCount: number;
+  invoicedTotal: number;
+  paidTotal: number;
+  outstandingTotal: number;
+}
+
+export function summarizePaymentsByInvoiceId(
+  entries: InvoiceLineItem[],
+  projectEntry?: (entry: InvoiceLineItem) => LedgerAmountEntry
+): InvoicePaymentSummary[] {
+  const grouped = groupLedgerByInvoiceId(entries);
+
+  return Array.from(grouped.entries())
+    .map(([invoiceId, lines]) => {
+      const projected = lines.map((line) =>
+        projectEntry ? projectEntry(line) : line
+      );
+      const invoicedTotal = roundMoney(
+        lines.reduce(
+          (sum, entry) => sum + getLedgerInvoicedAmount(entry),
+          0
+        )
+      );
+      const paidTotal = roundMoney(
+        projected.reduce(
+          (sum, entry) => sum + Number(entry.payment_amount ?? 0),
+          0
+        )
+      );
+      const outstandingTotal = roundMoney(invoicedTotal - paidTotal);
+      return {
+        invoiceId,
+        lineCount: lines.length,
+        invoicedTotal,
+        paidTotal,
+        outstandingTotal,
+      };
+    })
+    .sort((a, b) => b.invoiceId.localeCompare(a.invoiceId));
 }
 
 export function invoiceLineTotal(entry: InvoiceLineItem): number {

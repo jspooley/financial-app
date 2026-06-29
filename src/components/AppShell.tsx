@@ -12,6 +12,12 @@ const navItems = [
   { href: "/clients", label: "Clients", shortLabel: "Clients", icon: "👤" },
   { href: "/ledger", label: "Ledger", shortLabel: "Ledger", icon: "₿" },
   { href: "/payments", label: "Payments", shortLabel: "Pay", icon: "💵" },
+  {
+    href: "/sales-use-tax",
+    label: "Sales & Use Tax Payments",
+    shortLabel: "Tax",
+    icon: "🧾",
+  },
   { href: "/invoicing", label: "Invoicing", shortLabel: "Invoice", icon: "📄" },
 ];
 
@@ -139,7 +145,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white md:hidden">
-        <ul className="grid grid-cols-6">
+        <ul className="grid grid-cols-7">
           {navItems.map((item) => {
             const active = pathname === item.href;
             return (

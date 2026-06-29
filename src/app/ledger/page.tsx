@@ -8,12 +8,28 @@ import { LedgerForm } from "@/components/forms/LedgerForm";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { isLedgerLineUninvoiced } from "@/lib/invoice-utils";
+import { isLedgerLineUninvoiced, normalizePoNumber } from "@/lib/invoice-utils";
 import { ledgerDetailFields, ledgerDetailColumns, mapLedgerTableRow } from "@/lib/ledger-display";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { Client, Invoice, LedgerEntry, TradePartner } from "@/lib/types";
 import { formatCurrency, formatDate, getLedgerInvoicedAmount, purchaserFromEmail } from "@/lib/utils";
+import { SelectField } from "@/components/ui/FormFields";
+
+function entryMatchesLedgerFilters(
+  entry: LedgerEntry,
+  filters: { clientId: string; po: string; invoiceId: string }
+) {
+  if (filters.clientId && entry.client_id !== filters.clientId) return false;
+  if (filters.po && normalizePoNumber(entry.po_number) !== normalizePoNumber(filters.po)) {
+    return false;
+  }
+  if (filters.invoiceId) {
+    const invoiceId = (entry.invoice_id ?? "").trim().toLowerCase();
+    if (invoiceId !== filters.invoiceId.trim().toLowerCase()) return false;
+  }
+  return true;
+}
 
 export default function LedgerPage() {
   return (
@@ -37,6 +53,9 @@ function LedgerPageContent() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<LedgerEntry | null>(null);
+  const [filterClientId, setFilterClientId] = useState("");
+  const [filterPo, setFilterPo] = useState("");
+  const [filterInvoiceId, setFilterInvoiceId] = useState("");
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -118,11 +137,54 @@ function LedgerPageContent() {
     );
   }
 
-  const visibleEntries = useMemo(
-    () =>
-      uninvoicedOnly ? entries.filter(isLedgerLineUninvoiced) : entries,
-    [entries, uninvoicedOnly]
+  const ledgerFilters = useMemo(
+    () => ({
+      clientId: filterClientId,
+      po: filterPo,
+      invoiceId: filterInvoiceId,
+    }),
+    [filterClientId, filterPo, filterInvoiceId]
   );
+
+  const hasActiveFilters = Boolean(
+    filterClientId || filterPo || filterInvoiceId
+  );
+
+  const poFilterOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const options: string[] = [];
+    for (const entry of entries) {
+      const po = entry.po_number?.trim();
+      if (!po) continue;
+      const key = normalizePoNumber(po);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push(po);
+    }
+    return options.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  }, [entries]);
+
+  const invoiceIdFilterOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const options: string[] = [];
+    for (const entry of entries) {
+      const invoiceId = entry.invoice_id?.trim();
+      if (!invoiceId) continue;
+      const key = invoiceId.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push(invoiceId);
+    }
+    return options.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  }, [entries]);
+
+  const visibleEntries = useMemo(() => {
+    let result = uninvoicedOnly ? entries.filter(isLedgerLineUninvoiced) : entries;
+    if (hasActiveFilters) {
+      result = result.filter((entry) => entryMatchesLedgerFilters(entry, ledgerFilters));
+    }
+    return result;
+  }, [entries, uninvoicedOnly, hasActiveFilters, ledgerFilters]);
 
   const debitEntries = visibleEntries.filter((entry) => entry.credit_debit === "debit");
   const creditEntries = visibleEntries.filter((entry) => entry.credit_debit === "credit");
@@ -210,11 +272,80 @@ function LedgerPageContent() {
         </div>
       ) : (
         <>
+          <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <p className="text-sm font-medium text-slate-900">Filter entries</p>
+              {hasActiveFilters && (
+                <Button
+                  variant="ghost"
+                  className="min-h-9 px-2 py-1 text-xs"
+                  onClick={() => {
+                    setFilterClientId("");
+                    setFilterPo("");
+                    setFilterInvoiceId("");
+                  }}
+                >
+                  Clear filters
+                </Button>
+              )}
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <SelectField
+                label="Client"
+                value={filterClientId}
+                onChange={(event) => setFilterClientId(event.target.value)}
+              >
+                <option value="">All clients</option>
+                {clients.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {client.name}
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField
+                label="PO Number"
+                value={filterPo}
+                onChange={(event) => setFilterPo(event.target.value)}
+              >
+                <option value="">All PO numbers</option>
+                {poFilterOptions.map((po) => (
+                  <option key={po} value={po}>
+                    {po}
+                  </option>
+                ))}
+              </SelectField>
+              <SelectField
+                label="Invoice ID"
+                value={filterInvoiceId}
+                onChange={(event) => setFilterInvoiceId(event.target.value)}
+              >
+                <option value="">All invoice IDs</option>
+                {invoiceIdFilterOptions.map((invoiceId) => (
+                  <option key={invoiceId} value={invoiceId}>
+                    {invoiceId}
+                  </option>
+                ))}
+              </SelectField>
+            </div>
+          </div>
+
+          {visibleEntries.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
+              <p>No ledger entries match the current filters.</p>
+            </div>
+          ) : (
+            <>
           <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700 shadow-sm">
             <p>
               <strong>{debitEntries.length}</strong> debit
               {debitEntries.length === 1 ? "" : "s"} · <strong>{creditEntries.length}</strong>{" "}
               credit{creditEntries.length === 1 ? "" : "s"}
+              {hasActiveFilters && (
+                <span className="text-slate-500">
+                  {" "}
+                  (filtered from {entries.length} total)
+                </span>
+              )}
             </p>
             <p className="mt-1 text-slate-500">
               Client debits are the default when you add an entry. Scroll down to the{" "}
@@ -316,6 +447,8 @@ function LedgerPageContent() {
             />
             </section>
           </div>
+            </>
+          )}
         </>
       )}
     </AppShell>

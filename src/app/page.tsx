@@ -2,7 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/server";
-import { formatCurrency, formatDate, currentMonthKey, getLedgerInvoicedAmount, getPaidSalesUseTaxLineItems, groupTaxDueByMonth, roundMoney, sumLedgerCreditsAndDebits } from "@/lib/utils";
+import { formatCurrency, currentMonthKey, getLedgerInvoicedAmount, groupTaxDueByMonth, groupTaxPaidByMonth, roundMoney, sumLedgerCreditsAndDebits } from "@/lib/utils";
 import {
   summarizeInvoicedUnpaid,
   summarizeJobsByStatus,
@@ -94,15 +94,12 @@ export default async function DashboardPage() {
   ).length;
 
   const taxDueByMonth = groupTaxDueByMonth(allLedgerEntries);
-  const totalTaxDue = taxDueByMonth.reduce((sum, row) => sum + row.amount, 0);
-  const totalJessTaxDue = taxDueByMonth.reduce((sum, row) => sum + row.jess, 0);
-  const totalMollyTaxDue = taxDueByMonth.reduce((sum, row) => sum + row.molly, 0);
   const monthKey = currentMonthKey();
   const currentMonthTax = taxDueByMonth.find((row) => row.monthKey === monthKey);
   const currentMonthTaxDue = currentMonthTax?.amount ?? 0;
   const currentMonthJessTaxDue = currentMonthTax?.jess ?? 0;
   const currentMonthMollyTaxDue = currentMonthTax?.molly ?? 0;
-  const paidSalesUseTaxLines = getPaidSalesUseTaxLineItems(allLedgerEntries);
+  const taxPaidByMonth = groupTaxPaidByMonth(allLedgerEntries);
 
   const summaryCards: SummaryCardData[] = [
     {
@@ -290,7 +287,10 @@ export default async function DashboardPage() {
               Sales and Use Tax Due by the 20th of each month
             </h2>
             <p className="text-sm text-slate-600">
-              Unpaid sales and use tax from ledger entries where Sales and Use Tax Paid is unchecked.
+              Unpaid sales and use tax from ledger entries where Sales and Use Tax Paid is unchecked.{" "}
+              <Link href="/sales-use-tax" className="font-medium text-brand-700 hover:underline">
+                Record tax payments →
+              </Link>
             </p>
           </div>
           <div className="flex flex-wrap gap-3 text-right sm:justify-end sm:gap-6">
@@ -315,157 +315,22 @@ export default async function DashboardPage() {
           </div>
         </div>
 
-        <div className="mt-4 space-y-3 md:hidden">
-          {taxDueByMonth.length === 0 ? (
-            <p className="py-4 text-center text-sm text-slate-500">No unpaid tax recorded yet.</p>
-          ) : (
-            <>
-              {taxDueByMonth.map((row) => (
-                <div
-                  key={row.monthKey}
-                  className="rounded-lg border border-slate-100 bg-slate-50 p-3"
-                >
-                  <p className="font-medium text-slate-900">{row.label}</p>
-                  <dl className="mt-2 grid grid-cols-3 gap-2 text-sm">
-                    <div>
-                      <dt className="text-slate-500">Jess</dt>
-                      <dd className="font-medium">{formatCurrency(row.jess)}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-slate-500">Molly</dt>
-                      <dd className="font-medium">{formatCurrency(row.molly)}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-slate-500">Total</dt>
-                      <dd className="font-medium">{formatCurrency(row.amount)}</dd>
-                    </div>
-                  </dl>
-                </div>
-              ))}
-              <div className="rounded-lg border border-slate-200 bg-white p-3 font-semibold text-slate-900">
-                <p>Total unpaid tax</p>
-                <dl className="mt-2 grid grid-cols-3 gap-2 text-sm">
-                  <div>
-                    <dt className="font-normal text-slate-500">Jess</dt>
-                    <dd>{formatCurrency(totalJessTaxDue)}</dd>
-                  </div>
-                  <div>
-                    <dt className="font-normal text-slate-500">Molly</dt>
-                    <dd>{formatCurrency(totalMollyTaxDue)}</dd>
-                  </div>
-                  <div>
-                    <dt className="font-normal text-slate-500">Total</dt>
-                    <dd>{formatCurrency(totalTaxDue)}</dd>
-                  </div>
-                </dl>
-              </div>
-            </>
-          )}
-        </div>
-
-        <div className="mt-4 hidden overflow-x-auto md:block">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-100 text-left text-slate-500">
-                <th className="py-2 pr-4">Month</th>
-                <th className="py-2 pr-4 text-right">Jess</th>
-                <th className="py-2 pr-4 text-right">Molly</th>
-                <th className="py-2 pr-4 text-right">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {taxDueByMonth.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="py-6 text-center text-slate-500">
-                    No unpaid tax recorded yet.
-                  </td>
-                </tr>
-              ) : (
-                taxDueByMonth.map((row) => (
-                  <tr key={row.monthKey} className="border-b border-slate-50">
-                    <td className="py-3 pr-4">{row.label}</td>
-                    <td className="py-3 pr-4 text-right font-medium">
-                      {formatCurrency(row.jess)}
-                    </td>
-                    <td className="py-3 pr-4 text-right font-medium">
-                      {formatCurrency(row.molly)}
-                    </td>
-                    <td className="py-3 pr-4 text-right font-medium">
-                      {formatCurrency(row.amount)}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
+        {(taxDueByMonth.length > 0 || taxPaidByMonth.length > 0) && (
+          <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-sm">
             {taxDueByMonth.length > 0 && (
-              <tfoot>
-                <tr className="border-t border-slate-200 font-semibold text-slate-900">
-                  <td className="py-3 pr-4">Total unpaid tax</td>
-                  <td className="py-3 pr-4 text-right">{formatCurrency(totalJessTaxDue)}</td>
-                  <td className="py-3 pr-4 text-right">{formatCurrency(totalMollyTaxDue)}</td>
-                  <td className="py-3 pr-4 text-right">{formatCurrency(totalTaxDue)}</td>
-                </tr>
-              </tfoot>
+              <Link href="/sales-use-tax" className="font-medium text-brand-700 hover:underline">
+                View unpaid tax details →
+              </Link>
             )}
-          </table>
-        </div>
-
-        {paidSalesUseTaxLines.length > 0 && (
-        <div className="mt-6">
-          <h3 className="text-sm font-semibold text-slate-900">Tax by ledger entry</h3>
-          <p className="mt-1 text-sm text-slate-600">Wholesale tax amounts paid.</p>
-          <div className="mt-3 space-y-3 md:hidden">
-              {paidSalesUseTaxLines.slice(0, 20).map((entry) => (
-                <div
-                  key={entry.id ?? `${entry.entry_date}-${entry.tax_amount}`}
-                  className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-sm"
-                >
-                  <p className="font-medium text-slate-900">
-                    {entry.clients?.name ?? "—"} · {formatDate(entry.entry_date)}
-                  </p>
-                  <dl className="mt-2 grid grid-cols-2 gap-2">
-                    <div>
-                      <dt className="text-slate-500">Tax</dt>
-                      <dd className="font-medium">{formatCurrency(Number(entry.tax_amount))}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-slate-500">Purchaser</dt>
-                      <dd>{entry.purchaser ?? "—"}</dd>
-                    </div>
-                  </dl>
-                </div>
-              ))}
+            {taxPaidByMonth.length > 0 && (
+              <Link
+                href="/sales-use-tax?view=paid"
+                className="font-medium text-brand-700 hover:underline"
+              >
+                View paid tax history →
+              </Link>
+            )}
           </div>
-          <div className="mt-3 hidden overflow-x-auto md:block">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-100 text-left text-slate-500">
-                  <th className="py-2 pr-4">Date</th>
-                  <th className="py-2 pr-4">Client</th>
-                  <th className="py-2 pr-4 text-right">Tax</th>
-                  <th className="py-2 pr-4">Purchaser</th>
-                </tr>
-              </thead>
-              <tbody>
-                  {paidSalesUseTaxLines.slice(0, 20).map((entry) => (
-                    <tr
-                      key={entry.id ?? `${entry.entry_date}-${entry.tax_amount}`}
-                      className="border-b border-slate-50"
-                    >
-                      <td className="py-3 pr-4 whitespace-nowrap">
-                        {formatDate(entry.entry_date)}
-                      </td>
-                      <td className="py-3 pr-4">{entry.clients?.name ?? "—"}</td>
-                      <td className="py-3 pr-4 text-right font-medium">
-                        {formatCurrency(Number(entry.tax_amount))}
-                      </td>
-                      <td className="py-3 pr-4">{entry.purchaser ?? "—"}</td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
         )}
       </section>
 

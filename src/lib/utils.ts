@@ -320,10 +320,21 @@ export function getPaidSalesUseTaxLineItems(entries: TaxDueEntry[]) {
 }
 
 export function groupTaxDueByMonth(entries: TaxDueEntry[]): MonthlyTaxDue[] {
+  return groupSalesUseTaxByMonth(entries, isUnpaidSalesUseTax);
+}
+
+export function groupTaxPaidByMonth(entries: TaxDueEntry[]): MonthlyTaxDue[] {
+  return groupSalesUseTaxByMonth(entries, isSalesUseTaxPaid);
+}
+
+function groupSalesUseTaxByMonth(
+  entries: TaxDueEntry[],
+  includeEntry: (entry: TaxDueEntry) => boolean
+): MonthlyTaxDue[] {
   const byMonth = new Map<string, { amount: number; jess: number; molly: number }>();
 
   for (const entry of entries) {
-    if (!isUnpaidSalesUseTax(entry)) continue;
+    if (!includeEntry(entry)) continue;
     const monthKey = entry.entry_date.slice(0, 7);
     const tax = Number(entry.tax_amount) || 0;
     if (tax === 0) continue;

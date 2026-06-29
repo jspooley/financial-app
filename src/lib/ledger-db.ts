@@ -11,6 +11,17 @@ import { calculateTaxFromCustomerPrice } from "./utils";
 
 export type { LedgerDbRow, LedgerInsert };
 
+type LedgerUpdateClient = {
+  from: (table: string) => {
+    update: (payload: Record<string, boolean>) => {
+      eq: (
+        column: string,
+        value: string
+      ) => PromiseLike<{ error: { message: string } | null }>;
+    };
+  };
+};
+
 export const PAYMENTS_DB_SETUP_SQL = `ALTER TABLE ledger
   ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT false;
 
@@ -93,6 +104,31 @@ export function normalizeLedgerRow(
     updated_at: r.updated_at as string,
     clients: r.clients ?? null,
     trade_partners: r.trade_partners ?? null,
+  };
+}
+
+/** Update sales/use tax paid flag; tries both possible column names in the DB. */
+export async function updateLedgerSalesUseTaxPaid(
+  supabase: LedgerUpdateClient,
+  id: string,
+  paid: boolean
+): Promise<{ error: { message: string } | null }> {
+  const payloads = [
+    { sales_and_use_tax_paid: paid },
+    { sand_u_tax_paid: paid },
+  ] as Record<string, boolean>[];
+  for (const payload of payloads) {
+    const { error } = await supabase.from("ledger").update(payload).eq("id", id);
+    if (!error) return { error: null };
+    const msg = error.message.toLowerCase();
+    if (msg.includes("column") || msg.includes("schema cache")) continue;
+    return { error };
+  }
+  return {
+    error: {
+      message:
+        "Could not update Sales and Use Tax Paid. Run migration 019 or 006 in Supabase.",
+    },
   };
 }
 

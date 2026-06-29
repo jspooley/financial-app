@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 3000",
+    "stop-dev": "node scripts/stop-dev-server.mjs",
+    "prebuild": "node scripts/stop-dev-server.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
