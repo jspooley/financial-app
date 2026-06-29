@@ -1,7 +1,6 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { ClientForm } from "@/components/forms/ClientForm";
@@ -15,17 +14,42 @@ function ClientsPageContent() {
   const searchParams = useSearchParams();
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [needsPoMigration, setNeedsPoMigration] = useState(false);
   const [showForm, setShowForm] = useState(searchParams.get("add") === "1");
   const [editing, setEditing] = useState<Client | null>(null);
 
   const loadClients = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
+    setNeedsPoMigration(false);
     const supabase = createClient();
-    const { data } = await supabase
+
+    const { data, error } = await supabase
+      .from("clients")
+      .select("*, client_po_numbers(po_number)")
+      .order("name", { ascending: true });
+
+    if (!error) {
+      setClients(data ?? []);
+      setLoading(false);
+      return;
+    }
+
+    const { data: fallback, error: fallbackError } = await supabase
       .from("clients")
       .select("*")
       .order("name", { ascending: true });
-    setClients(data ?? []);
+
+    if (fallbackError) {
+      setLoadError(fallbackError.message);
+      setClients([]);
+      setLoading(false);
+      return;
+    }
+
+    setClients(fallback ?? []);
+    setNeedsPoMigration(true);
     setLoading(false);
   }, []);
 
@@ -55,7 +79,7 @@ function ClientsPageContent() {
     <AppShell>
       <PageHeader
         title="Clients"
-        description="Manage client contact details and unique IDs."
+        description="Manage client contact details and PO numbers for ledger and invoicing."
         action={
           !showForm && (
             <Button
@@ -69,6 +93,22 @@ function ClientsPageContent() {
           )
         }
       />
+
+      {loadError && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {loadError}
+        </div>
+      )}
+      {needsPoMigration && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          <p className="font-medium">Database setup required for PO numbers</p>
+          <p className="mt-1">
+            Your clients are still in the database. Run migration{" "}
+            <code className="rounded bg-amber-100 px-1">024_client_po_numbers.sql</code> in
+            Supabase, then refresh this page to manage PO numbers per client.
+          </p>
+        </div>
+      )}
 
       {showForm ? (
         <ClientForm
@@ -106,12 +146,15 @@ function ClientsPageContent() {
           mobileTitleKey="name"
           columns={[
             { key: "name", label: "Name" },
+            { key: "poNumbers", label: "PO Numbers" },
             { key: "email", label: "Email" },
             { key: "phone", label: "Phone" },
             { key: "actions", label: "Actions", className: "text-right" },
           ]}
           rows={clients.map((client) => ({
             name: client.name,
+            poNumbers:
+              client.client_po_numbers?.map((row) => row.po_number).join(", ") || "—",
             email: client.email ?? "—",
             phone: client.phone ?? "—",
             actions: (

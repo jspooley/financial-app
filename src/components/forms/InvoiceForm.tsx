@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -104,13 +105,18 @@ export function InvoiceForm({
     setLoadingLines(true);
     const supabase = createClient();
 
-    const [{ data: ledgerData, error: ledgerError }, { data: invoiceData }] =
+    const [{ data: ledgerData, error: ledgerError }, { data: invoiceData }, { data: clientPoData }] =
       await Promise.all([
         supabase.from("ledger").select("*").eq("client_id", clientId),
         supabase
           .from("invoicing")
           .select("po_number, invoice_sequence")
           .eq("client_id", clientId),
+        supabase
+          .from("client_po_numbers")
+          .select("po_number")
+          .eq("client_id", clientId)
+          .order("po_number", { ascending: true }),
       ]);
 
     if (ledgerError) {
@@ -120,6 +126,9 @@ export function InvoiceForm({
     }
 
     const pos = new Set<string>();
+    for (const row of clientPoData ?? []) {
+      if (row.po_number?.trim()) pos.add(row.po_number.trim());
+    }
     for (const row of ledgerData ?? []) {
       if (row.po_number?.trim()) pos.add(row.po_number.trim());
     }
@@ -400,11 +409,16 @@ export function InvoiceForm({
               ))}
             </SelectField>
           ) : (
-            <InputField
-              label="PO Number"
-              error={errors.po_number?.message}
-              {...register("po_number")}
-            />
+            <div>
+              <p className="text-sm font-medium text-slate-700">PO Number</p>
+              <p className="mt-1 text-sm text-amber-800">
+                No PO numbers for this client.{" "}
+                <Link href="/clients" className="font-medium text-brand-700 underline">
+                  Add a PO on the Clients page
+                </Link>{" "}
+                before creating an invoice.
+              </p>
+            </div>
           )}
 
           <InputField

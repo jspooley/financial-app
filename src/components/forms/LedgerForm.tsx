@@ -1,12 +1,14 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Controller, type Control, useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
 import { ledgerFormToDb } from "@/lib/ledger-db";
-import type { Client, Invoice, LedgerEntry, Purchaser, TradePartner } from "@/lib/types";
+import type { Client, ClientPoNumber, LedgerEntry, Purchaser, TradePartner } from "@/lib/types";
+import { mergePoNumberOptions, poNumbersForClient } from "@/lib/client-po-db";
 import {
   getLedgerOutstandingBalance,
   isLedgerLineFullyPaid,
@@ -184,7 +186,7 @@ function CurrencyField({
 interface LedgerFormProps {
   clients: Client[];
   tradePartners: TradePartner[];
-  invoices: Invoice[];
+  clientPoNumbers: ClientPoNumber[];
   defaultPurchaser?: Purchaser | null;
   initial?: LedgerEntry | null;
   onSuccess: () => void;
@@ -194,7 +196,7 @@ interface LedgerFormProps {
 export function LedgerForm({
   clients,
   tradePartners,
-  invoices,
+  clientPoNumbers,
   defaultPurchaser,
   initial,
   onSuccess,
@@ -296,25 +298,14 @@ export function LedgerForm({
     ? Number(designerCost) || 0
     : autoDesignerCost;
 
-  const clientInvoices = useMemo(
-    () => invoices.filter((invoice) => invoice.client_id === selectedClientId),
-    [invoices, selectedClientId]
-  );
-
   const poOptions = useMemo(() => {
-    const options = clientInvoices.map((invoice) => ({
-      id: invoice.id,
-      po_number: invoice.po_number.trim(),
-    }));
+    const registered = poNumbersForClient(clientPoNumbers, selectedClientId);
     const current = selectedPoNumber?.trim();
-    if (
-      current &&
-      !options.some((option) => poNumbersMatch(option.po_number, current))
-    ) {
-      options.unshift({ id: `saved-${current}`, po_number: current });
-    }
-    return options;
-  }, [clientInvoices, selectedPoNumber]);
+    return mergePoNumberOptions(
+      registered,
+      current && !registered.some((po) => poNumbersMatch(po, current)) ? [current] : []
+    );
+  }, [clientPoNumbers, selectedClientId, selectedPoNumber]);
 
   const customerPrice = useMemo(
     () => calculateCustomerPrice(numericRetailPrice, numericQty, numericDiscount),
@@ -486,7 +477,7 @@ export function LedgerForm({
 
     if (dbError) {
       if (dbError.message.includes("ledger_invoicing_fk")) {
-        setError("PO number must match an existing invoice for the selected client.");
+        setError("PO number must be registered for the selected client.");
       } else if (dbError.message.includes("row-level security")) {
         setError("Permission denied. Sign out and sign back in, then try again.");
       } else if (dbError.message.toLowerCase().includes("quantity")) {
@@ -594,12 +585,21 @@ export function LedgerForm({
               {...register("po_number")}
             >
               <option value="">Select PO...</option>
-              {poOptions.map((option) => (
-                <option key={option.id} value={option.po_number}>
-                  {option.po_number}
+              {poOptions.map((po) => (
+                <option key={po} value={po}>
+                  {po}
                 </option>
               ))}
             </SelectField>
+            {selectedClientId && poOptions.length === 0 && (
+              <p className="text-sm text-amber-800 lg:col-start-2 lg:row-start-4">
+                No PO numbers for this client.{" "}
+                <Link href="/clients" className="font-medium text-brand-700 underline">
+                  Add a PO on the Clients page
+                </Link>
+                .
+              </p>
+            )}
           </div>
 
           <div className="lg:col-start-1 lg:row-start-4">

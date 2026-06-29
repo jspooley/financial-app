@@ -85,6 +85,14 @@ export interface Client {
   email: string | null;
   created_at: string;
   updated_at: string;
+  client_po_numbers?: ClientPoNumber[];
+}
+
+export interface ClientPoNumber {
+  id: string;
+  client_id: string;
+  po_number: string;
+  created_at?: string;
 }
 
 export type ReferralSource =

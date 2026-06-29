@@ -12,7 +12,7 @@ import { isLedgerLineUninvoiced, normalizePoNumber } from "@/lib/invoice-utils";
 import { ledgerDetailFields, ledgerDetailColumns, mapLedgerTableRow } from "@/lib/ledger-display";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
-import type { Client, Invoice, LedgerEntry, TradePartner } from "@/lib/types";
+import type { Client, ClientPoNumber, LedgerEntry, TradePartner } from "@/lib/types";
 import { formatCurrency, formatDate, getLedgerInvoicedAmount, purchaserFromEmail } from "@/lib/utils";
 import { SelectField } from "@/components/ui/FormFields";
 
@@ -45,7 +45,7 @@ function LedgerPageContent() {
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [tradePartners, setTradePartners] = useState<TradePartner[]>([]);
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [clientPoNumbers, setClientPoNumbers] = useState<ClientPoNumber[]>([]);
   const [defaultPurchaser, setDefaultPurchaser] = useState<"Jess" | "Molly" | null>(
     null
   );
@@ -65,7 +65,7 @@ function LedgerPageContent() {
       { data: ledgerData, error: ledgerError },
       { data: clientData, error: clientError },
       { data: tradeData, error: tradeError },
-      { data: invoiceData, error: invoiceError },
+      { data: clientPoData, error: clientPoError },
       { data: userData },
     ] = await Promise.all([
       supabase
@@ -74,11 +74,11 @@ function LedgerPageContent() {
         .order("entry_date", { ascending: false }),
       supabase.from("clients").select("*").order("name", { ascending: true }),
       supabase.from("trade_partners").select("*").order("company_name", { ascending: true }),
-      supabase.from("invoicing").select("*"),
+      supabase.from("client_po_numbers").select("*").order("po_number", { ascending: true }),
       supabase.auth.getUser(),
     ]);
 
-    const error = ledgerError ?? clientError ?? tradeError ?? invoiceError;
+    const error = ledgerError ?? clientError ?? tradeError;
     if (error) {
       setLoadError(error.message);
       setEntries([]);
@@ -91,7 +91,14 @@ function LedgerPageContent() {
     }
     setClients(clientData ?? []);
     setTradePartners(tradeData ?? []);
-    setInvoices(invoiceData ?? []);
+    setClientPoNumbers(clientPoData ?? []);
+    if (clientPoError) {
+      setLoadError(
+        (current) =>
+          current ??
+          "PO numbers table not found. Run migration 024_client_po_numbers.sql in Supabase."
+      );
+    }
     setDefaultPurchaser(purchaserFromEmail(userData.user?.email));
     setLoading(false);
   }, []);
@@ -243,7 +250,7 @@ function LedgerPageContent() {
             key={editing?.id ?? "new"}
             clients={clients}
             tradePartners={tradePartners}
-            invoices={invoices}
+            clientPoNumbers={clientPoNumbers}
             defaultPurchaser={defaultPurchaser}
             initial={editing}
             onCancel={() => {
