@@ -281,6 +281,7 @@ function LedgerPageContent() {
                 Client Debits — includes Invoiced, Invoice ID, Paid, and payment columns.
               </p>
               <DataTable
+                stickyFirstColumn
                 stickyLastColumn
                 rowKey={(_, index) => debitEntries[index]?.id ?? String(index)}
                 columns={[
