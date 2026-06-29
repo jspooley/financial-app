@@ -13,7 +13,7 @@ import { ledgerDetailFields, ledgerDetailColumns, mapLedgerTableRow } from "@/li
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { Client, ClientPoNumber, LedgerEntry, TradePartner } from "@/lib/types";
-import { formatCurrency, formatDate, getLedgerInvoicedAmount, purchaserFromEmail } from "@/lib/utils";
+import { formatCurrency, getLedgerInvoicedAmount, purchaserFromEmail } from "@/lib/utils";
 import { SelectField } from "@/components/ui/FormFields";
 
 function entryMatchesLedgerFilters(

@@ -9,24 +9,16 @@ import type { Client } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { InputField } from "@/components/ui/FormFields";
 
-const createSchema = z.object({
+const schema = z.object({
   name: z.string().min(1, "Client name is required"),
-  po_number: z.string().trim().min(1, "PO number is required"),
-  address: z.string().optional(),
-  phone: z.string().optional(),
-  email: z.string().email("Invalid email").optional().or(z.literal("")),
-});
-
-const editSchema = z.object({
-  name: z.string().min(1, "Client name is required"),
+  po_number: z.string().optional(),
   new_po_number: z.string().optional(),
   address: z.string().optional(),
   phone: z.string().optional(),
   email: z.string().email("Invalid email").optional().or(z.literal("")),
 });
 
-type CreateFormValues = z.infer<typeof createSchema>;
-type EditFormValues = z.infer<typeof editSchema>;
+type FormValues = z.infer<typeof schema>;
 
 interface ClientFormProps {
   initial?: Client | null;
@@ -44,23 +36,16 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm<CreateFormValues | EditFormValues>({
-    resolver: zodResolver(isEdit ? editSchema : createSchema),
-    defaultValues: isEdit
-      ? {
-          name: initial?.name ?? "",
-          new_po_number: "",
-          address: initial?.address ?? "",
-          phone: initial?.phone ?? "",
-          email: initial?.email ?? "",
-        }
-      : {
-          name: "",
-          po_number: "",
-          address: "",
-          phone: "",
-          email: "",
-        },
+  } = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: {
+      name: initial?.name ?? "",
+      po_number: "",
+      new_po_number: "",
+      address: initial?.address ?? "",
+      phone: initial?.phone ?? "",
+      email: initial?.email ?? "",
+    },
   });
 
   const loadPoNumbers = useCallback(async () => {
@@ -89,7 +74,7 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
     loadPoNumbers();
   }, [loadPoNumbers]);
 
-  async function onSubmit(values: CreateFormValues | EditFormValues) {
+  async function onSubmit(values: FormValues) {
     setError(null);
     const supabase = createClient();
     const payload = {
@@ -100,7 +85,12 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
     };
 
     if (initial) {
-      const editValues = values as EditFormValues;
+      const newPo = values.new_po_number?.trim();
+      if (existingPos.length === 0 && !newPo) {
+        setError("Add at least one PO number for this client.");
+        return;
+      }
+
       const { error: dbError } = await supabase
         .from("clients")
         .update(payload)
@@ -111,11 +101,6 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
         return;
       }
 
-      const newPo = editValues.new_po_number?.trim();
-      if (existingPos.length === 0 && !newPo) {
-        setError("Add at least one PO number for this client.");
-        return;
-      }
       if (newPo) {
         const { error: poError } = await supabase.from("client_po_numbers").insert({
           client_id: initial.id,
@@ -131,7 +116,12 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
       return;
     }
 
-    const createValues = values as CreateFormValues;
+    const poNumber = values.po_number?.trim();
+    if (!poNumber) {
+      setError("PO number is required.");
+      return;
+    }
+
     const { data: created, error: dbError } = await supabase
       .from("clients")
       .insert(payload)
@@ -145,7 +135,7 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
 
     const { error: poError } = await supabase.from("client_po_numbers").insert({
       client_id: created.id,
-      po_number: createValues.po_number.trim(),
+      po_number: poNumber,
     });
 
     if (poError) {
@@ -176,7 +166,7 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
             label="PO Number"
             required
             hint="Project PO for this client. Used on ledger entries and invoices."
-            error={"po_number" in errors ? errors.po_number?.message : undefined}
+            error={errors.po_number?.message}
             {...register("po_number")}
           />
         ) : (
@@ -204,7 +194,7 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
               label="Add PO Number"
               className="mt-3"
               hint="Optional. Leave blank to keep existing PO numbers only."
-              error={"new_po_number" in errors ? errors.new_po_number?.message : undefined}
+              error={errors.new_po_number?.message}
               {...register("new_po_number")}
             />
           </div>
