@@ -1,3 +1,5 @@
+import type { PaymentType } from "./types";
+
 export function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -12,8 +14,6 @@ export function formatPercent(value: number) {
     maximumFractionDigits: 2,
   }).format(value / 100);
 }
-
-import type { PaymentType } from "./types";
 
 export function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -204,13 +204,15 @@ export function calculateDesignerCostFromTradePartner(
   return roundMoney(Number(retailPrice) * (1 - discountRate));
 }
 
-export function formatDate(value: string | null) {
+export function formatDate(value: string | null | undefined) {
   if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
   return new Intl.DateTimeFormat("en-US", {
     year: "numeric",
     month: "short",
     day: "numeric",
-  }).format(new Date(value));
+  }).format(date);
 }
 
 export function purchaserFromEmail(email: string | undefined): "Jess" | "Molly" | null {

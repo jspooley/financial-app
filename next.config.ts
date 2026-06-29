@@ -4,7 +4,9 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        source: "/",
+        // Avoid stale HTML/JS after deploys (trade-partners and other static routes were cached).
+        source:
+          "/((?!_next/static|_next/image|favicon.ico|api/health|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
         headers: [
           {
             key: "Cache-Control",

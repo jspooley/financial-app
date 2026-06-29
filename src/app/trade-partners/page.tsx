@@ -13,17 +13,24 @@ import { formatCurrency, formatDate, formatPercent } from "@/lib/utils";
 export default function TradePartnersPage() {
   const [partners, setPartners] = useState<TradePartner[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<TradePartner | null>(null);
 
   const loadPartners = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     const supabase = createClient();
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("trade_partners")
       .select("*")
       .order("company_name", { ascending: true });
-    setPartners(data ?? []);
+    if (error) {
+      setLoadError(error.message);
+      setPartners([]);
+    } else {
+      setPartners(data ?? []);
+    }
     setLoading(false);
   }, []);
 
@@ -79,6 +86,14 @@ export default function TradePartnersPage() {
         />
       ) : loading ? (
         <p className="text-sm text-slate-500">Loading trade partners...</p>
+      ) : loadError ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          <p className="font-medium">Could not load trade partners.</p>
+          <p className="mt-1">{loadError}</p>
+          <Button variant="secondary" className="mt-3" onClick={() => loadPartners()}>
+            Retry
+          </Button>
+        </div>
       ) : (
         <DataTable
           mobileTitleKey="company"
