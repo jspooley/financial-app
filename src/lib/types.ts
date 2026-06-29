@@ -45,6 +45,7 @@ export interface LedgerDbRow extends Omit<
   | "payment_fee"
   | "payment_amount"
   | "sand_u_tax_paid"
+  | "sales_and_use_tax_paid"
   | "write_off"
   | "write_off_amount"
 > {

@@ -106,10 +106,11 @@ function CurrencyField({
       control={control}
       name={name}
       render={({ field }) => {
+        const rawValue = field.value as number | "" | null | undefined;
         const num =
           computedValue !== undefined ? computedValue : Number(field.value);
         const hasValue = allowZero
-          ? field.value !== "" && field.value != null && !Number.isNaN(num)
+          ? rawValue !== "" && rawValue != null && !Number.isNaN(num)
           : num > 0;
         const displayValue = focused
           ? hasValue
