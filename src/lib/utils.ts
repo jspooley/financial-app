@@ -223,9 +223,15 @@ export function parseDateOnlyParts(value: string) {
   return { year, month, day };
 }
 
-/** Value for HTML date inputs from a DB date or ISO string. */
-export function toDateInputValue(value: string | null | undefined) {
-  const parts = value ? parseDateOnlyParts(value) : null;
+/** Value for HTML date inputs from a DB date, ISO string, or Date object. */
+export function toDateInputValue(value: string | Date | null | undefined) {
+  if (value == null || value === "") return "";
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return "";
+    // Postgres DATE values often deserialize as UTC midnight.
+    return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, "0")}-${String(value.getUTCDate()).padStart(2, "0")}`;
+  }
+  const parts = parseDateOnlyParts(String(value));
   if (!parts) return "";
   const { year, month, day } = parts;
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
@@ -237,9 +243,10 @@ export function todayDateInputValue() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
-export function formatDate(value: string | null | undefined) {
-  if (!value) return "—";
-  const parts = parseDateOnlyParts(value);
+export function formatDate(value: string | Date | null | undefined) {
+  const iso = toDateInputValue(value);
+  if (!iso) return "—";
+  const parts = parseDateOnlyParts(iso);
   if (!parts) return "—";
   const date = new Date(parts.year, parts.month - 1, parts.day);
   if (Number.isNaN(date.getTime())) return "—";

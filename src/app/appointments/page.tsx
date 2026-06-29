@@ -10,7 +10,7 @@ import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/client";
 import type { Appointment } from "@/lib/types";
-import { formatDate } from "@/lib/utils";
+import { formatDate, toDateInputValue } from "@/lib/utils";
 
 type AppointmentFilter = "all" | "pending" | "won" | "lost" | "proposal_sent";
 
@@ -44,7 +44,14 @@ function AppointmentsPageContent() {
       setLoadError(error.message);
       setAppointments([]);
     } else {
-      setAppointments(data ?? []);
+      setAppointments(
+        (data ?? []).map((row) => ({
+          ...row,
+          appointment_date:
+            toDateInputValue(row.appointment_date as string | Date) ||
+            String(row.appointment_date ?? ""),
+        }))
+      );
     }
     setLoading(false);
   }, []);
@@ -140,6 +147,7 @@ function AppointmentsPageContent() {
 
       {showForm ? (
         <AppointmentForm
+          key={editing?.id ?? "new"}
           initial={editing}
           onCancel={() => {
             setShowForm(false);

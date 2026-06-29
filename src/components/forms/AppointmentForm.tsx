@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { useEffect, useMemo, useState } from "react";
+import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
@@ -47,15 +47,8 @@ interface AppointmentFormProps {
 
 export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFormProps) {
   const [error, setError] = useState<string | null>(null);
-  const {
-    register,
-    handleSubmit,
-    watch,
-    setValue,
-    formState: { errors, isSubmitting },
-  } = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: {
+  const formDefaults = useMemo<FormValues>(
+    () => ({
       appointment_date:
         toDateInputValue(initial?.appointment_date) || todayDateInputValue(),
       client_name: initial?.client_name ?? "",
@@ -68,8 +61,25 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
       job_won: initial?.job_won ?? false,
       job_lost: initial?.job_lost ?? false,
       proposal_sent: initial?.proposal_sent ?? false,
-    },
+    }),
+    [initial]
+  );
+  const {
+    register,
+    handleSubmit,
+    watch,
+    setValue,
+    control,
+    reset,
+    formState: { errors, isSubmitting },
+  } = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: formDefaults,
   });
+
+  useEffect(() => {
+    reset(formDefaults);
+  }, [formDefaults, reset]);
 
   const jobWon = watch("job_won");
   const jobLost = watch("job_lost");
@@ -102,7 +112,7 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
     }
 
     const payload = {
-      appointment_date: values.appointment_date,
+      appointment_date: toDateInputValue(values.appointment_date),
       client_name: values.client_name,
       client_email: values.client_email || null,
       client_phone: values.client_phone || null,
@@ -140,11 +150,21 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
       </h2>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <InputField
-          label="Appointment Date"
-          type="date"
-          error={errors.appointment_date?.message}
-          {...register("appointment_date")}
+        <Controller
+          control={control}
+          name="appointment_date"
+          render={({ field }) => (
+            <InputField
+              label="Appointment Date"
+              type="date"
+              error={errors.appointment_date?.message}
+              value={toDateInputValue(field.value)}
+              onChange={(event) => field.onChange(event.target.value)}
+              onBlur={field.onBlur}
+              name={field.name}
+              ref={field.ref}
+            />
+          )}
         />
         <InputField
           label="Client Name"
