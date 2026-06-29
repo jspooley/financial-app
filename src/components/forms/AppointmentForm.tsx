@@ -6,6 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
 import { REFERRAL_SOURCE_OPTIONS, type Appointment, type ReferralSource } from "@/lib/types";
+import { todayDateInputValue, toDateInputValue } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 import { CheckboxField, InputField, SelectField, TextareaField } from "@/components/ui/FormFields";
 
@@ -55,7 +56,8 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      appointment_date: initial?.appointment_date ?? new Date().toISOString().slice(0, 10),
+      appointment_date:
+        toDateInputValue(initial?.appointment_date) || todayDateInputValue(),
       client_name: initial?.client_name ?? "",
       client_email: initial?.client_email ?? "",
       client_phone: initial?.client_phone ?? "",

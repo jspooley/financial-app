@@ -18,6 +18,7 @@ import {
   calculateTaxFromCustomerPrice,
   defaultLedgerDiscountPercent,
   formatCurrency,
+  formatMoneyInput,
   formatDate,
   getLedgerInvoicedAmount,
   getLedgerRetailSubtotal,
@@ -100,6 +101,7 @@ function CurrencyField({
   onValueChange?: () => void;
 }) {
   const [focused, setFocused] = useState(false);
+  const [editText, setEditText] = useState<string | null>(null);
 
   return (
     <Controller
@@ -113,11 +115,9 @@ function CurrencyField({
           ? rawValue !== "" && rawValue != null && !Number.isNaN(num)
           : num > 0;
         const displayValue = focused
-          ? hasValue
-            ? String(num)
-            : ""
+          ? (editText ?? "")
           : hasValue
-            ? num.toFixed(2)
+            ? formatMoneyInput(num)
             : "";
 
         return (
@@ -138,20 +138,35 @@ function CurrencyField({
                 disabled={disabled}
                 className={currencyInputClass}
                 value={displayValue}
-                onFocus={() => setFocused(true)}
+                onFocus={() => {
+                  setFocused(true);
+                  setEditText(hasValue ? formatMoneyInput(num) : "");
+                }}
                 onChange={(e) => {
                   onUserEdit?.();
                   onValueChange?.();
                   const raw = e.target.value.replace(/[^0-9.]/g, "");
-                  if (raw === "" || raw === ".") {
+                  const parts = raw.split(".");
+                  const normalized =
+                    parts.length > 2
+                      ? `${parts[0]}.${parts.slice(1).join("")}`
+                      : raw;
+                  const [whole, fraction] = normalized.split(".");
+                  const limited =
+                    fraction !== undefined
+                      ? `${whole}.${fraction.slice(0, 2)}`
+                      : normalized;
+                  setEditText(limited);
+                  if (limited === "" || limited === ".") {
                     field.onChange(allowZero ? 0 : ("" as unknown as number));
                     return;
                   }
-                  const parsed = Number(raw);
+                  const parsed = Number(limited);
                   if (!Number.isNaN(parsed)) field.onChange(parsed);
                 }}
                 onBlur={() => {
                   if (hasValue) field.onChange(roundMoney(num));
+                  setEditText(null);
                   setFocused(false);
                   field.onBlur();
                 }}
@@ -566,7 +581,7 @@ export function LedgerForm({
               error={errors.credit_debit?.message}
               {...register("credit_debit")}
             >
-              <option value="debit">Debit (expense)</option>
+              <option value="debit">Client Debit</option>
               <option value="credit">Credit (receivable)</option>
             </SelectField>
           </div>

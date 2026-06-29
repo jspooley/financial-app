@@ -1,14 +1,31 @@
 import type { LedgerEntry } from "./types";
-import { formatCurrency, formatDate, getLedgerCustomerPrice, getLedgerInvoicedAmount, roundMoney } from "./utils";
+import { formatCurrency, formatDate, getLedgerCustomerPrice, getLedgerInvoicedAmount, parseDateOnlyParts, roundMoney } from "./utils";
 
 /** Short US date for printed invoices (e.g. 4/22/2026). */
 export function formatInvoiceDisplayDate(value?: string | Date | null): string {
-  const date = value ? new Date(value) : new Date();
+  if (value instanceof Date) {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "numeric",
+      day: "numeric",
+      year: "numeric",
+    }).format(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parts = parseDateOnlyParts(value);
+    if (parts) {
+      const date = new Date(parts.year, parts.month - 1, parts.day);
+      return new Intl.DateTimeFormat("en-US", {
+        month: "numeric",
+        day: "numeric",
+        year: "numeric",
+      }).format(date);
+    }
+  }
   return new Intl.DateTimeFormat("en-US", {
     month: "numeric",
     day: "numeric",
     year: "numeric",
-  }).format(date);
+  }).format(new Date());
 }
 
 export function formatInvoiceId(poNumber: string, sequence: number): string {

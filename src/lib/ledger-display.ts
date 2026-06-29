@@ -19,6 +19,7 @@ export function ledgerDetailFields(entry: LedgerEntry) {
   return [
     { label: "Client", value: entry.clients?.name ?? "—" },
     { label: "Date", value: formatDate(entry.entry_date) },
+    { label: "Description", value: entry.description?.trim() || "—" },
     { label: "Retail Price", value: formatCurrency(Number(entry.retail_price ?? 0)) },
     { label: "Quantity", value: String(Math.round(Number(entry.quantity))) },
     {
@@ -103,6 +104,7 @@ export function mapLedgerTableRow(entry: LedgerEntry) {
   return {
     client: entry.clients?.name ?? "—",
     date: formatDate(entry.entry_date),
+    description: entry.description?.trim() || "—",
     retailPrice: formatCurrency(Number(entry.retail_price ?? 0)),
     qty: Math.round(Number(entry.quantity)),
     retailPriceQty: formatCurrency(getLedgerRetailSubtotal(entry)),
@@ -145,6 +147,7 @@ export function mapLedgerTableRow(entry: LedgerEntry) {
 export const ledgerDetailColumns = [
   { key: "client", label: "Client" },
   { key: "date", label: "Date" },
+  { key: "description", label: "Description" },
   { key: "retailPrice", label: "Retail Price" },
   { key: "qty", label: "Quantity" },
   { key: "retailPriceQty", label: "Retail Price × Qty" },

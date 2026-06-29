@@ -217,7 +217,7 @@ function LedgerPageContent() {
               credit{creditEntries.length === 1 ? "" : "s"}
             </p>
             <p className="mt-1 text-slate-500">
-              Debits are expenses (default when you add an entry). Scroll down to the{" "}
+              Client debits are the default when you add an entry. Scroll down to the{" "}
               <strong>Debits</strong> section — on desktop, scroll the table left/right for all
               columns including Invoiced and Paid.
             </p>
@@ -226,7 +226,7 @@ function LedgerPageContent() {
                 All {entries.length} ledger{" "}
                 {entries.length === 1 ? "entry is" : "entries are"} type <strong>credit</strong>.
                 Edit an entry and set <strong>Credit / Debit</strong> to{" "}
-                <strong>Debit (expense)</strong> to see it in the Debits table.
+                <strong>Client Debit</strong> to see it in the Debits table.
               </p>
             )}
           </div>
@@ -278,7 +278,7 @@ function LedgerPageContent() {
                 Debits ({debitEntries.length})
               </h2>
               <p className="mb-3 text-sm text-slate-500">
-                Expense entries — includes Invoiced, Invoice ID, Paid, and payment columns.
+                Client Debits — includes Invoiced, Invoice ID, Paid, and payment columns.
               </p>
               <DataTable
                 stickyLastColumn

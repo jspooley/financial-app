@@ -4,7 +4,15 @@ export function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(value);
+}
+
+/** Dollar amount for editable inputs (always two decimal places). */
+export function formatMoneyInput(value: number) {
+  if (!Number.isFinite(value)) return "";
+  return roundMoney(value).toFixed(2);
 }
 
 export function formatPercent(value: number) {
@@ -204,9 +212,36 @@ export function calculateDesignerCostFromTradePartner(
   return roundMoney(Number(retailPrice) * (1 - discountRate));
 }
 
+/** Parse YYYY-MM-DD (or leading ISO datetime) as a calendar date — no UTC shift. */
+export function parseDateOnlyParts(value: string) {
+  const match = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { year, month, day };
+}
+
+/** Value for HTML date inputs from a DB date or ISO string. */
+export function toDateInputValue(value: string | null | undefined) {
+  const parts = value ? parseDateOnlyParts(value) : null;
+  if (!parts) return "";
+  const { year, month, day } = parts;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/** Today's date in local time for HTML date inputs. */
+export function todayDateInputValue() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
 export function formatDate(value: string | null | undefined) {
   if (!value) return "—";
-  const date = new Date(value);
+  const parts = parseDateOnlyParts(value);
+  if (!parts) return "—";
+  const date = new Date(parts.year, parts.month - 1, parts.day);
   if (Number.isNaN(date.getTime())) return "—";
   return new Intl.DateTimeFormat("en-US", {
     year: "numeric",
