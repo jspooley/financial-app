@@ -8,11 +8,14 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
 import { ledgerFormToDb } from "@/lib/ledger-db";
 import type { Client, ClientPoNumber, LedgerEntry, Purchaser, TradePartner } from "@/lib/types";
-import { mergePoNumberOptions, poNumbersForClient } from "@/lib/client-po-db";
+import {
+  collectClientPoOptions,
+  poNumbersForClient,
+  poNumbersFromLedgerEntries,
+} from "@/lib/client-po-db";
 import {
   getLedgerOutstandingBalance,
   isLedgerLineFullyPaid,
-  poNumbersMatch,
 } from "@/lib/invoice-utils";
 import {
   calculateCustomerPrice,
@@ -44,8 +47,8 @@ const schema = z.object({
     .transform(roundMoney),
   quantity: z.coerce
     .number()
-    .int("Quantity must be a whole number")
-    .positive("Quantity must be at least 1"),
+    .positive("Quantity must be greater than 0")
+    .transform(roundMoney),
   credit_debit: z.enum(["credit", "debit"]),
   description: z.string().trim().min(1, "Description is required"),
   wholesale_retail: z.enum(["wholesale", "retail"]),
@@ -187,6 +190,7 @@ interface LedgerFormProps {
   clients: Client[];
   tradePartners: TradePartner[];
   clientPoNumbers: ClientPoNumber[];
+  ledgerEntries?: LedgerEntry[];
   defaultPurchaser?: Purchaser | null;
   initial?: LedgerEntry | null;
   onSuccess: () => void;
@@ -197,6 +201,7 @@ export function LedgerForm({
   clients,
   tradePartners,
   clientPoNumbers,
+  ledgerEntries = [],
   defaultPurchaser,
   initial,
   onSuccess,
@@ -300,12 +305,9 @@ export function LedgerForm({
 
   const poOptions = useMemo(() => {
     const registered = poNumbersForClient(clientPoNumbers, selectedClientId);
-    const current = selectedPoNumber?.trim();
-    return mergePoNumberOptions(
-      registered,
-      current && !registered.some((po) => poNumbersMatch(po, current)) ? [current] : []
-    );
-  }, [clientPoNumbers, selectedClientId, selectedPoNumber]);
+    const fromLedger = poNumbersFromLedgerEntries(ledgerEntries, selectedClientId);
+    return collectClientPoOptions(registered, fromLedger, selectedPoNumber);
+  }, [clientPoNumbers, ledgerEntries, selectedClientId, selectedPoNumber]);
 
   const customerPrice = useMemo(
     () => calculateCustomerPrice(numericRetailPrice, numericQty, numericDiscount),
@@ -512,9 +514,17 @@ export function LedgerForm({
     );
   }
 
-  function resetAutoCalculatedFields() {
+  function resetTaxAutoCalc() {
     taxManuallyEdited.current = false;
+  }
+
+  function resetDesignerCostAutoCalc() {
     designerCostManuallyEdited.current = false;
+  }
+
+  function resetAutoCalculatedFields() {
+    resetTaxAutoCalc();
+    resetDesignerCostAutoCalc();
   }
 
   return (
@@ -618,7 +628,7 @@ export function LedgerForm({
               label="Wholesale / Retail"
               required
               error={errors.wholesale_retail?.message}
-              {...register("wholesale_retail", { onChange: resetAutoCalculatedFields })}
+              {...register("wholesale_retail", { onChange: resetTaxAutoCalc })}
             >
               <option value="retail">Retail</option>
               <option value="wholesale">Wholesale</option>
@@ -631,13 +641,13 @@ export function LedgerForm({
           <InputField
             label="Quantity"
             type="number"
-            step="1"
-            min="1"
+            step="0.01"
+            min="0.01"
             required
             error={errors.quantity?.message}
             {...register("quantity", {
               valueAsNumber: true,
-              onChange: resetAutoCalculatedFields,
+              onChange: resetTaxAutoCalc,
             })}
           />
           <CurrencyField
@@ -715,7 +725,7 @@ export function LedgerForm({
               error={errors.discount_percent?.message}
               {...register("discount_percent", {
                 valueAsNumber: true,
-                onChange: resetAutoCalculatedFields,
+                onChange: resetTaxAutoCalc,
               })}
             />
           </div>

@@ -28,6 +28,8 @@ import {
   getLedgerInvoicedAmount,
   paymentTypeHasAutoFee,
   roundMoney,
+  toDateInputValue,
+  todayDateInputValue,
 } from "@/lib/utils";
 
 type PaymentView = "outstanding" | "history";
@@ -105,7 +107,14 @@ function defaultPaymentAmount(entry: LedgerEntry) {
   return getLedgerInvoicedAmount(entry);
 }
 
-function paymentDraftFromEntry(entry: LedgerEntry, today: string): PaymentRowDraft {
+function draftDatePaidFromEntry(entry: LedgerEntry): string {
+  const saved = toDateInputValue(entry.date_paid);
+  if (saved) return saved;
+  if (Number(entry.payment_amount) > 0) return "";
+  return todayDateInputValue();
+}
+
+function paymentDraftFromEntry(entry: LedgerEntry): PaymentRowDraft {
   const paymentAmount = defaultPaymentAmount(entry);
   const paymentType = entry.payment_type ?? defaultPaymentType;
   const savedFee = Number(entry.payment_fee ?? 0);
@@ -117,7 +126,7 @@ function paymentDraftFromEntry(entry: LedgerEntry, today: string): PaymentRowDra
   return {
     selected: false,
     editing: false,
-    date_paid: entry.date_paid ?? today,
+    date_paid: draftDatePaidFromEntry(entry),
     paid_to: entry.paid_to ?? defaultPaidTo,
     payment_type: paymentType,
     payment_amount: paymentAmount,
@@ -125,6 +134,14 @@ function paymentDraftFromEntry(entry: LedgerEntry, today: string): PaymentRowDra
     payment_fee_manually_edited: feeManuallyEdited,
     write_off: entry.write_off ?? false,
     write_off_amount: Number(entry.write_off_amount ?? 0),
+  };
+}
+
+function beginEditingPayment(entry: LedgerEntry): Partial<PaymentRowDraft> {
+  const savedDate = toDateInputValue(entry.date_paid);
+  return {
+    editing: true,
+    ...(savedDate ? { date_paid: savedDate } : {}),
   };
 }
 
@@ -259,11 +276,10 @@ export default function PaymentsPage() {
     setPaidEntries(paymentHistory);
     setInvoicedDebits(allInvoicedDebits);
 
-    const today = new Date().toISOString().slice(0, 10);
     setDrafts(() => {
       const next: Record<string, PaymentRowDraft> = {};
       for (const entry of [...unpaidDebits, ...paymentHistory]) {
-        next[entry.id] = paymentDraftFromEntry(entry, today);
+        next[entry.id] = paymentDraftFromEntry(entry);
       }
       return next;
     });
@@ -401,8 +417,7 @@ export default function PaymentsPage() {
   );
 
   function resetDraftFromEntry(entry: LedgerEntry) {
-    const today = new Date().toISOString().slice(0, 10);
-    updateDraft(entry.id, paymentDraftFromEntry(entry, today));
+    updateDraft(entry.id, paymentDraftFromEntry(entry));
   }
 
   function updateDraft(entryId: string, patch: Partial<PaymentRowDraft>) {
@@ -451,11 +466,12 @@ export default function PaymentsPage() {
       return;
     }
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayDateInputValue();
     const target =
       filteredEntries.find((entry) => !drafts[entry.id]?.selected) ?? filteredEntries[0];
     const balance = getLedgerOutstandingBalance(target);
     const amountOwed = balance < 0 ? roundMoney(-balance) : 0;
+    const targetDatePaid = toDateInputValue(target.date_paid) || today;
 
     setDrafts((current) => {
       const next = { ...current };
@@ -464,7 +480,7 @@ export default function PaymentsPage() {
           ...(next[entry.id] ?? {
             selected: false,
             editing: false,
-            date_paid: today,
+            date_paid: draftDatePaidFromEntry(entry),
             paid_to: defaultPaidTo,
             payment_type: defaultPaymentType,
             payment_amount: 0,
@@ -481,7 +497,7 @@ export default function PaymentsPage() {
         ...next[target.id],
         selected: true,
         editing: true,
-        date_paid: today,
+        date_paid: targetDatePaid,
         paid_to: defaultPaidTo,
         payment_type: defaultPaymentType,
         payment_amount: amountOwed,
@@ -501,7 +517,7 @@ export default function PaymentsPage() {
       return;
     }
     for (const entry of selectedEntries) {
-      updateDraft(entry.id, { editing: true });
+      updateDraft(entry.id, beginEditingPayment(entry));
     }
   }
 
@@ -557,7 +573,7 @@ export default function PaymentsPage() {
       return;
     }
 
-    updateDraft(entry.id, { selected: true, editing: true });
+    updateDraft(entry.id, { selected: true, ...beginEditingPayment(entry) });
     setWriteOffModal({ entryId: entry.id, outstanding: roundMoney(Math.abs(balance)) });
   }
 
@@ -568,7 +584,7 @@ export default function PaymentsPage() {
       return;
     }
     for (const entry of selectedHistoryEntries) {
-      updateDraft(entry.id, { editing: true });
+      updateDraft(entry.id, beginEditingPayment(entry));
     }
   }
 
@@ -582,8 +598,7 @@ export default function PaymentsPage() {
   }
 
   async function savePaymentDrafts(
-    rows: { entry: LedgerEntry; draft: PaymentRowDraft }[],
-    options?: { preserveDatePaid?: boolean }
+    rows: { entry: LedgerEntry; draft: PaymentRowDraft }[]
   ): Promise<boolean> {
     setSaving(true);
     const supabase = createClient();
@@ -608,11 +623,8 @@ export default function PaymentsPage() {
         .from("ledger")
         .update({
           paid: fullyPaid,
-          date_paid: options?.preserveDatePaid
-            ? draft.date_paid || null
-            : fullyPaid
-              ? draft.date_paid || null
-              : null,
+          date_paid:
+            paymentAmount > 0 || hasWriteOff ? draft.date_paid || null : null,
           paid_to: draft.paid_to,
           payment_type: draft.payment_type,
           payment_amount: paymentAmount,
@@ -654,7 +666,7 @@ export default function PaymentsPage() {
       return;
     }
 
-    const ok = await savePaymentDrafts(rows, { preserveDatePaid: true });
+    const ok = await savePaymentDrafts(rows);
     if (!ok) return;
 
     setSuccess(`Updated ${rows.length} payment${rows.length === 1 ? "" : "s"}.`);
@@ -963,15 +975,20 @@ export default function PaymentsPage() {
                   </p>
                   <label className="block text-sm">
                     <span className="mb-1 block text-slate-600">Date paid</span>
-                    <input
-                      type="date"
-                      value={draft.date_paid}
-                      disabled={!draft.editing}
-                      onChange={(event) =>
-                        updateDraft(entry.id, { date_paid: event.target.value })
-                      }
-                      className={fieldClass}
-                    />
+                    {draft.editing ? (
+                      <input
+                        type="date"
+                        value={draft.date_paid}
+                        onChange={(event) =>
+                          updateDraft(entry.id, { date_paid: event.target.value })
+                        }
+                        className={fieldClass}
+                      />
+                    ) : (
+                      <p className="min-h-11 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">
+                        {formatDate(entry.date_paid)}
+                      </p>
+                    )}
                   </label>
                   <label className="block text-sm">
                     <span className="mb-1 block text-slate-600">Paid to</span>
@@ -1129,15 +1146,18 @@ export default function PaymentsPage() {
                       {paymentStatusLabel(entry, draft)}
                     </td>
                     <td className="px-3 py-3">
-                      <input
-                        type="date"
-                        value={draft.date_paid}
-                        disabled={!draft.editing}
-                        onChange={(event) =>
-                          updateDraft(entry.id, { date_paid: event.target.value })
-                        }
-                        className={`min-h-10 px-2 text-sm ${editableControlClass}`}
-                      />
+                      {draft.editing ? (
+                        <input
+                          type="date"
+                          value={draft.date_paid}
+                          onChange={(event) =>
+                            updateDraft(entry.id, { date_paid: event.target.value })
+                          }
+                          className={`min-h-10 px-2 text-sm ${editableControlClass}`}
+                        />
+                      ) : (
+                        formatDate(entry.date_paid)
+                      )}
                     </td>
                     <td className="px-3 py-3">
                       <select
@@ -1634,11 +1654,12 @@ export default function PaymentsPage() {
         <WriteOffModal
           outstanding={writeOffModal.outstanding}
           onConfirm={(amount) => {
+            const entry = entries.find((row) => row.id === writeOffModal.entryId);
             updateDraft(writeOffModal.entryId, {
               write_off: true,
               write_off_amount: amount,
               selected: true,
-              editing: true,
+              ...(entry ? beginEditingPayment(entry) : { editing: true }),
             });
             setWriteOffModal(null);
           }}

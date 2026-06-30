@@ -7,7 +7,7 @@ import type {
   Purchaser,
   WholesaleRetail,
 } from "./types";
-import { calculateTaxFromCustomerPrice } from "./utils";
+import { calculateTaxFromCustomerPrice, calculateCustomerPrice, normalizeQuantity } from "./utils";
 
 export type { LedgerDbRow, LedgerInsert };
 
@@ -75,15 +75,16 @@ export function normalizeLedgerRow(
     id: r.id as string,
     entry_date: r.entry_date,
     designer_cost: Number(r.cost ?? r.designer_cost ?? 0),
-    quantity: Number(r.quantity ?? 1),
+    quantity: normalizeQuantity(Number(r.quantity ?? 1)),
     credit_debit: r.credit_debit,
     description: r.description,
     wholesale_retail: r.wholesale_retail,
     trade_partner_id: r.trade_partner_id,
-    discount_percent: Number(r.discount_amount ?? r.discount_percent ?? 0),
+    discount_percent: Number(r.discount_percent ?? r.discount_amount ?? 0),
     shipping_receiving_amount: Number(r.shipping_receiving_amount ?? 0),
     retail_price: Number(r.retail_price ?? 0),
     tax_amount: Number(r.tax_amount ?? 0),
+    customer_price: Number(r.customer_price ?? 0),
     invoiced: Boolean(r.invoiced ?? false),
     sales_and_use_tax_paid: Boolean(
       r.sand_u_tax_paid ?? r.sales_and_use_tax_paid ?? false
@@ -149,11 +150,12 @@ export function ledgerFormToDb(values: {
   po_number: string;
   purchaser: Purchaser;
   tax_manually_edited?: boolean;
-}): LedgerInsert {
-  const quantity = Math.max(1, Math.round(Number(values.quantity) || 1));
+}): LedgerInsert & { customer_price: number } {
+  const quantity = normalizeQuantity(Number(values.quantity) || 1);
   const designerCost = Number(values.designer_cost) || 0;
   const discountPercent = Number(values.discount_percent) || 0;
   const retailPrice = Number(values.retail_price) || 0;
+  const merchandise = calculateCustomerPrice(retailPrice, quantity, discountPercent);
   const tax =
     values.wholesale_retail === "wholesale"
       ? values.tax_manually_edited
@@ -170,6 +172,7 @@ export function ledgerFormToDb(values: {
     wholesale_retail: values.wholesale_retail,
     trade_partner_id: values.trade_partner_id || null,
     discount_percent: discountPercent,
+    customer_price: merchandise,
     shipping_receiving_amount: values.shipping_receiving_amount,
     retail_price: retailPrice,
     tax_amount: tax,

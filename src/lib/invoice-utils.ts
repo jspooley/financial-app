@@ -68,6 +68,7 @@ export type LedgerAmountEntry = {
   retail_price: number;
   quantity: number;
   discount_percent?: number;
+  customer_price?: number | null;
   tax_amount?: number;
   shipping_receiving_amount?: number;
   wholesale_retail?: "wholesale" | "retail";
@@ -86,6 +87,7 @@ function invoicedAmountForEntry(entry: LedgerAmountEntry) {
     retail_price: entry.retail_price,
     quantity: entry.quantity,
     discount_percent: entry.discount_percent ?? 0,
+    customer_price: entry.customer_price,
     tax_amount: entry.tax_amount ?? 0,
     shipping_receiving_amount: entry.shipping_receiving_amount ?? 0,
     wholesale_retail: entry.wholesale_retail ?? "retail",
@@ -131,6 +133,13 @@ export function getLineAmountStillOwed(entry: LedgerAmountEntry) {
 /** Paid when cumulative payment (plus write-off) meets or exceeds invoiced amount. */
 export function isLedgerLineFullyPaid(entry: LedgerAmountEntry) {
   return getLedgerOutstandingBalance(entry) >= 0;
+}
+
+/** True when every debit line on the invoice has been marked paid. */
+export function isInvoiceFullyPaid(lines: LedgerAmountEntry[]): boolean {
+  const debits = lines.filter((line) => line.credit_debit === "debit");
+  if (debits.length === 0) return false;
+  return debits.every((line) => Boolean(line.paid));
 }
 
 export function summarizeToBeInvoiced(entries: LedgerAmountEntry[]) {

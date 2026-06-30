@@ -27,6 +27,16 @@ export function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+/** Ledger quantity rounded to two decimal places (min 0.01). */
+export function normalizeQuantity(value: number) {
+  const qty = roundMoney(Number(value));
+  return qty > 0 ? qty : 1;
+}
+
+export function formatQuantity(value: number) {
+  return normalizeQuantity(value).toFixed(2);
+}
+
 /** Venmo processing fee: 2.3% of payment amount. */
 export function calculateVenmoPaymentFee(paymentAmount: number) {
   return roundMoney(Math.max(0, Number(paymentAmount) || 0) * 0.023);
@@ -73,7 +83,7 @@ export function getLedgerMerchandiseAmount(entry: {
   quantity: number;
   discount_percent: number;
 }) {
-  const qty = Math.max(1, Math.round(Number(entry.quantity) || 1));
+  const qty = normalizeQuantity(entry.quantity);
   const retailSubtotal = Number(entry.retail_price) * qty;
   const discountAmount = (Number(entry.discount_percent) / 100) * retailSubtotal;
   return roundMoney(retailSubtotal - discountAmount);
@@ -84,8 +94,45 @@ export function getLedgerCustomerPrice(entry: {
   retail_price: number;
   quantity: number;
   discount_percent: number;
+  customer_price?: number | null;
 }) {
-  return getLedgerMerchandiseAmount(entry);
+  const discountPercent = Number(entry.discount_percent) || 0;
+  if (discountPercent > 0) {
+    return getLedgerMerchandiseAmount({
+      retail_price: entry.retail_price,
+      quantity: entry.quantity,
+      discount_percent: discountPercent,
+    });
+  }
+  const stored = roundMoney(Number(entry.customer_price ?? 0));
+  if (stored > 0) {
+    return stored;
+  }
+  return getLedgerMerchandiseAmount({
+    retail_price: entry.retail_price,
+    quantity: entry.quantity,
+    discount_percent: 0,
+  });
+}
+
+/** Customer price + tax + shipping + payment fee. */
+export function getLedgerInvoicedAmount(entry: {
+  retail_price: number;
+  quantity: number;
+  discount_percent: number;
+  customer_price?: number | null;
+  tax_amount: number;
+  shipping_receiving_amount: number;
+  wholesale_retail: "wholesale" | "retail";
+  payment_fee?: number;
+}) {
+  const tax =
+    entry.wholesale_retail === "wholesale" ? Number(entry.tax_amount) : 0;
+  const shipping = Number(entry.shipping_receiving_amount) || 0;
+  const fee = Number(entry.payment_fee ?? 0);
+  return roundMoney(
+    getLedgerCustomerPrice(entry) + tax + shipping + fee
+  );
 }
 
 /** Form helper — discounted retail subtotal only. */
@@ -101,25 +148,6 @@ export function calculateCustomerPrice(
   });
 }
 
-/** Customer price + tax + shipping + payment fee. */
-export function getLedgerInvoicedAmount(entry: {
-  retail_price: number;
-  quantity: number;
-  discount_percent: number;
-  tax_amount: number;
-  shipping_receiving_amount: number;
-  wholesale_retail: "wholesale" | "retail";
-  payment_fee?: number;
-}) {
-  const tax =
-    entry.wholesale_retail === "wholesale" ? Number(entry.tax_amount) : 0;
-  const shipping = Number(entry.shipping_receiving_amount) || 0;
-  const fee = Number(entry.payment_fee ?? 0);
-  return roundMoney(
-    getLedgerCustomerPrice(entry) + tax + shipping + fee
-  );
-}
-
 export function getLedgerTotalDesignerCost(entry: {
   designer_cost: number;
   quantity: number;
@@ -132,7 +160,7 @@ export function getLedgerRetailSubtotal(entry: {
   retail_price: number;
   quantity: number;
 }) {
-  const qty = Math.max(1, Math.round(Number(entry.quantity) || 1));
+  const qty = normalizeQuantity(entry.quantity);
   return roundMoney(Number(entry.retail_price) * qty);
 }
 

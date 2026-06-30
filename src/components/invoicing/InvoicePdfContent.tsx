@@ -7,6 +7,7 @@ import {
   sumInvoiceLineBreakdowns,
   type InvoiceLineItem,
 } from "@/lib/invoice-utils";
+import { formatQuantity, normalizeQuantity } from "@/lib/utils";
 
 const PINK = "#ef559e";
 const CORAL = "#f04c4c";
@@ -199,7 +200,7 @@ export const InvoicePdfContent = forwardRef<HTMLDivElement, InvoicePdfContentPro
               }
 
               const breakdown = getInvoiceLineBreakdown(line);
-              const qty = Math.round(Number(line.quantity)) || 1;
+              const qty = normalizeQuantity(Number(line.quantity) || 1);
               const unitPrice = qty > 0 ? breakdown.merchandise / qty : breakdown.merchandise;
 
               return (
@@ -208,7 +209,7 @@ export const InvoicePdfContent = forwardRef<HTMLDivElement, InvoicePdfContentPro
                     {line.description?.trim() || "—"}
                   </td>
                   <td style={{ border: "1px solid #111", padding: "5px 6px", textAlign: "center" }}>
-                    {qty}
+                    {formatQuantity(qty)}
                   </td>
                   <td style={{ border: "1px solid #111", padding: "5px 6px", textAlign: "right" }}>
                     {formatMoney(unitPrice)}

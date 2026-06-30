@@ -9,7 +9,7 @@ import {
   sumInvoiceLineBreakdowns,
   type InvoiceLineItem,
 } from "@/lib/invoice-utils";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, formatQuantity } from "@/lib/utils";
 
 const InvoicePdfPreview = dynamic(
   () => import("./InvoicePdfPreview").then((mod) => mod.InvoicePdfPreview),
@@ -98,7 +98,7 @@ export function InvoiceDetailView({
                       <tr key={line.id}>
                         <td className="px-3 py-2">{formatDate(line.entry_date)}</td>
                         <td className="px-3 py-2">{line.description ?? "—"}</td>
-                        <td className="px-3 py-2">{Math.round(Number(line.quantity))}</td>
+                        <td className="px-3 py-2">{formatQuantity(Number(line.quantity))}</td>
                         <td className="px-3 py-2 text-right">
                           {formatCurrency(breakdown.merchandise)}
                         </td>

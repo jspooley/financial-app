@@ -1,13 +1,6 @@
 import { getLedgerOutstandingBalance, isLedgerLineFullyPaid } from "@/lib/invoice-utils";
 import type { LedgerEntry } from "@/lib/types";
-import {
-  formatCurrency,
-  formatDate,
-  getLedgerCustomerPrice,
-  getLedgerInvoicedAmount,
-  getLedgerRetailSubtotal,
-  getLedgerTotalDesignerCost,
-} from "@/lib/utils";
+import { formatCurrency, formatDate, formatQuantity, getLedgerCustomerPrice, getLedgerInvoicedAmount, getLedgerRetailSubtotal, getLedgerTotalDesignerCost } from "@/lib/utils";
 
 export function ledgerTaxDisplay(entry: LedgerEntry) {
   return entry.wholesale_retail === "retail"
@@ -21,7 +14,7 @@ export function ledgerDetailFields(entry: LedgerEntry) {
     { label: "Date", value: formatDate(entry.entry_date) },
     { label: "Description", value: entry.description?.trim() || "—" },
     { label: "Retail Price", value: formatCurrency(Number(entry.retail_price ?? 0)) },
-    { label: "Quantity", value: String(Math.round(Number(entry.quantity))) },
+    { label: "Quantity", value: formatQuantity(Number(entry.quantity)) },
     {
       label: "Retail Price × Qty",
       value: formatCurrency(getLedgerRetailSubtotal(entry)),
@@ -106,7 +99,7 @@ export function mapLedgerTableRow(entry: LedgerEntry) {
     date: formatDate(entry.entry_date),
     description: entry.description?.trim() || "—",
     retailPrice: formatCurrency(Number(entry.retail_price ?? 0)),
-    qty: Math.round(Number(entry.quantity)),
+    qty: formatQuantity(Number(entry.quantity)),
     retailPriceQty: formatCurrency(getLedgerRetailSubtotal(entry)),
     discount: `${Number(entry.discount_percent)}%`,
     customerPrice: formatCurrency(getLedgerCustomerPrice(entry)),
@@ -144,18 +137,49 @@ export function mapLedgerTableRow(entry: LedgerEntry) {
   };
 }
 
+/** Debits table: retail price columns after total designer cost. */
+export const ledgerDebitColumns = [
+  { key: "client", label: "Client" },
+  { key: "date", label: "Date" },
+  { key: "description", label: "Description" },
+  { key: "qty", label: "Qty", className: "w-14 max-w-14 whitespace-nowrap px-2" },
+  { key: "discount", label: "Discount %" },
+  { key: "customerPrice", label: "Customer Price × Qty" },
+  { key: "tax", label: "Tax" },
+  { key: "shipping", label: "Shipping" },
+  { key: "paymentFee", label: "Pmt Fee", className: "w-24 max-w-24 whitespace-nowrap px-2" },
+  { key: "invoicedAmount", label: "Invoiced Amount" },
+  { key: "outstandingBalance", label: "Outstanding Balance" },
+  { key: "invoiced", label: "Invoiced" },
+  { key: "invoiceId", label: "Invoice ID" },
+  { key: "paidAmount", label: "Paid Amount" },
+  { key: "writeOff", label: "Write Off" },
+  { key: "writeOffAmount", label: "Write Off Amount" },
+  { key: "paid", label: "Paid" },
+  { key: "purchaser", label: "Purchaser" },
+  { key: "paidTo", label: "Paid To" },
+  { key: "datePaid", label: "Date Paid" },
+  { key: "designerCost", label: "Designer Cost" },
+  { key: "totalDesignerCost", label: "Total Designer Cost" },
+  { key: "retailPrice", label: "Retail Price" },
+  { key: "retailPriceQty", label: "Retail Price × Qty" },
+  { key: "po", label: "PO" },
+  { key: "type", label: "Type" },
+  { key: "salesUseTaxPaid", label: "Sales and Use Tax Paid" },
+] as const;
+
 export const ledgerDetailColumns = [
   { key: "client", label: "Client" },
   { key: "date", label: "Date" },
   { key: "description", label: "Description" },
   { key: "retailPrice", label: "Retail Price" },
-  { key: "qty", label: "Quantity" },
+  { key: "qty", label: "Qty", className: "w-14 max-w-14 whitespace-nowrap px-2" },
   { key: "retailPriceQty", label: "Retail Price × Qty" },
   { key: "discount", label: "Discount %" },
   { key: "customerPrice", label: "Customer Price × Qty" },
   { key: "tax", label: "Tax" },
   { key: "shipping", label: "Shipping" },
-  { key: "paymentFee", label: "Payment Fee" },
+  { key: "paymentFee", label: "Pmt Fee", className: "w-24 max-w-24 whitespace-nowrap px-2" },
   { key: "invoicedAmount", label: "Invoiced Amount" },
   { key: "outstandingBalance", label: "Outstanding Balance" },
   { key: "invoiced", label: "Invoiced" },

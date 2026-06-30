@@ -6,10 +6,12 @@ import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
+import { collectClientPoOptions } from "@/lib/client-po-db";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 import {
   formatInvoiceId,
   INVOICE_DB_SETUP_SQL,
+  isInvoiceFullyPaid,
   isLedgerLineUninvoiced,
   nextInvoiceSequence,
   parseInvoiceDbError,
@@ -17,7 +19,7 @@ import {
   type InvoiceLineItem,
 } from "@/lib/invoice-utils";
 import type { Client, Invoice, LedgerEntry } from "@/lib/types";
-import { formatCurrency, formatDate, getLedgerInvoicedAmount } from "@/lib/utils";
+import { formatCurrency, formatDate, getLedgerInvoicedAmount, roundMoney } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 import { CheckboxField, InputField, SelectField, TextareaField } from "@/components/ui/FormFields";
 import { InvoiceDetailView } from "@/components/invoicing/InvoiceDetailView";
@@ -34,6 +36,7 @@ type FormValues = z.infer<typeof schema>;
 interface InvoiceFormProps {
   clients: Client[];
   initial?: Invoice | null;
+  defaultClientId?: string;
   onSuccess: () => void;
   onCancel: () => void;
 }
@@ -41,6 +44,7 @@ interface InvoiceFormProps {
 export function InvoiceForm({
   clients,
   initial,
+  defaultClientId,
   onSuccess,
   onCancel,
 }: InvoiceFormProps) {
@@ -50,10 +54,12 @@ export function InvoiceForm({
   const [poOptions, setPoOptions] = useState<string[]>([]);
   const [uninvoicedLines, setUninvoicedLines] = useState<LedgerEntry[]>([]);
   const [invoicedLines, setInvoicedLines] = useState<InvoiceLineItem[]>([]);
-  const [selectedLineIds, setSelectedLineIds] = useState<Set<string>>(new Set());
+  const [invoiceHeaders, setInvoiceHeaders] = useState<Record<string, string | null>>({});
+  const [includedLineIds, setIncludedLineIds] = useState<Set<string>>(new Set());
   const [previewSequence, setPreviewSequence] = useState(1);
   const [loadingLines, setLoadingLines] = useState(false);
   const [currentInvoiceLines, setCurrentInvoiceLines] = useState<InvoiceLineItem[]>([]);
+  const [loadingCurrentInvoiceLines, setLoadingCurrentInvoiceLines] = useState(false);
   const [viewInvoice, setViewInvoice] = useState<{
     invoice: Invoice;
     lines: InvoiceLineItem[];
@@ -67,7 +73,7 @@ export function InvoiceForm({
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      client_id: initial?.client_id ?? "",
+      client_id: initial?.client_id ?? defaultClientId ?? "",
       po_number: initial?.po_number ?? "",
       invoice_date: initial?.invoice_date ?? new Date().toISOString().slice(0, 10),
       notes: initial?.notes ?? "",
@@ -91,32 +97,49 @@ export function InvoiceForm({
       list.push(line);
       byInvoiceId.set(line.invoice_id, list);
     }
-    return Array.from(byInvoiceId.entries()).sort(([a], [b]) => b.localeCompare(a));
-  }, [invoicedLines]);
+    return Array.from(byInvoiceId.entries())
+      .map(([invoiceId, lines]) => ({
+        invoiceId,
+        lines,
+        amount: roundMoney(
+          lines.reduce((sum, line) => sum + getLedgerInvoicedAmount(line), 0)
+        ),
+        invoiceDate: invoiceHeaders[invoiceId] ?? null,
+      }))
+      .sort((a, b) => b.invoiceId.localeCompare(a.invoiceId));
+  }, [invoicedLines, invoiceHeaders]);
 
   const loadClientData = useCallback(async () => {
     if (!clientId) {
       setPoOptions([]);
       setUninvoicedLines([]);
       setInvoicedLines([]);
+      setInvoiceHeaders({});
       return;
     }
 
     setLoadingLines(true);
+    setError(null);
     const supabase = createClient();
 
     const [{ data: ledgerData, error: ledgerError }, { data: invoiceData }, { data: clientPoData }] =
       await Promise.all([
-        supabase.from("ledger").select("*").eq("client_id", clientId),
+        supabase
+          .from("ledger")
+          .select("*")
+          .eq("client_id", clientId)
+          .limit(10000),
         supabase
           .from("invoicing")
-          .select("po_number, invoice_sequence")
-          .eq("client_id", clientId),
+          .select("invoice_id, invoice_date, po_number, invoice_sequence")
+          .eq("client_id", clientId)
+          .limit(10000),
         supabase
           .from("client_po_numbers")
           .select("po_number")
           .eq("client_id", clientId)
-          .order("po_number", { ascending: true }),
+          .order("po_number", { ascending: true })
+          .limit(10000),
       ]);
 
     if (ledgerError) {
@@ -125,17 +148,46 @@ export function InvoiceForm({
       return;
     }
 
-    const pos = new Set<string>();
-    for (const row of clientPoData ?? []) {
-      if (row.po_number?.trim()) pos.add(row.po_number.trim());
-    }
-    for (const row of ledgerData ?? []) {
-      if (row.po_number?.trim()) pos.add(row.po_number.trim());
-    }
+    const registryPos = (clientPoData ?? []).map((row) => row.po_number);
+    const ledgerPos = (ledgerData ?? []).map((row) => row.po_number as string | null);
+    const invoicePos = (invoiceData ?? []).map((row) => row.po_number);
+
+    const options = collectClientPoOptions(
+      registryPos,
+      ledgerPos,
+      invoicePos,
+      initial?.po_number
+    );
+    setPoOptions(options);
+
+    const headers: Record<string, string | null> = {};
     for (const row of invoiceData ?? []) {
-      if (row.po_number?.trim()) pos.add(row.po_number.trim());
+      const id = (row.invoice_id as string | null)?.trim();
+      if (!id) continue;
+      headers[id] = (row.invoice_date as string | null) ?? null;
     }
-    setPoOptions(Array.from(pos).sort());
+    setInvoiceHeaders(headers);
+
+    const registeredNormalized = new Set(
+      registryPos
+        .map((po) => (po ?? "").trim())
+        .filter(Boolean)
+        .map((po) => po.toLowerCase())
+    );
+    const toSync: { client_id: string; po_number: string }[] = [];
+    for (const raw of ledgerPos) {
+      const display = (raw ?? "").trim();
+      if (!display) continue;
+      const key = display.toLowerCase();
+      if (registeredNormalized.has(key)) continue;
+      registeredNormalized.add(key);
+      toSync.push({ client_id: clientId, po_number: display });
+    }
+    if (toSync.length > 0) {
+      await supabase
+        .from("client_po_numbers")
+        .upsert(toSync, { onConflict: "client_id,po_number", ignoreDuplicates: true });
+    }
 
     const allLines = (ledgerData ?? []).map((row) => normalizeLedgerRow(row));
     setUninvoicedLines(allLines.filter((line) => isLedgerLineUninvoiced(line)));
@@ -143,14 +195,26 @@ export function InvoiceForm({
       allLines.filter((line) => !isLedgerLineUninvoiced(line)) as InvoiceLineItem[]
     );
 
-    if (poNumber?.trim()) {
-      const sequences = (invoiceData ?? [])
-        .filter((inv) => poNumbersMatch(inv.po_number, poNumber))
-        .map((inv) => Number(inv.invoice_sequence) || 0);
-      setPreviewSequence(nextInvoiceSequence(sequences));
+    setLoadingLines(false);
+  }, [clientId, initial?.po_number]);
+
+  useEffect(() => {
+    if (!clientId || !poNumber?.trim()) {
+      setPreviewSequence(1);
+      return;
     }
 
-    setLoadingLines(false);
+    const supabase = createClient();
+    supabase
+      .from("invoicing")
+      .select("po_number, invoice_sequence")
+      .eq("client_id", clientId)
+      .then(({ data }) => {
+        const sequences = (data ?? [])
+          .filter((inv) => poNumbersMatch(inv.po_number, poNumber))
+          .map((inv) => Number(inv.invoice_sequence) || 0);
+        setPreviewSequence(nextInvoiceSequence(sequences));
+      });
   }, [clientId, poNumber]);
 
   useEffect(() => {
@@ -158,24 +222,41 @@ export function InvoiceForm({
   }, [loadClientData]);
 
   useEffect(() => {
-    setSelectedLineIds(new Set());
+    if (!initial) {
+      setIncludedLineIds(new Set());
+    }
   }, [clientId, poNumber, initial?.id]);
+
+  useEffect(() => {
+    if (!initial?.invoice_id || currentInvoiceLines.length === 0) return;
+    setIncludedLineIds(new Set(currentInvoiceLines.map((line) => line.id)));
+  }, [initial?.invoice_id, currentInvoiceLines]);
 
   useEffect(() => {
     if (!initial?.invoice_id) {
       setCurrentInvoiceLines([]);
+      setLoadingCurrentInvoiceLines(false);
       return;
     }
+
+    let cancelled = false;
+    setLoadingCurrentInvoiceLines(true);
     const supabase = createClient();
     supabase
       .from("ledger")
       .select("*")
       .eq("invoice_id", initial.invoice_id)
       .then(({ data }) => {
+        if (cancelled) return;
         setCurrentInvoiceLines(
           (data ?? []).map((row) => normalizeLedgerRow(row) as InvoiceLineItem)
         );
+        setLoadingCurrentInvoiceLines(false);
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [initial?.invoice_id]);
 
   const linesForPo = useMemo(
@@ -183,6 +264,31 @@ export function InvoiceForm({
       uninvoicedLines.filter((line) => poNumbersMatch(line.po_number, poNumber)),
     [uninvoicedLines, poNumber]
   );
+
+  const invoiceFullyPaid = useMemo(
+    () => isInvoiceFullyPaid(currentInvoiceLines),
+    [currentInvoiceLines]
+  );
+
+  const linesSectionLoading = loadingLines || (Boolean(initial) && loadingCurrentInvoiceLines);
+
+  const selectableLines = useMemo(() => {
+    if (!initial) {
+      return linesForPo;
+    }
+    const byId = new Map<string, LedgerEntry | InvoiceLineItem>();
+    for (const line of currentInvoiceLines) {
+      byId.set(line.id, line);
+    }
+    for (const line of linesForPo) {
+      if (!byId.has(line.id)) {
+        byId.set(line.id, line);
+      }
+    }
+    return Array.from(byId.values()).sort((a, b) =>
+      b.entry_date.localeCompare(a.entry_date)
+    );
+  }, [initial, currentInvoiceLines, linesForPo]);
 
   const ledgerSummary = useMemo(() => {
     const po = poNumber?.trim();
@@ -198,7 +304,8 @@ export function InvoiceForm({
   }, [uninvoicedLines, invoicedLines, poNumber]);
 
   function toggleLine(id: string) {
-    setSelectedLineIds((prev) => {
+    if (invoiceFullyPaid) return;
+    setIncludedLineIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -235,6 +342,21 @@ export function InvoiceForm({
             "Ledger items were not linked. Check that invoice_id and invoiced columns exist on the ledger table.",
         },
       };
+    }
+
+    return { ok: true as const };
+  }
+
+  async function unlinkLinesFromInvoice(lineIds: string[]) {
+    if (lineIds.length === 0) return { ok: true as const };
+    const supabase = createClient();
+    const { error: ledgerError } = await supabase
+      .from("ledger")
+      .update({ invoiced: false, invoice_id: null })
+      .in("id", lineIds);
+
+    if (ledgerError) {
+      return { ok: false as const, error: ledgerError };
     }
 
     return { ok: true as const };
@@ -287,20 +409,36 @@ export function InvoiceForm({
         return;
       }
 
-      if (selectedLineIds.size > 0) {
-        const linkResult = await linkLinesToInvoice(
-          invoiceId,
-          Array.from(selectedLineIds)
-        );
-        if (!linkResult.ok) {
-          const parsed = parseInvoiceDbError(linkResult.error);
-          if (parsed.needsSetup) {
-            setNeedsDbSetup(true);
-            setSetupMessage(parsed.message);
-          } else {
-            setError(parsed.message);
-          }
+      if (!invoiceFullyPaid) {
+        const previousIds = new Set(currentInvoiceLines.map((line) => line.id));
+        const toAdd = [...includedLineIds].filter((id) => !previousIds.has(id));
+        const toRemove = [...previousIds].filter((id) => !includedLineIds.has(id));
+
+        if (includedLineIds.size === 0) {
+          setError("Invoice must include at least one ledger item.");
           return;
+        }
+
+        if (toRemove.length > 0) {
+          const unlinkResult = await unlinkLinesFromInvoice(toRemove);
+          if (!unlinkResult.ok) {
+            setError(unlinkResult.error.message);
+            return;
+          }
+        }
+
+        if (toAdd.length > 0) {
+          const linkResult = await linkLinesToInvoice(invoiceId, toAdd);
+          if (!linkResult.ok) {
+            const parsed = parseInvoiceDbError(linkResult.error);
+            if (parsed.needsSetup) {
+              setNeedsDbSetup(true);
+              setSetupMessage(parsed.message);
+            } else {
+              setError(parsed.message);
+            }
+            return;
+          }
         }
       }
 
@@ -308,7 +446,7 @@ export function InvoiceForm({
       return;
     }
 
-    if (selectedLineIds.size === 0) {
+    if (includedLineIds.size === 0) {
       setError("Select at least one ledger item to include on this invoice.");
       return;
     }
@@ -353,7 +491,7 @@ export function InvoiceForm({
       return;
     }
 
-    const lineIds = Array.from(selectedLineIds);
+    const lineIds = Array.from(includedLineIds);
     const linkResult = await linkLinesToInvoice(invoiceId, lineIds);
 
     if (!linkResult.ok) {
@@ -399,6 +537,7 @@ export function InvoiceForm({
             <SelectField
               label="PO Number"
               error={errors.po_number?.message}
+              hint="Includes PO numbers registered on the client and any PO used on ledger entries."
               {...register("po_number")}
             >
               <option value="">Select PO...</option>
@@ -438,33 +577,32 @@ export function InvoiceForm({
 
         {(initial || (clientId && poNumber)) && (
           <section className="space-y-3 rounded-lg border border-slate-200 bg-slate-50/50 p-4">
-            <h3 className="font-medium text-slate-900">
-              {initial ? "Add ledger items to this invoice" : "Include in this invoice"}
-            </h3>
-            {initial && currentInvoiceLines.length > 0 && (
-              <div className="space-y-1 text-sm text-slate-600">
-                <p className="font-medium text-slate-800">Already on this invoice:</p>
-                <ul className="list-disc pl-5">
-                  {currentInvoiceLines.map((line) => (
-                    <li key={line.id}>
-                      {formatDate(line.entry_date)} —{" "}
-                      {line.description?.trim() || "Item"} —{" "}
-                      {formatCurrency(getLedgerInvoicedAmount(line))}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+            <h3 className="font-medium text-slate-900">Include in this invoice</h3>
+            {initial && invoiceFullyPaid && (
+              <p className="text-sm text-amber-800">
+                All items on this invoice are marked paid. Line items are locked, but you
+                can still update the invoice date and notes.
+              </p>
             )}
-            <p className="text-sm text-slate-600">
-              {initial
-                ? "Select additional uninvoiced items to add:"
-                : <>Uninvoiced ledger items for PO <strong>{poNumber}</strong></>}
-            </p>
-            {loadingLines ? (
+            {initial && !invoiceFullyPaid && (
+              <p className="text-sm text-slate-600">
+                Check or uncheck ledger items to add or remove them from this invoice.
+              </p>
+            )}
+            {!initial && (
+              <p className="text-sm text-slate-600">
+                Uninvoiced ledger items for PO <strong>{poNumber}</strong>
+              </p>
+            )}
+            {linesSectionLoading ? (
               <p className="text-sm text-slate-500">Loading ledger items...</p>
-            ) : linesForPo.length === 0 ? (
+            ) : selectableLines.length === 0 ? (
               <div className="space-y-2 text-sm text-slate-500">
-                <p>No uninvoiced ledger items for PO <strong>{poNumber}</strong>.</p>
+                {initial && currentInvoiceLines.length > 0 ? (
+                  <p>No additional uninvoiced items for PO <strong>{poNumber}</strong>.</p>
+                ) : (
+                  <p>No uninvoiced ledger items for PO <strong>{poNumber}</strong>.</p>
+                )}
                 {ledgerSummary && ledgerSummary.noPo > 0 && (
                   <p>
                     {ledgerSummary.noPo} ledger item
@@ -472,7 +610,7 @@ export function InvoiceForm({
                     it on the Ledger page and set PO to <strong>{poNumber}</strong>.
                   </p>
                 )}
-                {ledgerSummary && ledgerSummary.matchingPo > 0 && (
+                {ledgerSummary && ledgerSummary.matchingPo > 0 && !initial && (
                   <p>
                     {ledgerSummary.matchingPo} item
                     {ledgerSummary.matchingPo === 1 ? " is" : "s are"} already marked
@@ -485,15 +623,18 @@ export function InvoiceForm({
               </div>
             ) : (
               <ul className="space-y-2">
-                {linesForPo.map((line) => (
-                  <li key={line.id}>
-                    <CheckboxField
-                      label={`${formatDate(line.entry_date)} — ${line.description?.trim() || "Item"} — ${formatCurrency(getLedgerInvoicedAmount(line))}`}
-                      checked={selectedLineIds.has(line.id)}
-                      onChange={() => toggleLine(line.id)}
-                    />
-                  </li>
-                ))}
+                {selectableLines.map((line) => (
+                    <li key={line.id}>
+                      <CheckboxField
+                        labelPosition="inline"
+                        disabled={invoiceFullyPaid}
+                        readOnly={invoiceFullyPaid}
+                        label={`${formatDate(line.entry_date)} — ${line.description?.trim() || "Item"} — ${formatCurrency(getLedgerInvoicedAmount(line))}`}
+                        checked={includedLineIds.has(line.id)}
+                        onChange={() => toggleLine(line.id)}
+                      />
+                    </li>
+                  ))}
               </ul>
             )}
           </section>
@@ -508,16 +649,22 @@ export function InvoiceForm({
               <p className="text-sm text-slate-500">Nothing invoiced for this client.</p>
             ) : (
               <ul className="space-y-2">
-                {priorInvoices.map(([invoiceId, lines]) => (
+                {priorInvoices.map(({ invoiceId, amount, invoiceDate }) => (
                   <li
                     key={invoiceId}
                     className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-100 bg-white px-3 py-2"
                   >
-                    <div className="text-sm">
+                    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-2 text-sm">
                       <span className="font-medium text-slate-900">{invoiceId}</span>
-                      <span className="text-slate-500">
-                        {" "}
-                        · {lines.length} item{lines.length === 1 ? "" : "s"}
+                      <span>
+                        <span className="text-slate-500">Invoiced Amount: </span>
+                        <span className="font-medium text-slate-800">{formatCurrency(amount)}</span>
+                      </span>
+                      <span>
+                        <span className="text-slate-500">Invoiced Date: </span>
+                        <span className="text-slate-800">
+                          {invoiceDate ? formatDate(invoiceDate) : "—"}
+                        </span>
                       </span>
                     </div>
                     <Button

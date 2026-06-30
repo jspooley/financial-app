@@ -102,19 +102,25 @@ export function CheckboxField({
   hint,
   error,
   className = "",
+  labelPosition = "above",
   disabled,
   readOnly,
   ...props
-}: FieldProps & Omit<InputHTMLAttributes<HTMLInputElement>, "type">) {
+}: FieldProps &
+  Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & {
+    labelPosition?: "above" | "inline";
+  }) {
   const isDisabled = disabled || readOnly;
 
   return (
     <label
       className={`block space-y-1.5 ${isDisabled ? "cursor-default" : "cursor-pointer"}`}
     >
-      <span className="text-sm font-medium text-slate-700">{label}</span>
+      {labelPosition === "above" && (
+        <span className="text-sm font-medium text-slate-700">{label}</span>
+      )}
       <span
-        className={`flex min-h-11 w-full items-center rounded-lg border px-3 shadow-sm ${
+        className={`flex min-h-11 w-full items-center gap-3 rounded-lg border px-3 shadow-sm ${
           isDisabled
             ? "border-slate-300 bg-slate-50"
             : "border-brand-300 bg-white"
@@ -122,11 +128,16 @@ export function CheckboxField({
       >
         <input
           type="checkbox"
-          className="size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed disabled:border-slate-300"
+          className="size-4 shrink-0 rounded border-brand-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed disabled:border-slate-300"
           disabled={isDisabled}
           readOnly={readOnly}
           {...props}
         />
+        {labelPosition === "inline" && (
+          <span className="min-w-0 flex-1 text-sm font-medium text-slate-700">
+            {label}
+          </span>
+        )}
       </span>
       {hint && <span className="block text-xs text-slate-500">{hint}</span>}
       {error && <span className="block text-xs text-red-600">{error}</span>}

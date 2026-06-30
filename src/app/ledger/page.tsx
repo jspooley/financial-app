@@ -9,7 +9,12 @@ import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { isLedgerLineUninvoiced, normalizePoNumber } from "@/lib/invoice-utils";
-import { ledgerDetailFields, ledgerDetailColumns, mapLedgerTableRow } from "@/lib/ledger-display";
+import {
+  collectClientPoOptions,
+  poNumbersForClient,
+  poNumbersFromLedgerEntries,
+} from "@/lib/client-po-db";
+import { ledgerDetailFields, ledgerDetailColumns, ledgerDebitColumns, mapLedgerTableRow } from "@/lib/ledger-display";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { Client, ClientPoNumber, LedgerEntry, TradePartner } from "@/lib/types";
@@ -133,11 +138,19 @@ function LedgerPageContent() {
 
   function entryActions(entry: LedgerEntry) {
     return (
-      <div className="flex flex-wrap gap-2">
-        <Button variant="secondary" onClick={() => startEdit(entry)}>
+      <div className="flex w-21 flex-col gap-1.5">
+        <Button
+          variant="secondary"
+          className="w-full min-h-[33px] px-3 py-1.5"
+          onClick={() => startEdit(entry)}
+        >
           Edit
         </Button>
-        <Button variant="danger" onClick={() => handleDelete(entry)}>
+        <Button
+          variant="danger"
+          className="w-full min-h-[33px] px-3 py-1.5"
+          onClick={() => handleDelete(entry)}
+        >
           Delete
         </Button>
       </div>
@@ -158,6 +171,12 @@ function LedgerPageContent() {
   );
 
   const poFilterOptions = useMemo(() => {
+    if (filterClientId) {
+      const registered = poNumbersForClient(clientPoNumbers, filterClientId);
+      const fromLedger = poNumbersFromLedgerEntries(entries, filterClientId);
+      return collectClientPoOptions(registered, fromLedger);
+    }
+
     const seen = new Set<string>();
     const options: string[] = [];
     for (const entry of entries) {
@@ -169,12 +188,16 @@ function LedgerPageContent() {
       options.push(po);
     }
     return options.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-  }, [entries]);
+  }, [entries, filterClientId, clientPoNumbers]);
 
   const invoiceIdFilterOptions = useMemo(() => {
+    const source = filterClientId
+      ? entries.filter((entry) => entry.client_id === filterClientId)
+      : entries;
+
     const seen = new Set<string>();
     const options: string[] = [];
-    for (const entry of entries) {
+    for (const entry of source) {
       const invoiceId = entry.invoice_id?.trim();
       if (!invoiceId) continue;
       const key = invoiceId.toLowerCase();
@@ -183,7 +206,26 @@ function LedgerPageContent() {
       options.push(invoiceId);
     }
     return options.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-  }, [entries]);
+  }, [entries, filterClientId]);
+
+  useEffect(() => {
+    if (
+      filterPo &&
+      !poFilterOptions.some(
+        (po) => normalizePoNumber(po) === normalizePoNumber(filterPo)
+      )
+    ) {
+      setFilterPo("");
+    }
+    if (
+      filterInvoiceId &&
+      !invoiceIdFilterOptions.some(
+        (invoiceId) => invoiceId.toLowerCase() === filterInvoiceId.trim().toLowerCase()
+      )
+    ) {
+      setFilterInvoiceId("");
+    }
+  }, [filterClientId, filterPo, filterInvoiceId, poFilterOptions, invoiceIdFilterOptions]);
 
   const visibleEntries = useMemo(() => {
     let result = uninvoicedOnly ? entries.filter(isLedgerLineUninvoiced) : entries;
@@ -251,6 +293,7 @@ function LedgerPageContent() {
             clients={clients}
             tradePartners={tradePartners}
             clientPoNumbers={clientPoNumbers}
+            ledgerEntries={entries}
             defaultPurchaser={defaultPurchaser}
             initial={editing}
             onCancel={() => {
@@ -388,6 +431,9 @@ function LedgerPageContent() {
                       key={entry.id}
                       className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
                     >
+                      <div className="mb-4 border-b border-slate-100 pb-4">
+                        {entryActions(entry)}
+                      </div>
                       <div className="flex items-start justify-between gap-3">
                         <p className="text-sm font-medium text-slate-500">Invoiced Amount</p>
                         <p className="text-right font-semibold text-brand-800">
@@ -402,7 +448,6 @@ function LedgerPageContent() {
                           </div>
                         ))}
                       </dl>
-                      <div className="mt-4 border-t border-slate-100 pt-4">{entryActions(entry)}</div>
                     </article>
                   ))
                 )}
@@ -420,11 +465,11 @@ function LedgerPageContent() {
               </p>
               <DataTable
                 stickyFirstColumn
-                stickyLastColumn
+                mobileTitleKey="client"
                 rowKey={(_, index) => debitEntries[index]?.id ?? String(index)}
                 columns={[
-                  ...ledgerDetailColumns,
-                  { key: "actions", label: "Actions", className: "text-right" },
+                  { key: "actions", label: "Actions" },
+                  ...ledgerDebitColumns,
                 ]}
                 rows={debitEntries.map((entry) => ({
                   ...mapLedgerTableRow(entry),
@@ -440,11 +485,12 @@ function LedgerPageContent() {
               </h2>
               <p className="mb-3 text-sm text-slate-500">Receivable entries.</p>
             <DataTable
-              stickyLastColumn
+              stickyFirstColumn
+              mobileTitleKey="client"
               rowKey={(_, index) => creditEntries[index]?.id ?? String(index)}
               columns={[
+                { key: "actions", label: "Actions" },
                 ...ledgerDetailColumns,
-                { key: "actions", label: "Actions", className: "text-right" },
               ]}
               rows={creditEntries.map((entry) => ({
                 ...mapLedgerTableRow(entry),

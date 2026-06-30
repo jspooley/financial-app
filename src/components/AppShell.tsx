@@ -24,15 +24,15 @@ const navItems = [
 const tradePartnersHref = "/trade-partners";
 
 function navLinkClass(active: boolean) {
-  return `flex min-h-11 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
+  return `flex min-h-9 items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium transition ${
     active ? "bg-brand-50 text-brand-800" : "text-slate-700 hover:bg-slate-50"
   }`;
 }
 
 function tradeAccountCountLabel(count: number | null) {
   if (count === null) return "—";
-  if (count === 0) return "No trade accounts";
-  return `${count} trade ${count === 1 ? "account" : "accounts"}`;
+  if (count === 0) return "None";
+  return `${count} acct${count === 1 ? "" : "s"}`;
 }
 
 function TradeAccountBox({
@@ -43,19 +43,20 @@ function TradeAccountBox({
   pathname: string;
 }) {
   return (
-    <div className="space-y-1 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
-      <div className="px-3 py-2">
-        <p className="text-xs uppercase tracking-wide text-slate-500">Trade Accounts</p>
-        <p className="mt-1 text-sm font-medium text-slate-900">
-          {tradeAccountCountLabel(count)}
+    <div className="space-y-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
+      <div className="px-1.5 py-1">
+        <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+          Trade Accounts
         </p>
+        <p className="text-xs font-medium text-slate-900">{tradeAccountCountLabel(count)}</p>
       </div>
       <Link
         href={tradePartnersHref}
         className={navLinkClass(pathname === tradePartnersHref)}
+        title="View Trade Accounts"
       >
         <span aria-hidden>🤝</span>
-        View Trade Accounts
+        Trade Accts
       </Link>
     </div>
   );
@@ -86,7 +87,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-brand-stone-50">
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-2 sm:py-3">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-3 py-2 sm:px-4 sm:py-2.5">
           <Link href="/" className="flex min-w-0 items-center gap-2 sm:gap-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -107,16 +108,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-4 pb-28 sm:gap-6 sm:py-6 md:flex-row md:pb-6">
-        <nav className="hidden w-56 shrink-0 md:block">
-          <ul className="space-y-1 rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
+      <div className="mx-auto flex max-w-7xl flex-col gap-3 px-3 py-4 pb-28 sm:py-5 md:flex-row md:gap-3 md:pb-6 md:px-4">
+        <nav className="hidden w-36 shrink-0 md:block">
+          <ul className="space-y-0.5 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
             {navItems.map((item) => {
               const active = pathname === item.href;
               return (
                 <li key={item.href}>
-                  <Link href={item.href} className={navLinkClass(active)}>
+                  <Link
+                    href={item.href}
+                    className={navLinkClass(active)}
+                    title={item.label}
+                  >
                     <span aria-hidden>{item.icon}</span>
-                    {item.label}
+                    {item.shortLabel}
                   </Link>
                 </li>
               );
@@ -131,7 +136,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </li>
           </ul>
 
-          <div className="mt-4">
+          <div className="mt-3">
             <TradeAccountBox count={tradeAccountCount} pathname={pathname} />
           </div>
         </nav>
