@@ -8,6 +8,7 @@ import { AppointmentForm } from "@/components/forms/AppointmentForm";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RowActions } from "@/components/ui/RowActions";
 import { createClient } from "@/lib/supabase/client";
 import type { Appointment } from "@/lib/types";
 import { formatDate, toDateInputValue } from "@/lib/utils";
@@ -182,7 +183,7 @@ function AppointmentsPageContent() {
           mobileTitleKey="client"
           stickyFirstColumn
           columns={[
-            { key: "actions", label: "" },
+            { key: "actions", label: "Actions" },
             { key: "date", label: "Date" },
             { key: "client", label: "Client" },
             { key: "contact", label: "Contact" },
@@ -194,25 +195,13 @@ function AppointmentsPageContent() {
           ]}
           rows={visibleAppointments.map((appointment) => ({
             actions: (
-              <div className="flex w-20 flex-col gap-1">
-                <Button
-                  variant="secondary"
-                  className="min-h-9 w-full px-2 py-1 text-xs"
-                  onClick={() => {
-                    setEditing(appointment);
-                    setShowForm(true);
-                  }}
-                >
-                  Edit
-                </Button>
-                <Button
-                  variant="danger"
-                  className="min-h-9 w-full px-2 py-1 text-xs"
-                  onClick={() => handleDelete(appointment)}
-                >
-                  Delete
-                </Button>
-              </div>
+              <RowActions
+                onEdit={() => {
+                  setEditing(appointment);
+                  setShowForm(true);
+                }}
+                onDelete={() => handleDelete(appointment)}
+              />
             ),
             date: formatDate(appointment.appointment_date),
             client: appointment.client_name,

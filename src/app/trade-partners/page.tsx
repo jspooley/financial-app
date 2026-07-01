@@ -6,6 +6,7 @@ import { TradePartnerForm } from "@/components/forms/TradePartnerForm";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RowActions } from "@/components/ui/RowActions";
 import { createClient } from "@/lib/supabase/client";
 import type { TradePartner } from "@/lib/types";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/utils";
@@ -96,35 +97,29 @@ export default function TradePartnersPage() {
         </div>
       ) : (
         <DataTable
+          stickyFirstColumn
           mobileTitleKey="company"
           columns={[
+            { key: "actions", label: "Actions" },
             { key: "company", label: "Company" },
             { key: "discount", label: "Discount (%)" },
             { key: "map", label: "MAP" },
             { key: "expires", label: "MAP Expires" },
-            { key: "actions", label: "Actions", className: "text-right" },
           ]}
           rows={partners.map((partner) => ({
+            actions: (
+              <RowActions
+                onEdit={() => {
+                  setEditing(partner);
+                  setShowForm(true);
+                }}
+                onDelete={() => handleDelete(partner)}
+              />
+            ),
             company: partner.company_name,
             discount: formatPercent(Number(partner.discount_amount)),
             map: formatCurrency(Number(partner.minimum_purchase_amount)),
             expires: formatDate(partner.map_expiration),
-            actions: (
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    setEditing(partner);
-                    setShowForm(true);
-                  }}
-                >
-                  Edit
-                </Button>
-                <Button variant="danger" onClick={() => handleDelete(partner)}>
-                  Delete
-                </Button>
-              </div>
-            ),
           }))}
           emptyMessage="No trade partners yet."
         />

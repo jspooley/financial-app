@@ -8,6 +8,7 @@ import { LedgerForm } from "@/components/forms/LedgerForm";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RowActions } from "@/components/ui/RowActions";
 import { isLedgerLineUninvoiced, normalizePoNumber } from "@/lib/invoice-utils";
 import {
   budgetForClientPo,
@@ -146,22 +147,10 @@ function LedgerPageContent() {
 
   function entryActions(entry: LedgerEntry) {
     return (
-      <div className="flex w-21 flex-col gap-1.5">
-        <Button
-          variant="secondary"
-          className="w-full min-h-[33px] px-3 py-1.5"
-          onClick={() => startEdit(entry)}
-        >
-          Edit
-        </Button>
-        <Button
-          variant="danger"
-          className="w-full min-h-[33px] px-3 py-1.5"
-          onClick={() => handleDelete(entry)}
-        >
-          Delete
-        </Button>
-      </div>
+      <RowActions
+        onEdit={() => startEdit(entry)}
+        onDelete={() => handleDelete(entry)}
+      />
     );
   }
 

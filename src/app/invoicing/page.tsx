@@ -9,6 +9,7 @@ import { InvoiceDetailView } from "@/components/invoicing/InvoiceDetailView";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RowActions } from "@/components/ui/RowActions";
 import { SelectField, selectFieldClass } from "@/components/ui/FormFields";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
@@ -259,27 +260,15 @@ export default function InvoicingPage() {
           const isPaid = invoicePaidById[invoiceId] ?? false;
           return {
             actions: (
-              <div className="flex w-21 flex-col gap-1.5">
-                <Button
-                  variant="secondary"
-                  className="w-full min-h-[33px] px-3 py-1.5"
-                  onClick={() => {
-                    setEditing(invoice);
-                    setPrefillClientId(undefined);
-                    setShowForm(true);
-                  }}
-                >
-                  Edit
-                </Button>
-                <Button
-                  variant="danger"
-                  className="w-full min-h-[33px] px-3 py-1.5"
-                  disabled={isPaid}
-                  onClick={() => handleDeleteClick(invoice)}
-                >
-                  Delete
-                </Button>
-              </div>
+              <RowActions
+                onEdit={() => {
+                  setEditing(invoice);
+                  setPrefillClientId(undefined);
+                  setShowForm(true);
+                }}
+                onDelete={() => handleDeleteClick(invoice)}
+                deleteDisabled={isPaid}
+              />
             ),
             invoiceId: (
               <span>

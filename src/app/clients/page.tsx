@@ -7,6 +7,7 @@ import { ClientForm } from "@/components/forms/ClientForm";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { RowActions } from "@/components/ui/RowActions";
 import { createClient } from "@/lib/supabase/client";
 import type { Client } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
@@ -211,15 +212,25 @@ function ClientsPageContent() {
         </div>
       ) : (
         <DataTable
+          stickyFirstColumn
           mobileTitleKey="name"
           columns={[
+            { key: "actions", label: "Actions" },
             { key: "name", label: "Name" },
             { key: "poBudget", label: "PO / Budget" },
             { key: "email", label: "Email" },
             { key: "phone", label: "Phone" },
-            { key: "actions", label: "Actions", className: "text-right" },
           ]}
           rows={clients.map((client) => ({
+            actions: (
+              <RowActions
+                onEdit={() => {
+                  setEditing(client);
+                  setShowForm(true);
+                }}
+                onDelete={() => handleDelete(client)}
+              />
+            ),
             name: client.name,
             poBudget:
               (client.client_po_numbers ?? []).length === 0 ? (
@@ -243,22 +254,6 @@ function ClientsPageContent() {
               ),
             email: client.email ?? "—",
             phone: client.phone ?? "—",
-            actions: (
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    setEditing(client);
-                    setShowForm(true);
-                  }}
-                >
-                  Edit
-                </Button>
-                <Button variant="danger" onClick={() => handleDelete(client)}>
-                  Delete
-                </Button>
-              </div>
-            ),
           }))}
         />
       )}

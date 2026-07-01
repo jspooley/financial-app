@@ -8,10 +8,12 @@ import { BudgetItemForm } from "@/components/forms/BudgetItemForm";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
-import type { BudgetPlanSnapshot } from "@/lib/budget-utils";
+import { RowActions } from "@/components/ui/RowActions";
+import { sortBudgetRooms, type BudgetPlanSnapshot } from "@/lib/budget-utils";
 import { createClient } from "@/lib/supabase/client";
 import { BUDGET_DB_SETUP_SQL } from "@/lib/budget-db";
-import type { BudgetItem, Client, ClientPoNumber } from "@/lib/types";
+import { BUDGET_ROOM_OPTIONS, type BudgetItem, type Client, type ClientPoNumber } from "@/lib/types";
+import { SelectField } from "@/components/ui/FormFields";
 import { formatCurrency } from "@/lib/utils";
 
 type BudgetView = "items" | "planner";
@@ -37,6 +39,7 @@ export default function BudgetToolPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [poNumbers, setPoNumbers] = useState<ClientPoNumber[]>([]);
   const [plan, setPlan] = useState<BudgetPlanSnapshot>(EMPTY_PLAN);
+  const [roomFilter, setRoomFilter] = useState("");
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -103,6 +106,22 @@ export default function BudgetToolPage() {
     () => [...new Set(items.map((item) => item.room))],
     [items]
   );
+
+  const roomFilterOptions = useMemo(
+    () => sortBudgetRooms(customRooms, BUDGET_ROOM_OPTIONS),
+    [customRooms]
+  );
+
+  const filteredItems = useMemo(() => {
+    if (!roomFilter) return items;
+    return items.filter((item) => item.room === roomFilter);
+  }, [items, roomFilter]);
+
+  useEffect(() => {
+    if (roomFilter && !roomFilterOptions.includes(roomFilter)) {
+      setRoomFilter("");
+    }
+  }, [roomFilter, roomFilterOptions]);
 
   async function handleDelete(item: BudgetItem) {
     if (
@@ -210,45 +229,59 @@ export default function BudgetToolPage() {
       ) : loading ? (
         <p className="text-sm text-slate-500">Loading budget items...</p>
       ) : (
-        <DataTable
-          mobileTitleKey="description"
-          columns={[
-            { key: "room", label: "Room" },
-            { key: "description", label: "Item" },
-            { key: "quantity", label: "Qty" },
-            { key: "included", label: "In Budget" },
-            { key: "low", label: "Low" },
-            { key: "medium", label: "Medium" },
-            { key: "high", label: "High" },
-            { key: "actions", label: "Actions", className: "text-right" },
-          ]}
-          rows={items.map((item) => ({
-            room: item.room,
-            description: item.item_description,
-            quantity: item.quantity,
-            included: item.include_in_budget ? "Yes" : "No",
-            low: formatCurrency(item.low_amount),
-            medium: formatCurrency(item.medium_amount),
-            high: formatCurrency(item.high_amount),
-            actions: (
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="secondary"
-                  onClick={() => {
+        <>
+          <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <SelectField
+              label="Filter by room"
+              value={roomFilter}
+              onChange={(event) => setRoomFilter(event.target.value)}
+              className="max-w-xs"
+            >
+              <option value="">All rooms</option>
+              {roomFilterOptions.map((room) => (
+                <option key={room} value={room}>
+                  {room}
+                </option>
+              ))}
+            </SelectField>
+          </div>
+
+          <DataTable
+            stickyFirstColumn
+            mobileTitleKey="description"
+            columns={[
+              { key: "actions", label: "Actions" },
+              { key: "room", label: "Room" },
+              { key: "description", label: "Item" },
+              { key: "quantity", label: "Qty" },
+              { key: "low", label: "Low" },
+              { key: "medium", label: "Medium" },
+              { key: "high", label: "High" },
+            ]}
+            rows={filteredItems.map((item) => ({
+              actions: (
+                <RowActions
+                  onEdit={() => {
                     setEditing(item);
                     setShowForm(true);
                   }}
-                >
-                  Edit
-                </Button>
-                <Button variant="danger" onClick={() => handleDelete(item)}>
-                  Delete
-                </Button>
-              </div>
-            ),
-          }))}
-          emptyMessage="No budget items yet."
-        />
+                  onDelete={() => handleDelete(item)}
+                />
+              ),
+              room: item.room,
+              description: item.item_description,
+              quantity: item.quantity,
+              low: formatCurrency(item.low_amount),
+              medium: formatCurrency(item.medium_amount),
+              high: formatCurrency(item.high_amount),
+            }))}
+            emptyMessage={
+              roomFilter
+                ? `No items in ${roomFilter}.`
+                : "No budget items yet."
+            }
+          />
+        </>
       )}
     </AppShell>
   );
