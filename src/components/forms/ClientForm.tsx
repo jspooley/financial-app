@@ -5,9 +5,11 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
+import { CLIENT_BUDGET_SETUP_SQL } from "@/lib/client-budget-db";
 import type { Client } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { InputField } from "@/components/ui/FormFields";
+import { roundMoney } from "@/lib/utils";
 
 const schema = z.object({
   name: z.string().min(1, "Client name is required"),
@@ -20,6 +22,12 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
+type PoBudgetRow = {
+  id: string;
+  po_number: string;
+  budget: number;
+};
+
 interface ClientFormProps {
   initial?: Client | null;
   onSuccess: () => void;
@@ -28,8 +36,9 @@ interface ClientFormProps {
 
 export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
   const [error, setError] = useState<string | null>(null);
-  const [existingPos, setExistingPos] = useState<string[]>([]);
+  const [poRows, setPoRows] = useState<PoBudgetRow[]>([]);
   const [loadingPos, setLoadingPos] = useState(false);
+  const [needsBudgetSetup, setNeedsBudgetSetup] = useState(false);
   const isEdit = Boolean(initial);
 
   const {
@@ -48,31 +57,71 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
     },
   });
 
-  const loadPoNumbers = useCallback(async () => {
+  const loadPoRows = useCallback(async () => {
     if (!initial?.id) {
-      setExistingPos([]);
+      setPoRows([]);
       return;
     }
     setLoadingPos(true);
+    setNeedsBudgetSetup(false);
     const supabase = createClient();
     const { data, error: dbError } = await supabase
       .from("client_po_numbers")
-      .select("po_number")
+      .select("id, po_number, budget")
       .eq("client_id", initial.id)
       .order("po_number", { ascending: true });
 
     if (dbError) {
-      setError(dbError.message);
-      setExistingPos([]);
-    } else {
-      setExistingPos((data ?? []).map((row) => row.po_number.trim()).filter(Boolean));
+      const message = dbError.message.toLowerCase();
+      if (message.includes("budget")) {
+        setNeedsBudgetSetup(true);
+        const { data: fallback, error: fallbackError } = await supabase
+          .from("client_po_numbers")
+          .select("id, po_number")
+          .eq("client_id", initial.id)
+          .order("po_number", { ascending: true });
+
+        if (fallbackError) {
+          setError(fallbackError.message);
+          setPoRows([]);
+        } else {
+          setPoRows(
+            (fallback ?? []).map((row) => ({
+              id: row.id,
+              po_number: row.po_number.trim(),
+              budget: 0,
+            }))
+          );
+        }
+      } else {
+        setError(dbError.message);
+        setPoRows([]);
+      }
+      setLoadingPos(false);
+      return;
     }
+
+    setPoRows(
+      (data ?? []).map((row) => ({
+        id: row.id,
+        po_number: row.po_number.trim(),
+        budget: Number(row.budget ?? 0),
+      }))
+    );
     setLoadingPos(false);
   }, [initial?.id]);
 
   useEffect(() => {
-    loadPoNumbers();
-  }, [loadPoNumbers]);
+    loadPoRows();
+  }, [loadPoRows]);
+
+  function updatePoBudget(poId: string, budget: number) {
+    setPoRows((current) =>
+      current.map((row) =>
+        row.id === poId ? { ...row, budget: roundMoney(Math.max(0, budget)) } : row
+      )
+    );
+  }
 
   async function onSubmit(values: FormValues) {
     setError(null);
@@ -86,7 +135,7 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
 
     if (initial) {
       const newPo = values.new_po_number?.trim();
-      if (existingPos.length === 0 && !newPo) {
+      if (poRows.length === 0 && !newPo) {
         setError("Add at least one PO number for this client.");
         return;
       }
@@ -101,10 +150,25 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
         return;
       }
 
+      for (const row of poRows) {
+        const { error: poBudgetError } = await supabase
+          .from("client_po_numbers")
+          .update({ budget: row.budget })
+          .eq("id", row.id);
+
+        if (poBudgetError) {
+          const message = poBudgetError.message.toLowerCase();
+          if (message.includes("budget")) setNeedsBudgetSetup(true);
+          setError(poBudgetError.message);
+          return;
+        }
+      }
+
       if (newPo) {
         const { error: poError } = await supabase.from("client_po_numbers").insert({
           client_id: initial.id,
           po_number: newPo,
+          budget: 0,
         });
         if (poError) {
           setError(poError.message);
@@ -136,6 +200,7 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
     const { error: poError } = await supabase.from("client_po_numbers").insert({
       client_id: created.id,
       po_number: poNumber,
+      budget: 0,
     });
 
     if (poError) {
@@ -171,24 +236,44 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
           />
         ) : (
           <div className="sm:col-span-2">
-            <p className="text-sm font-medium text-slate-700">PO Numbers</p>
+            <p className="text-sm font-medium text-slate-700">PO numbers &amp; budgets</p>
             {loadingPos ? (
               <p className="mt-1 text-sm text-slate-500">Loading PO numbers…</p>
-            ) : existingPos.length === 0 ? (
+            ) : poRows.length === 0 ? (
               <p className="mt-1 text-sm text-amber-800">
                 No PO numbers yet. Add one below — at least one is required for ledger entries.
               </p>
             ) : (
-              <ul className="mt-2 flex flex-wrap gap-2">
-                {existingPos.map((po) => (
-                  <li
-                    key={po}
-                    className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm text-slate-800"
-                  >
-                    {po}
-                  </li>
-                ))}
-              </ul>
+              <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">PO</th>
+                      <th className="px-3 py-2 font-medium">Budget</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {poRows.map((row) => (
+                      <tr key={row.id} className="border-t border-slate-100">
+                        <td className="px-3 py-2 font-medium text-slate-900">{row.po_number}</td>
+                        <td className="px-3 py-2">
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={row.budget}
+                            disabled={needsBudgetSetup}
+                            onChange={(event) =>
+                              updatePoBudget(row.id, Number(event.target.value) || 0)
+                            }
+                            className="w-full max-w-[10rem] rounded-lg border border-brand-300 bg-white px-3 py-2 text-sm shadow-sm disabled:bg-slate-50"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
             <InputField
               label="Add PO Number"
@@ -203,6 +288,16 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
         <InputField label="Email" error={errors.email?.message} {...register("email")} />
         <InputField label="Address" className="sm:col-span-2" {...register("address")} />
       </div>
+
+      {needsBudgetSetup && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+          <p className="font-medium">PO budget column not set up yet.</p>
+          <p className="mt-1">Run this SQL once in Supabase to enable budget editing.</p>
+          <pre className="mt-2 max-h-40 overflow-auto rounded bg-white p-2 text-xs ring-1 ring-amber-200">
+            {CLIENT_BUDGET_SETUP_SQL}
+          </pre>
+        </div>
+      )}
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 

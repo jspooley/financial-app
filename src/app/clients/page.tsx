@@ -9,6 +9,7 @@ import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/client";
 import type { Client } from "@/lib/types";
+import { formatCurrency } from "@/lib/utils";
 
 function ClientsPageContent() {
   const searchParams = useSearchParams();
@@ -16,6 +17,7 @@ function ClientsPageContent() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [needsPoMigration, setNeedsPoMigration] = useState(false);
+  const [needsBudgetMigration, setNeedsBudgetMigration] = useState(false);
   const [showForm, setShowForm] = useState(searchParams.get("add") === "1");
   const [editing, setEditing] = useState<Client | null>(null);
 
@@ -23,33 +25,88 @@ function ClientsPageContent() {
     setLoading(true);
     setLoadError(null);
     setNeedsPoMigration(false);
+    setNeedsBudgetMigration(false);
     const supabase = createClient();
 
     const { data, error } = await supabase
       .from("clients")
-      .select("*, client_po_numbers(po_number)")
+      .select("*, client_po_numbers(id, po_number, budget)")
       .order("name", { ascending: true });
 
     if (!error) {
-      setClients(data ?? []);
+      setClients(
+        (data ?? []).map((row) => ({
+          ...row,
+          budget: Number(row.budget ?? 0),
+          client_po_numbers: (row.client_po_numbers ?? []).map(
+            (po: { id: string; po_number: string; budget?: number }) => ({
+              ...po,
+              budget: Number(po.budget ?? 0),
+            })
+          ),
+        }))
+      );
       setLoading(false);
       return;
     }
 
-    const { data: fallback, error: fallbackError } = await supabase
-      .from("clients")
-      .select("*")
-      .order("name", { ascending: true });
+    const message = error.message.toLowerCase();
+    if (message.includes("client_po_numbers")) {
+      const { data: fallback, error: fallbackError } = await supabase
+        .from("clients")
+        .select("*")
+        .order("name", { ascending: true });
 
-    if (fallbackError) {
-      setLoadError(fallbackError.message);
-      setClients([]);
+      if (fallbackError) {
+        setLoadError(fallbackError.message);
+        setClients([]);
+        setLoading(false);
+        return;
+      }
+
+      setClients(
+        (fallback ?? []).map((row) => ({
+          ...row,
+          budget: Number(row.budget ?? 0),
+        }))
+      );
+      setNeedsPoMigration(true);
       setLoading(false);
       return;
     }
 
-    setClients(fallback ?? []);
-    setNeedsPoMigration(true);
+    if (message.includes("budget")) {
+      const { data: fallback, error: fallbackError } = await supabase
+        .from("clients")
+        .select("*, client_po_numbers(id, po_number)")
+        .order("name", { ascending: true });
+
+      if (fallbackError) {
+        setLoadError(fallbackError.message);
+        setClients([]);
+        setLoading(false);
+        return;
+      }
+
+      setClients(
+        (fallback ?? []).map((row) => ({
+          ...row,
+          budget: 0,
+          client_po_numbers: (row.client_po_numbers ?? []).map(
+            (po: { id: string; po_number: string }) => ({
+              ...po,
+              budget: 0,
+            })
+          ),
+        }))
+      );
+      setNeedsBudgetMigration(true);
+      setLoading(false);
+      return;
+    }
+
+    setLoadError(error.message);
+    setClients([]);
     setLoading(false);
   }, []);
 
@@ -110,6 +167,17 @@ function ClientsPageContent() {
         </div>
       )}
 
+      {needsBudgetMigration && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          <p className="font-medium">Database setup required for PO budgets</p>
+          <p className="mt-1">
+            Run migration{" "}
+            <code className="rounded bg-amber-100 px-1">028_client_budget.sql</code> in Supabase,
+            then refresh to view and edit budget amounts per PO.
+          </p>
+        </div>
+      )}
+
       {showForm ? (
         <ClientForm
           initial={editing}
@@ -146,15 +214,33 @@ function ClientsPageContent() {
           mobileTitleKey="name"
           columns={[
             { key: "name", label: "Name" },
-            { key: "poNumbers", label: "PO Numbers" },
+            { key: "poBudget", label: "PO / Budget" },
             { key: "email", label: "Email" },
             { key: "phone", label: "Phone" },
             { key: "actions", label: "Actions", className: "text-right" },
           ]}
           rows={clients.map((client) => ({
             name: client.name,
-            poNumbers:
-              client.client_po_numbers?.map((row) => row.po_number).join(", ") || "—",
+            poBudget:
+              (client.client_po_numbers ?? []).length === 0 ? (
+                "—"
+              ) : (
+                <div className="space-y-1.5 text-sm">
+                  {[...(client.client_po_numbers ?? [])]
+                    .sort((a, b) => a.po_number.localeCompare(b.po_number))
+                    .map((po) => (
+                      <div
+                        key={po.id}
+                        className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5"
+                      >
+                        <span className="font-medium text-slate-800">{po.po_number}</span>
+                        <span className="tabular-nums text-brand-800">
+                          {formatCurrency(Number(po.budget ?? 0))}
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              ),
             email: client.email ?? "—",
             phone: client.phone ?? "—",
             actions: (

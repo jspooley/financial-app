@@ -53,3 +53,17 @@ export function poNumbersFromLedgerEntries(
     .filter((entry) => entry.client_id === clientId)
     .map((entry) => entry.po_number ?? null);
 }
+
+export function budgetForClientPo(
+  rows: ClientPoNumber[],
+  clientId: string,
+  po: string
+): number {
+  const key = normalizePoNumber(po);
+  const row = rows.find(
+    (candidate) =>
+      candidate.client_id === clientId &&
+      normalizePoNumber(candidate.po_number) === key
+  );
+  return Number(row?.budget ?? 0);
+}

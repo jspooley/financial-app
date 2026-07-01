@@ -19,6 +19,7 @@ const navItems = [
     icon: "🧾",
   },
   { href: "/invoicing", label: "Invoicing", shortLabel: "Invoice", icon: "📄" },
+  { href: "/budget-tool", label: "Budget Tool", shortLabel: "Budget Tool", icon: "📊" },
 ];
 
 const tradePartnersHref = "/trade-partners";

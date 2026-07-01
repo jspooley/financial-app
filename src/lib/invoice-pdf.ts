@@ -1,18 +1,57 @@
+"use client";
+
+import html2canvas from "html2canvas";
+import { jsPDF } from "jspdf";
+
 export function invoicePdfFilename(invoiceId: string): string {
   const safe = invoiceId.replace(/[^\w.-]+/g, "_");
   return `Invoice-${safe}.pdf`;
 }
 
+async function waitForImages(element: HTMLElement): Promise<void> {
+  const images = Array.from(element.querySelectorAll("img"));
+  if (images.length === 0) return;
+
+  await Promise.all(
+    images.map(
+      (img) =>
+        new Promise<void>((resolve) => {
+          if (img.complete && img.naturalWidth > 0) {
+            resolve();
+            return;
+          }
+          const done = () => resolve();
+          img.addEventListener("load", done, { once: true });
+          img.addEventListener("error", done, { once: true });
+        })
+    )
+  );
+}
+
+async function waitForPaint(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
 export async function saveInvoicePdf(element: HTMLElement, filename: string): Promise<void> {
-  const html2canvas = (await import("html2canvas")).default;
-  const { jsPDF } = await import("jspdf");
+  await waitForImages(element);
+  await waitForPaint();
 
   const canvas = await html2canvas(element, {
     scale: 2,
     useCORS: true,
     logging: false,
     backgroundColor: "#ffffff",
+    scrollX: 0,
+    scrollY: 0,
+    width: element.scrollWidth,
+    height: element.scrollHeight,
   });
+
+  if (canvas.width === 0 || canvas.height === 0) {
+    throw new Error("PDF content could not be rendered. Try again after the page finishes loading.");
+  }
 
   const imgData = canvas.toDataURL("image/png");
   const pdf = new jsPDF("p", "pt", "letter");

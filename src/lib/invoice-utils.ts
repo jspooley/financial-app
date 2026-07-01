@@ -95,13 +95,26 @@ function invoicedAmountForEntry(entry: LedgerAmountEntry) {
   });
 }
 
+/** Cash applied to this line — payment amount plus fee when recorded separately. */
+export function getLedgerTotalPaymentReceived(entry: LedgerAmountEntry) {
+  const amount = roundMoney(Number(entry.payment_amount ?? 0));
+  const fee = roundMoney(Number(entry.payment_fee ?? 0));
+  if (fee <= 0) return amount;
+
+  const invoiced = invoicedAmountForEntry(entry);
+  const combined = roundMoney(amount + fee);
+  // Fee is part of invoiced; when payment + fee covers the line, count both toward paid.
+  if (combined <= invoiced + 0.009) return combined;
+  return amount;
+}
+
 /**
  * Signed balance: payment − invoiced.
  * Positive when overpaid, negative when underpaid. Write-off moves balance toward zero.
  */
 export function getLedgerOutstandingBalance(entry: LedgerAmountEntry) {
   const invoiced = invoicedAmountForEntry(entry);
-  const paid = roundMoney(Number(entry.payment_amount ?? 0));
+  const paid = getLedgerTotalPaymentReceived(entry);
   const writeOffApplied = entry.write_off
     ? roundMoney(Math.max(0, Number(entry.write_off_amount ?? 0)))
     : 0;
@@ -329,11 +342,16 @@ export function summarizePaymentsByInvoiceId(
       );
       const paidTotal = roundMoney(
         projected.reduce(
-          (sum, entry) => sum + Number(entry.payment_amount ?? 0),
+          (sum, entry) => sum + getLedgerTotalPaymentReceived(entry),
           0
         )
       );
-      const outstandingTotal = roundMoney(invoicedTotal - paidTotal);
+      const outstandingTotal = roundMoney(
+        projected.reduce(
+          (sum, entry) => sum + getLedgerUnderpaymentAmount(entry),
+          0
+        )
+      );
       return {
         invoiceId,
         lineCount: lines.length,

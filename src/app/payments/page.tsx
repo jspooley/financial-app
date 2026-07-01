@@ -9,6 +9,8 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/client";
 import {
   getLedgerOutstandingBalance,
+  getLedgerTotalPaymentReceived,
+  getLedgerUnderpaymentAmount,
   isLedgerLineFullyPaid,
   isLedgerLineInvoiced,
   summarizePaymentsByInvoiceId,
@@ -63,10 +65,16 @@ function paymentLineForDisplay(entry: LedgerEntry, draft: PaymentRowDraft) {
 }
 
 function lineOutstandingBalance(entry: LedgerEntry, draft: PaymentRowDraft) {
-  const line = paymentLineForDisplay(entry, draft);
-  return roundMoney(
-    getLedgerInvoicedAmount(entry) - Number(line.payment_amount ?? 0)
-  );
+  return getLedgerUnderpaymentAmount(entryFromDraft(entry, draft));
+}
+
+function paymentReceivedForDraft(entry: LedgerEntry, draft: PaymentRowDraft) {
+  return getLedgerTotalPaymentReceived(entryFromDraft(entry, draft));
+}
+
+function paymentReceivedForEntry(entry: LedgerEntry) {
+  const received = getLedgerTotalPaymentReceived(entry);
+  return received > 0 ? received : getLedgerInvoicedAmount(entry);
 }
 
 function outstandingBalanceClass(amount: number) {
@@ -316,10 +324,10 @@ export default function PaymentsPage() {
   const paidHistoryTotal = useMemo(
     () =>
       roundMoney(
-        filteredPaidEntries.reduce((sum, entry) => {
-          const amount = Number(entry.payment_amount);
-          return sum + (amount > 0 ? amount : getLedgerInvoicedAmount(entry));
-        }, 0)
+        filteredPaidEntries.reduce(
+          (sum, entry) => sum + paymentReceivedForEntry(entry),
+          0
+        )
       ),
     [filteredPaidEntries]
   );
@@ -395,9 +403,12 @@ export default function PaymentsPage() {
 
   const totalPaymentAmount = useMemo(
     () =>
-      selectedEntries.reduce(
-        (sum, entry) => sum + (Number(drafts[entry.id]?.payment_amount) || 0),
-        0
+      roundMoney(
+        selectedEntries.reduce((sum, entry) => {
+          const draft = drafts[entry.id];
+          if (!draft) return sum;
+          return sum + paymentReceivedForDraft(entry, draft);
+        }, 0)
       ),
     [selectedEntries, drafts]
   );
@@ -409,9 +420,12 @@ export default function PaymentsPage() {
 
   const totalHistoryPaymentAmount = useMemo(
     () =>
-      selectedHistoryEntries.reduce(
-        (sum, entry) => sum + (Number(drafts[entry.id]?.payment_amount) || 0),
-        0
+      roundMoney(
+        selectedHistoryEntries.reduce((sum, entry) => {
+          const draft = drafts[entry.id];
+          if (!draft) return sum;
+          return sum + paymentReceivedForDraft(entry, draft);
+        }, 0)
       ),
     [selectedHistoryEntries, drafts]
   );

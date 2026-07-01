@@ -1,0 +1,63 @@
+-- Seed budget_items with initial room/item data.
+-- Safe to re-run: clears existing rows first.
+
+DELETE FROM budget_items;
+
+INSERT INTO budget_items (
+  room,
+  item_description,
+  include_in_budget,
+  quantity,
+  low_amount,
+  medium_amount,
+  high_amount
+) VALUES
+  ('Living Room', 'Sectional', false, 0, 3831.20, 8000.00, 12000.00),
+  ('Living Room', 'Coffee table', false, 0, 768.00, 2000.00, 4000.00),
+  ('Living Room', 'Chairs (swivel and/or rocker)', false, 0, 1919.20, 2400.00, 4800.00),
+  ('Living Room', 'End tables', false, 0, 719.20, 800.00, 1400.00),
+  ('Living Room', 'Lamps', false, 0, 144.00, 292.00, 640.00),
+  ('Living Room', 'Occasional table', false, 0, 280.00, 440.00, 1200.00),
+  ('Living Room', 'Rug (12 x 15)', false, 0, 1600.00, 1920.00, 7646.40),
+  ('Living Room', 'Credenza', false, 0, 1679.20, 2240.00, 4800.00),
+  ('Living Room', 'Window Shade (per window)', false, 0, 400.00, 600.00, 1200.00),
+  ('Living Room', 'Drapery (per window)', false, 0, 1200.00, 1800.00, 4500.00),
+  ('Living Room', 'Paint', false, 0, 300.00, 300.00, 300.00),
+  ('Office', 'Desk', false, 0, 1440.00, 1600.00, 3200.00),
+  ('Office', 'Occasional Chair', false, 0, 1919.20, 2400.00, 4800.00),
+  ('Office', 'Occasional table', false, 0, 280.00, 440.00, 1200.00),
+  ('Office', 'Desk Lamp', false, 0, 144.00, 160.00, 640.00),
+  ('Office', 'Table Lamps', false, 0, 144.00, 292.00, 640.00),
+  ('Office', 'Floor covering (8 x 10)', false, 0, 636.80, 1200.00, 2972.80),
+  ('Office', 'Paint', false, 0, 300.00, 300.00, 300.00),
+  ('Office', 'Window shades (small window)', false, 0, 240.00, 500.00, 600.00),
+  ('Office', 'Bookcases', false, 0, 0.00, 2240.00, 3840.00),
+  ('Kitchen', 'Floor matt/runner', false, 0, 50.00, 300.00, 300.00),
+  ('Kitchen', 'Island', false, 0, 0.00, 0.00, 0.00),
+  ('Kitchen', 'Bar Stools (price per stool)', false, 0, 440.00, 520.00, 2000.00),
+  ('Kitchen', 'Window shades (small window)', false, 0, 400.00, 600.00, 1200.00),
+  ('Mudroom', 'Mud room 4x6 indoor rug', false, 0, 360.00, 360.00, 360.00),
+  ('Bedroom', 'Bed', false, 0, 1759.20, 2560.00, 8000.00),
+  ('Bedroom', 'Bedside tables', false, 0, 0.00, 960.00, 5000.00),
+  ('Bedroom', 'Lamp', false, 0, 144.00, 316.00, 640.00),
+  ('Bedroom', 'A small bench', false, 0, 0.00, 1280.00, 3200.00),
+  ('Bedroom', 'A small dresser', false, 0, 0.00, 1680.00, 4800.00),
+  ('Bedroom', 'Occasional chair (opt. size)', false, 0, 1919.20, 2400.00, 4800.00),
+  ('Bedroom', 'Rug (9x12)', false, 0, 953.60, 1600.00, 2972.80),
+  ('Bedroom', 'Window shades', false, 0, 0.00, 0.00, 0.00),
+  ('Bedroom', 'Draperies', false, 0, 0.00, 0.00, 0.00),
+  ('Bedroom', 'Updated bedding', false, 0, 0.00, 0.00, 0.00),
+  ('Bedroom', 'Accessories (mirrors, etc)', false, 0, 0.00, 0.00, 0.00),
+  ('Bedroom', 'Optional:', false, 0, 0.00, 0.00, 0.00),
+  ('Bedroom', 'Bed throw', false, 0, 0.00, 0.00, 0.00),
+  ('Bedroom', 'Coordinating Sheets', false, 0, 0.00, 0.00, 0.00),
+  ('Bedroom', 'Coordinating Duvet', false, 0, 0.00, 0.00, 0.00),
+  ('Dining Room', 'Dining Room Table', false, 0, 2799.20, 2240.00, 12000.00),
+  ('Dining Room', 'Chairs for Table (per chair)', false, 0, 415.20, 560.00, 1600.00),
+  ('Dining Room', 'Credenza', false, 0, 1679.20, 2240.00, 4800.00),
+  ('Dining Room', 'Lamps', false, 0, 144.00, 292.00, 640.00),
+  ('Dining Room', 'Rug', false, 0, 953.60, 1600.00, 2972.80),
+  ('Dining Room', 'Paint/Wallpaper', false, 0, 300.00, 4800.00, 12000.00),
+  ('Dining Room', 'Chandelier', false, 0, 958.40, 960.00, 4000.00);
+
+NOTIFY pgrst, 'reload schema';

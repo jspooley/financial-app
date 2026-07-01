@@ -10,6 +10,7 @@ import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { isLedgerLineUninvoiced, normalizePoNumber } from "@/lib/invoice-utils";
 import {
+  budgetForClientPo,
   collectClientPoOptions,
   poNumbersForClient,
   poNumbersFromLedgerEntries,
@@ -18,8 +19,15 @@ import { ledgerDetailFields, ledgerDetailColumns, ledgerDebitColumns, mapLedgerT
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { Client, ClientPoNumber, LedgerEntry, TradePartner } from "@/lib/types";
-import { formatCurrency, getLedgerInvoicedAmount, purchaserFromEmail } from "@/lib/utils";
+import {
+  formatCurrency,
+  getLedgerCustomerPrice,
+  getLedgerInvoicedAmount,
+  purchaserFromEmail,
+} from "@/lib/utils";
 import { SelectField } from "@/components/ui/FormFields";
+
+const GOODS_AND_SERVICES_LABEL = "Goods and Services";
 
 function entryMatchesLedgerFilters(
   entry: LedgerEntry,
@@ -238,6 +246,49 @@ function LedgerPageContent() {
   const debitEntries = visibleEntries.filter((entry) => entry.credit_debit === "debit");
   const creditEntries = visibleEntries.filter((entry) => entry.credit_debit === "credit");
 
+  const poBudgetSummary = useMemo(() => {
+    if (!filterClientId || !filterPo) return null;
+
+    const budget = budgetForClientPo(clientPoNumbers, filterClientId, filterPo);
+    const poKey = normalizePoNumber(filterPo);
+    const merchandiseTotal = entries
+      .filter(
+        (entry) =>
+          entry.credit_debit === "debit" &&
+          entry.client_id === filterClientId &&
+          normalizePoNumber(entry.po_number ?? "") === poKey
+      )
+      .reduce((sum, entry) => sum + getLedgerCustomerPrice(entry), 0);
+
+    return { budget, merchandiseTotal, variance: merchandiseTotal - budget };
+  }, [filterClientId, filterPo, clientPoNumbers, entries]);
+
+  function debitsBudgetLabel() {
+    if (!poBudgetSummary) return null;
+    const { budget, variance } = poBudgetSummary;
+    return (
+      <span className="ml-2 text-base font-normal text-slate-600">
+        · <span className="font-bold text-slate-900">Budget:</span>{" "}
+        <span className="font-bold text-slate-900">{formatCurrency(budget)}</span> ·{" "}
+        {variance > 0 ? (
+          <>
+            <span className="font-bold text-red-700">{formatCurrency(variance)}</span>{" "}
+            <span className="font-bold text-red-700">over budget</span>
+          </>
+        ) : variance < 0 ? (
+          <>
+            <span className="font-bold text-emerald-700">
+              {formatCurrency(Math.abs(variance))}
+            </span>{" "}
+            <span className="font-bold text-emerald-700">under budget</span>
+          </>
+        ) : (
+          <span className="font-bold text-slate-600">On budget</span>
+        )}
+      </span>
+    );
+  }
+
   return (
     <AppShell>
       <PageHeader
@@ -387,9 +438,10 @@ function LedgerPageContent() {
             <>
           <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700 shadow-sm">
             <p>
-              <strong>{debitEntries.length}</strong> debit
-              {debitEntries.length === 1 ? "" : "s"} · <strong>{creditEntries.length}</strong>{" "}
-              credit{creditEntries.length === 1 ? "" : "s"}
+              <strong>{debitEntries.length}</strong> goods and services{" "}
+              {debitEntries.length === 1 ? "entry" : "entries"} ·{" "}
+              <strong>{creditEntries.length}</strong> credit
+              {creditEntries.length === 1 ? "" : "s"}
               {hasActiveFilters && (
                 <span className="text-slate-500">
                   {" "}
@@ -399,31 +451,36 @@ function LedgerPageContent() {
             </p>
             <p className="mt-1 text-slate-500">
               Client debits are the default when you add an entry. Scroll down to the{" "}
-              <strong>Debits</strong> section — on desktop, scroll the table left/right for all
-              columns including Invoiced and Paid.
+              <strong>{GOODS_AND_SERVICES_LABEL}</strong> section — on desktop, scroll the table
+              left/right for all columns including Invoiced and Paid.
             </p>
             {entries.length > 0 && debitEntries.length === 0 && (
               <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950">
                 All {entries.length} ledger{" "}
                 {entries.length === 1 ? "entry is" : "entries are"} type <strong>credit</strong>.
                 Edit an entry and set <strong>Credit / Debit</strong> to{" "}
-                <strong>Client Debit</strong> to see it in the Debits table.
+                <strong>Client Debit</strong> to see it in the {GOODS_AND_SERVICES_LABEL} table.
               </p>
             )}
           </div>
 
           <div className="space-y-5 md:hidden">
             {[
-              { title: "Debits", rows: debitEntries },
+              { title: GOODS_AND_SERVICES_LABEL, rows: debitEntries },
               { title: "Credits", rows: creditEntries },
             ].map((group) => (
               <section key={group.title} className="space-y-3">
                 <h2 className="text-lg font-semibold text-slate-900">
                   {group.title} ({group.rows.length})
+                  {group.title === GOODS_AND_SERVICES_LABEL && debitsBudgetLabel()}
                 </h2>
                 {group.rows.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-500">
-                    No {group.title.toLowerCase()} entries yet.
+                    No{" "}
+                    {group.title === GOODS_AND_SERVICES_LABEL
+                      ? "goods and services entries"
+                      : `${group.title.toLowerCase()} entries`}{" "}
+                    yet.
                   </div>
                 ) : (
                   group.rows.map((entry) => (
@@ -458,10 +515,12 @@ function LedgerPageContent() {
           <div className="hidden space-y-6 md:block">
             <section>
               <h2 className="mb-1 text-lg font-semibold text-slate-900">
-                Debits ({debitEntries.length})
+                {GOODS_AND_SERVICES_LABEL} ({debitEntries.length})
+                {debitsBudgetLabel()}
               </h2>
               <p className="mb-3 text-sm text-slate-500">
-                Client Debits — includes Invoiced, Invoice ID, Paid, and payment columns.
+                {GOODS_AND_SERVICES_LABEL} — includes Invoiced, Invoice ID, Paid, and payment
+                columns.
               </p>
               <DataTable
                 stickyFirstColumn
@@ -475,7 +534,7 @@ function LedgerPageContent() {
                   ...mapLedgerTableRow(entry),
                   actions: entryActions(entry),
                 }))}
-                emptyMessage="No debit entries yet."
+                emptyMessage="No goods and services entries yet."
               />
             </section>
 

@@ -83,6 +83,7 @@ export interface Client {
   address: string | null;
   phone: string | null;
   email: string | null;
+  budget: number;
   created_at: string;
   updated_at: string;
   client_po_numbers?: ClientPoNumber[];
@@ -92,6 +93,7 @@ export interface ClientPoNumber {
   id: string;
   client_id: string;
   po_number: string;
+  budget: number;
   created_at?: string;
 }
 
@@ -137,6 +139,37 @@ export interface TradePartner {
   discount_amount: number;
   minimum_purchase_amount: number;
   map_expiration: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export const BUDGET_ROOM_OPTIONS = [
+  "Living Room",
+  "Family Room",
+  "Kitchen",
+  "Dining Room",
+  "Mudroom",
+  "Office",
+  "Bedroom",
+  "Master Bedroom",
+  "Guest Bedroom",
+  "Child Bedroom",
+  "Master Bath",
+  "Shared Bathroom",
+  "Powder Room",
+] as const;
+
+export type BudgetRoomPreset = (typeof BUDGET_ROOM_OPTIONS)[number];
+
+export interface BudgetItem {
+  id: string;
+  room: string;
+  item_description: string;
+  include_in_budget: boolean;
+  quantity: number;
+  low_amount: number;
+  medium_amount: number;
+  high_amount: number;
   created_at: string;
   updated_at: string;
 }
@@ -213,6 +246,14 @@ export interface Database {
           id?: string;
         };
         Update: Partial<Database["public"]["Tables"]["trade_partners"]["Insert"]>;
+        Relationships: [];
+      };
+      budget_items: {
+        Row: BudgetItem;
+        Insert: Omit<BudgetItem, "id" | "created_at" | "updated_at"> & {
+          id?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["budget_items"]["Insert"]>;
         Relationships: [];
       };
       invoicing: {
