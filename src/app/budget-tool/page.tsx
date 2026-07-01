@@ -13,7 +13,7 @@ import { sortBudgetRooms, type BudgetPlanSnapshot } from "@/lib/budget-utils";
 import { createClient } from "@/lib/supabase/client";
 import { BUDGET_DB_SETUP_SQL } from "@/lib/budget-db";
 import { BUDGET_ROOM_OPTIONS, type BudgetItem, type Client, type ClientPoNumber } from "@/lib/types";
-import { SelectField } from "@/components/ui/FormFields";
+import { selectFieldClass } from "@/components/ui/FormFields";
 import { formatCurrency } from "@/lib/utils";
 
 type BudgetView = "items" | "planner";
@@ -21,7 +21,7 @@ type BudgetView = "items" | "planner";
 const EMPTY_PLAN: BudgetPlanSnapshot = { rooms: [], grandTotal: 0 };
 
 function viewButtonClass(active: boolean) {
-  return `rounded-lg px-3 py-2 text-sm font-medium transition ${
+  return `inline-flex min-h-11 items-center rounded-lg px-3 text-sm font-medium transition ${
     active
       ? "bg-brand-600 text-white"
       : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
@@ -145,22 +145,9 @@ export default function BudgetToolPage() {
       <PageHeader
         title="Budget Tool"
         description="Manage room budget items and explore save-to-splurge scenarios."
-        action={
-          view === "items" &&
-          !showForm && (
-            <Button
-              onClick={() => {
-                setEditing(null);
-                setShowForm(true);
-              }}
-            >
-              Add Item
-            </Button>
-          )
-        }
       />
 
-      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
@@ -183,20 +170,36 @@ export default function BudgetToolPage() {
         </div>
 
         {view === "items" && !showForm && (
-          <SelectField
-            label="Filter by room"
-            value={roomFilter}
-            onChange={(event) => setRoomFilter(event.target.value)}
-            disabled={loading}
-            className="w-full min-w-48 sm:w-56"
-          >
-            <option value="">All rooms</option>
-            {roomFilterOptions.map((room) => (
-              <option key={room} value={room}>
-                {room}
-              </option>
-            ))}
-          </SelectField>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              className="min-h-11"
+              onClick={() => {
+                setEditing(null);
+                setShowForm(true);
+              }}
+            >
+              Add Item
+            </Button>
+            <div className="flex min-h-11 items-center gap-4 rounded-xl border border-slate-200 bg-white py-1.5 pl-4 pr-2 shadow-sm">
+              <span className="shrink-0 text-sm font-medium text-slate-700 whitespace-nowrap">
+                Filter by room
+              </span>
+              <select
+                value={roomFilter}
+                onChange={(event) => setRoomFilter(event.target.value)}
+                disabled={loading}
+                className={`${selectFieldClass} !h-9 !min-h-9 !py-1.5 w-full min-w-48 sm:w-56`}
+                aria-label="Filter by room"
+              >
+                <option value="">All rooms</option>
+                {roomFilterOptions.map((room) => (
+                  <option key={room} value={room}>
+                    {room}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
         )}
       </div>
 
@@ -255,7 +258,6 @@ export default function BudgetToolPage() {
               { key: "actions", label: "Actions" },
               { key: "room", label: "Room" },
               { key: "description", label: "Item" },
-              { key: "quantity", label: "Qty" },
               { key: "low", label: "Low" },
               { key: "medium", label: "Medium" },
               { key: "high", label: "High" },
@@ -272,7 +274,6 @@ export default function BudgetToolPage() {
               ),
               room: item.room,
               description: item.item_description,
-              quantity: item.quantity,
               low: formatCurrency(item.low_amount),
               medium: formatCurrency(item.medium_amount),
               high: formatCurrency(item.high_amount),
