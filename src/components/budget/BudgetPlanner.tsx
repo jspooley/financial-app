@@ -45,7 +45,7 @@ export function BudgetPlanner({ items, onPlanChange }: BudgetPlannerProps) {
     setExpandedRooms((current) => {
       const next = { ...current };
       for (const room of rooms) {
-        if (next[room] === undefined) next[room] = true;
+        if (next[room] === undefined) next[room] = false;
       }
       return next;
     });
@@ -147,7 +147,7 @@ export function BudgetPlanner({ items, onPlanChange }: BudgetPlannerProps) {
       {rooms.map((room) => {
         const roomItems = itemsByRoom.get(room) ?? [];
         const roomIncluded = includedRooms[room] ?? true;
-        const roomExpanded = expandedRooms[room] ?? true;
+        const roomExpanded = expandedRooms[room] ?? false;
 
         return (
           <section
@@ -269,37 +269,41 @@ export function BudgetPlanner({ items, onPlanChange }: BudgetPlannerProps) {
                           />
                         </label>
 
-                        <div className="min-w-0 flex-1 lg:grid lg:grid-cols-[auto_5.5rem_11.7rem_5.5rem_4.5rem] lg:items-center lg:gap-x-2">
-                          <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                            save
-                          </span>
-                          <span className="text-right text-xs font-medium tabular-nums text-slate-700">
-                            {formatCurrency(item.low_amount)}
-                          </span>
-                          <div className="col-span-1 w-[11.7rem] max-lg:my-1">
-                            <input
-                              type="range"
-                              min={0}
-                              max={100}
-                              step={1}
-                              value={percent}
-                              disabled={!itemIncluded}
-                              onChange={(event) =>
-                                setSliderPercents((current) => ({
-                                  ...current,
-                                  [item.id]: Number(event.target.value),
-                                }))
-                              }
-                              className="budget-range h-2 w-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-                              aria-label={`${item.item_description} budget slider`}
-                            />
+                        <div className="flex min-w-0 flex-1 items-center justify-center">
+                          <div className="grid grid-cols-[5.5rem_11.7rem_5.5rem_4.5rem] items-center gap-x-2 max-lg:my-1 max-lg:w-full">
+                            <div className="flex w-[5.5rem] items-center justify-end gap-[2ch]">
+                              <span className="shrink-0 text-xs font-medium uppercase tracking-wide text-slate-500">
+                                save
+                              </span>
+                              <span className="text-right text-xs font-medium tabular-nums text-slate-700">
+                                {formatCurrency(item.low_amount)}
+                              </span>
+                            </div>
+                            <div className="w-[11.7rem]">
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                step={1}
+                                value={percent}
+                                disabled={!itemIncluded}
+                                onChange={(event) =>
+                                  setSliderPercents((current) => ({
+                                    ...current,
+                                    [item.id]: Number(event.target.value),
+                                  }))
+                                }
+                                className="budget-range h-2 w-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                                aria-label={`${item.item_description} budget slider`}
+                              />
+                            </div>
+                            <span className="text-right text-xs font-medium tabular-nums text-slate-700">
+                              {formatCurrency(item.high_amount)}
+                            </span>
+                            <span className="text-right text-xs font-medium uppercase tracking-wide text-slate-500">
+                              splurge
+                            </span>
                           </div>
-                          <span className="text-right text-xs font-medium tabular-nums text-slate-700">
-                            {formatCurrency(item.high_amount)}
-                          </span>
-                          <span className="text-right text-xs font-medium uppercase tracking-wide text-slate-500">
-                            splurge
-                          </span>
                         </div>
 
                         <div className="shrink-0 text-right lg:min-w-[6.5rem]">
