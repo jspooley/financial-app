@@ -160,25 +160,44 @@ export default function BudgetToolPage() {
         }
       />
 
-      <div className="mb-4 flex flex-wrap gap-2">
-        <button
-          type="button"
-          className={viewButtonClass(view === "planner")}
-          onClick={() => {
-            setView("planner");
-            setShowForm(false);
-            setEditing(null);
-          }}
-        >
-          Budget Tool
-        </button>
-        <button
-          type="button"
-          className={viewButtonClass(view === "items")}
-          onClick={() => setView("items")}
-        >
-          Manage Items
-        </button>
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className={viewButtonClass(view === "planner")}
+            onClick={() => {
+              setView("planner");
+              setShowForm(false);
+              setEditing(null);
+            }}
+          >
+            Budget Tool
+          </button>
+          <button
+            type="button"
+            className={viewButtonClass(view === "items")}
+            onClick={() => setView("items")}
+          >
+            Manage Items
+          </button>
+        </div>
+
+        {view === "items" && !showForm && (
+          <SelectField
+            label="Filter by room"
+            value={roomFilter}
+            onChange={(event) => setRoomFilter(event.target.value)}
+            disabled={loading}
+            className="w-full min-w-[12rem] sm:w-56"
+          >
+            <option value="">All rooms</option>
+            {roomFilterOptions.map((room) => (
+              <option key={room} value={room}>
+                {room}
+              </option>
+            ))}
+          </SelectField>
+        )}
       </div>
 
       {needsDbSetup && (
@@ -229,24 +248,7 @@ export default function BudgetToolPage() {
       ) : loading ? (
         <p className="text-sm text-slate-500">Loading budget items...</p>
       ) : (
-        <>
-          <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <SelectField
-              label="Filter by room"
-              value={roomFilter}
-              onChange={(event) => setRoomFilter(event.target.value)}
-              className="max-w-xs"
-            >
-              <option value="">All rooms</option>
-              {roomFilterOptions.map((room) => (
-                <option key={room} value={room}>
-                  {room}
-                </option>
-              ))}
-            </SelectField>
-          </div>
-
-          <DataTable
+        <DataTable
             stickyFirstColumn
             mobileTitleKey="description"
             columns={[
@@ -281,7 +283,6 @@ export default function BudgetToolPage() {
                 : "No budget items yet."
             }
           />
-        </>
       )}
     </AppShell>
   );
