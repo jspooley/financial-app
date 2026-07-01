@@ -188,7 +188,7 @@ export default function BudgetToolPage() {
             value={roomFilter}
             onChange={(event) => setRoomFilter(event.target.value)}
             disabled={loading}
-            className="w-full min-w-[12rem] sm:w-56"
+            className="w-full min-w-48 sm:w-56"
           >
             <option value="">All rooms</option>
             {roomFilterOptions.map((room) => (
