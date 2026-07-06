@@ -1,7 +1,17 @@
 import { getLedgerOutstandingBalance } from "@/lib/invoice-utils";
 import { computePlTotals, ledgerLineGrossProfit, ledgerLineNetProfit } from "@/lib/pl-report";
 import type { LedgerEntry } from "@/lib/types";
-import { formatCurrency, formatDate, formatQuantity, getLedgerCustomerPrice, getLedgerInvoicedAmount, getLedgerRetailSubtotal, getLedgerTotalDesignerCost } from "@/lib/utils";
+import {
+  formatCurrency,
+  formatDate,
+  formatPercent,
+  formatQuantity,
+  getLedgerCustomerPrice,
+  getLedgerInvoicedAmount,
+  getLedgerRetailSubtotal,
+  getLedgerTotalDesignerCost,
+  roundMoney,
+} from "@/lib/utils";
 
 export function ledgerTaxDisplay(entry: LedgerEntry) {
   return entry.wholesale_retail === "retail"
@@ -52,6 +62,14 @@ export function ledgerDetailFields(
           : "—",
     },
     {
+      label: "Gross Profit",
+      value: formatCurrency(ledgerLineGrossProfit(entry, invoicedPoKeys)),
+    },
+    {
+      label: "Net Profit",
+      value: formatCurrency(ledgerLineNetProfit(entry, invoicedPoKeys)),
+    },
+    {
       label: "Expense",
       value: entry.credit_debit === "debit" ? (entry.expense ? "Yes" : "No") : "—",
     },
@@ -83,14 +101,6 @@ export function ledgerDetailFields(
     {
       label: "Total Designer Cost",
       value: formatCurrency(getLedgerTotalDesignerCost(entry)),
-    },
-    {
-      label: "Gross Profit",
-      value: formatCurrency(ledgerLineGrossProfit(entry, invoicedPoKeys)),
-    },
-    {
-      label: "Net Profit",
-      value: formatCurrency(ledgerLineNetProfit(entry, invoicedPoKeys)),
     },
     { label: "PO", value: entry.po_number ?? "—" },
     { label: "Type", value: `${entry.credit_debit} / ${entry.wholesale_retail}` },
@@ -158,7 +168,68 @@ export function ledgerProfitFooterRow(
   const { grossProfit, netProfit } = computePlTotals(entries, invoicedPoKeys);
   return {
     actions: "",
-    client: "Total",
+    client: "Totals",
+    grossProfit: formatCurrency(grossProfit),
+    netProfit: formatCurrency(netProfit),
+  };
+}
+
+/** Column header totals for goods and services (numeric fields only). */
+export function ledgerDebitColumnTotals(
+  entries: LedgerEntry[],
+  invoicedPoKeys?: Set<string>
+): Record<string, string> {
+  if (entries.length === 0) return {};
+
+  let discountSum = 0;
+  let retailPrice = 0;
+  let retailPriceQty = 0;
+  let customerPrice = 0;
+  let tax = 0;
+  let shipping = 0;
+  let paymentFee = 0;
+  let invoicedAmount = 0;
+  let outstandingBalance = 0;
+  let paidAmount = 0;
+  let expenseAmount = 0;
+  let designerCost = 0;
+  let totalDesignerCost = 0;
+
+  for (const entry of entries) {
+    discountSum += Number(entry.discount_percent);
+    retailPrice += Number(entry.retail_price ?? 0);
+    retailPriceQty += getLedgerRetailSubtotal(entry);
+    customerPrice += getLedgerCustomerPrice(entry);
+    if (entry.wholesale_retail === "wholesale") {
+      tax += Number(entry.tax_amount);
+    }
+    shipping += Number(entry.shipping_receiving_amount ?? 0);
+    paymentFee += Number(entry.payment_fee ?? 0);
+    invoicedAmount += getLedgerInvoicedAmount(entry);
+    outstandingBalance += getLedgerOutstandingBalance(entry);
+    paidAmount += Number(entry.payment_amount ?? 0);
+    expenseAmount += Number(entry.expense_amount ?? 0);
+    designerCost += Number(entry.designer_cost);
+    totalDesignerCost += getLedgerTotalDesignerCost(entry);
+  }
+
+  const { grossProfit, netProfit } = computePlTotals(entries, invoicedPoKeys);
+  const avgDiscount = discountSum / entries.length;
+
+  return {
+    discount: formatPercent(avgDiscount),
+    retailPrice: formatCurrency(roundMoney(retailPrice)),
+    retailPriceQty: formatCurrency(roundMoney(retailPriceQty)),
+    customerPrice: formatCurrency(roundMoney(customerPrice)),
+    tax: formatCurrency(roundMoney(tax)),
+    shipping: formatCurrency(roundMoney(shipping)),
+    paymentFee: formatCurrency(roundMoney(paymentFee)),
+    invoicedAmount: formatCurrency(roundMoney(invoicedAmount)),
+    outstandingBalance: formatCurrency(roundMoney(outstandingBalance)),
+    paidAmount: formatCurrency(roundMoney(paidAmount)),
+    expenseAmount: formatCurrency(roundMoney(expenseAmount)),
+    designerCost: formatCurrency(roundMoney(designerCost)),
+    totalDesignerCost: formatCurrency(roundMoney(totalDesignerCost)),
     grossProfit: formatCurrency(grossProfit),
     netProfit: formatCurrency(netProfit),
   };
@@ -180,6 +251,8 @@ export const ledgerDebitColumns = [
   { key: "invoiced", label: "Invoiced" },
   { key: "invoiceId", label: "Invoice ID" },
   { key: "paidAmount", label: "Paid Amount" },
+  { key: "grossProfit", label: "Gross Profit" },
+  { key: "netProfit", label: "Net Profit" },
   { key: "expense", label: "Expense" },
   { key: "expenseAmount", label: "Expense Amount" },
   { key: "paid", label: "Paid" },
@@ -188,14 +261,68 @@ export const ledgerDebitColumns = [
   { key: "datePaid", label: "Date Paid" },
   { key: "designerCost", label: "Designer Cost" },
   { key: "totalDesignerCost", label: "Total Designer Cost" },
-  { key: "grossProfit", label: "Gross Profit" },
-  { key: "netProfit", label: "Net Profit" },
   { key: "retailPrice", label: "Retail Price" },
   { key: "retailPriceQty", label: "Retail Price × Qty" },
   { key: "po", label: "PO" },
   { key: "type", label: "Type" },
   { key: "salesUseTaxPaid", label: "Sales and Use Tax Paid" },
 ] as const;
+
+function csvEscape(value: string | number | null | undefined): string {
+  const text = String(value ?? "");
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+/** CSV for goods and services rows, including calculated gross/net profit and a totals row. */
+export function buildGoodsAndServicesLedgerCsv(
+  entries: LedgerEntry[],
+  invoicedPoKeys?: Set<string>
+): string {
+  const columns = ledgerDebitColumns;
+  const lines = [columns.map((column) => csvEscape(column.label)).join(",")];
+
+  for (const entry of entries) {
+    const row = mapLedgerTableRow(entry, invoicedPoKeys);
+    lines.push(
+      columns
+        .map((column) => csvEscape(row[column.key as keyof typeof row] as string))
+        .join(",")
+    );
+  }
+
+  if (entries.length > 0) {
+    const totals = ledgerDebitColumnTotals(entries, invoicedPoKeys);
+    lines.push(
+      columns
+        .map((column) => {
+          if (column.key === "client") return csvEscape("Totals");
+          const total = totals[column.key];
+          return total ? csvEscape(total) : "";
+        })
+        .join(",")
+    );
+  }
+
+  return `\uFEFF${lines.join("\r\n")}`;
+}
+
+export function downloadGoodsAndServicesLedgerCsv(
+  entries: LedgerEntry[],
+  invoicedPoKeys?: Set<string>
+) {
+  const csv = buildGoodsAndServicesLedgerCsv(entries, invoicedPoKeys);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const date = new Date().toISOString().slice(0, 10);
+  link.href = url;
+  link.download = `ledger-goods-and-services-${date}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
 
 export const ledgerDetailColumns = [
   { key: "client", label: "Client" },
@@ -214,6 +341,8 @@ export const ledgerDetailColumns = [
   { key: "invoiced", label: "Invoiced" },
   { key: "invoiceId", label: "Invoice ID" },
   { key: "paidAmount", label: "Paid Amount" },
+  { key: "grossProfit", label: "Gross Profit" },
+  { key: "netProfit", label: "Net Profit" },
   { key: "expense", label: "Expense" },
   { key: "expenseAmount", label: "Expense Amount" },
   { key: "paid", label: "Paid" },
@@ -222,8 +351,6 @@ export const ledgerDetailColumns = [
   { key: "datePaid", label: "Date Paid" },
   { key: "designerCost", label: "Designer Cost" },
   { key: "totalDesignerCost", label: "Total Designer Cost" },
-  { key: "grossProfit", label: "Gross Profit" },
-  { key: "netProfit", label: "Net Profit" },
   { key: "po", label: "PO" },
   { key: "type", label: "Type" },
   { key: "salesUseTaxPaid", label: "Sales and Use Tax Paid" },

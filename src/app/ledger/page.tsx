@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
@@ -16,7 +16,8 @@ import {
   poNumbersForClient,
   poNumbersFromLedgerEntries,
 } from "@/lib/client-po-db";
-import { ledgerDetailFields, ledgerDetailColumns, ledgerDebitColumns, ledgerProfitFooterRow, mapLedgerTableRow } from "@/lib/ledger-display";
+import { ledgerDetailFields, ledgerDetailColumns, ledgerDebitColumns, ledgerDebitColumnTotals, mapLedgerTableRow, downloadGoodsAndServicesLedgerCsv } from "@/lib/ledger-display";
+import { computePlTotals } from "@/lib/pl-report";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { Client, ClientPoNumber, LedgerEntry, TradePartner } from "@/lib/types";
@@ -29,6 +30,41 @@ import {
 import { SelectField } from "@/components/ui/FormFields";
 
 const GOODS_AND_SERVICES_LABEL = "Goods and Services";
+
+function GoodsAndServicesSectionHeader({
+  entryCount,
+  budgetLabel,
+  onDownloadCsv,
+  downloadDisabled,
+}: {
+  entryCount: number;
+  budgetLabel?: ReactNode;
+  onDownloadCsv: () => void;
+  downloadDisabled: boolean;
+}) {
+  return (
+    <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h2 className="text-lg font-semibold text-slate-900">
+          {GOODS_AND_SERVICES_LABEL} ({entryCount})
+          {budgetLabel}
+        </h2>
+        <p className="mt-1 text-sm text-slate-500">
+          {GOODS_AND_SERVICES_LABEL} — includes Invoiced, Invoice ID, Paid, and payment
+          columns.
+        </p>
+      </div>
+      <Button
+        type="button"
+        className="shrink-0"
+        disabled={downloadDisabled}
+        onClick={onDownloadCsv}
+      >
+        Download Table
+      </Button>
+    </div>
+  );
+}
 
 function entryMatchesLedgerFilters(
   entry: LedgerEntry,
@@ -246,14 +282,14 @@ function LedgerPageContent() {
   const debitEntries = visibleEntries.filter((entry) => entry.credit_debit === "debit");
   const creditEntries = visibleEntries.filter((entry) => entry.credit_debit === "credit");
 
-  const debitProfitFooter = useMemo(
-    () => ledgerProfitFooterRow(debitEntries, invoicedPoKeys),
+  const debitColumnTotals = useMemo(
+    () => ledgerDebitColumnTotals(debitEntries, invoicedPoKeys),
     [debitEntries, invoicedPoKeys]
   );
-  const creditProfitFooter = useMemo(
-    () => ledgerProfitFooterRow(creditEntries, invoicedPoKeys),
-    [creditEntries, invoicedPoKeys]
-  );
+
+  const handleDownloadGoodsAndServicesCsv = useCallback(() => {
+    downloadGoodsAndServicesLedgerCsv(debitEntries, invoicedPoKeys);
+  }, [debitEntries, invoicedPoKeys]);
 
   const poBudgetSummary = useMemo(() => {
     if (!filterClientId || !filterPo) return null;
@@ -459,9 +495,8 @@ function LedgerPageContent() {
               )}
             </p>
             <p className="mt-1 text-slate-500">
-              Client debits are the default when you add an entry. Scroll down to the{" "}
-              <strong>{GOODS_AND_SERVICES_LABEL}</strong> section — on desktop, scroll the table
-              left/right for all columns including Invoiced and Paid.
+              <strong>Gross Profit</strong> and <strong>Net Profit</strong> per row appear after
+              Paid Amount. The goods and services table footer sums those columns.
             </p>
             {entries.length > 0 && debitEntries.length === 0 && (
               <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950">
@@ -479,10 +514,18 @@ function LedgerPageContent() {
               { title: "Credits", rows: creditEntries },
             ].map((group) => (
               <section key={group.title} className="space-y-3">
-                <h2 className="text-lg font-semibold text-slate-900">
-                  {group.title} ({group.rows.length})
-                  {group.title === GOODS_AND_SERVICES_LABEL && debitsBudgetLabel()}
-                </h2>
+                {group.title === GOODS_AND_SERVICES_LABEL ? (
+                  <GoodsAndServicesSectionHeader
+                    entryCount={group.rows.length}
+                    budgetLabel={debitsBudgetLabel()}
+                    onDownloadCsv={handleDownloadGoodsAndServicesCsv}
+                    downloadDisabled={debitEntries.length === 0}
+                  />
+                ) : (
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    {group.title} ({group.rows.length})
+                  </h2>
+                )}
                 {group.rows.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-slate-300 bg-white p-5 text-sm text-slate-500">
                     No{" "}
@@ -492,7 +535,8 @@ function LedgerPageContent() {
                     yet.
                   </div>
                 ) : (
-                  group.rows.map((entry) => (
+                  <>
+                  {group.rows.map((entry) => (
                     <article
                       key={entry.id}
                       className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
@@ -515,7 +559,33 @@ function LedgerPageContent() {
                         ))}
                       </dl>
                     </article>
-                  ))
+                  ))}
+                  {group.title === GOODS_AND_SERVICES_LABEL ? (
+                    <article className="rounded-xl border border-slate-300 bg-slate-50 p-4 shadow-sm">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Goods and services profit totals
+                      </p>
+                      <dl className="mt-3 space-y-2 text-sm">
+                        <div className="flex justify-between gap-3">
+                          <dt className="text-slate-600">Gross Profit</dt>
+                          <dd className="font-semibold text-slate-900">
+                            {formatCurrency(
+                              computePlTotals(group.rows, invoicedPoKeys).grossProfit
+                            )}
+                          </dd>
+                        </div>
+                        <div className="flex justify-between gap-3">
+                          <dt className="text-slate-600">Net Profit</dt>
+                          <dd className="font-semibold text-slate-900">
+                            {formatCurrency(
+                              computePlTotals(group.rows, invoicedPoKeys).netProfit
+                            )}
+                          </dd>
+                        </div>
+                      </dl>
+                    </article>
+                  ) : null}
+                  </>
                 )}
               </section>
             ))}
@@ -523,16 +593,16 @@ function LedgerPageContent() {
 
           <div className="hidden space-y-6 md:block">
             <section>
-              <h2 className="mb-1 text-lg font-semibold text-slate-900">
-                {GOODS_AND_SERVICES_LABEL} ({debitEntries.length})
-                {debitsBudgetLabel()}
-              </h2>
-              <p className="mb-3 text-sm text-slate-500">
-                {GOODS_AND_SERVICES_LABEL} — includes Invoiced, Invoice ID, Paid, and payment
-                columns.
-              </p>
+              <GoodsAndServicesSectionHeader
+                entryCount={debitEntries.length}
+                budgetLabel={debitsBudgetLabel()}
+                onDownloadCsv={handleDownloadGoodsAndServicesCsv}
+                downloadDisabled={debitEntries.length === 0}
+              />
               <DataTable
                 stickyFirstColumn
+                stickyHeader
+                maxBodyHeight="calc(100dvh - 14rem)"
                 mobileTitleKey="client"
                 rowKey={(_, index) => debitEntries[index]?.id ?? String(index)}
                 columns={[
@@ -543,7 +613,7 @@ function LedgerPageContent() {
                   ...mapLedgerTableRow(entry, invoicedPoKeys),
                   actions: entryActions(entry),
                 }))}
-                footerRow={debitProfitFooter}
+                columnTotals={debitColumnTotals}
                 emptyMessage="No goods and services entries yet."
               />
             </section>
@@ -565,7 +635,6 @@ function LedgerPageContent() {
                 ...mapLedgerTableRow(entry, invoicedPoKeys),
                 actions: entryActions(entry),
               }))}
-              footerRow={creditProfitFooter}
               emptyMessage="No credit entries yet."
             />
             </section>

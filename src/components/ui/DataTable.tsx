@@ -5,10 +5,18 @@ interface DataTableProps {
   rowKey?: (row: Record<string, React.ReactNode>, index: number) => string;
   stickyLastColumn?: boolean;
   stickyFirstColumn?: boolean;
+  /** Keep column header row visible while scrolling (desktop table). */
+  stickyHeader?: boolean;
+  /** Max height for the desktop table body; enables vertical scroll with sticky header. */
+  maxBodyHeight?: string;
+  /** Totals shown in parentheses under column labels on desktop (replaces footer row). */
+  columnTotals?: Record<string, React.ReactNode>;
   /** Primary field shown as card title on mobile (defaults to first column). */
   mobileTitleKey?: string;
   /** Optional footer row; keys should match column keys. */
   footerRow?: Record<string, React.ReactNode>;
+  /** Mobile footer heading (defaults to "Totals"). */
+  footerTitle?: string;
 }
 
 function resolveRowKey(
@@ -29,8 +37,12 @@ export function DataTable({
   rowKey,
   stickyLastColumn = false,
   stickyFirstColumn = false,
+  stickyHeader = false,
+  maxBodyHeight,
+  columnTotals,
   mobileTitleKey,
   footerRow,
+  footerTitle = "Totals",
 }: DataTableProps) {
   if (rows.length === 0) {
     return (
@@ -52,11 +64,15 @@ export function DataTable({
     "sticky right-0 z-10 bg-white shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]";
   const stickyRightHeader =
     "sticky right-0 z-10 bg-slate-50 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]";
+  const stickyTopHeader = "sticky top-0 z-20 bg-slate-50 shadow-[0_1px_0_0_rgb(226,232,240)]";
+  const stickyTopLeftHeader =
+    "sticky left-0 top-0 z-30 bg-slate-50 shadow-[4px_1px_8px_-4px_rgba(0,0,0,0.08)]";
   const detailColumns = columns.filter(
     (column) => column.key !== titleKey && column.key !== "actions"
   );
   const actionsColumn = columns.find((column) => column.key === "actions");
   const actionsFirst = firstColumnKey === "actions";
+  const desktopFooterRow = columnTotals ? undefined : footerRow;
 
   return (
     <>
@@ -88,7 +104,7 @@ export function DataTable({
         {footerRow && (
           <article className="rounded-xl border border-slate-300 bg-slate-50 p-4 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Totals (all invoiced lines)
+              {footerTitle}
             </p>
             <dl className="mt-3 space-y-2 text-sm">
               {columns.map((column) =>
@@ -106,22 +122,45 @@ export function DataTable({
         )}
       </div>
 
-      <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
+      <div
+        className={`hidden rounded-xl border border-slate-200 bg-white shadow-sm md:block ${
+          maxBodyHeight ? "overflow-auto" : "overflow-x-auto"
+        }`}
+        style={maxBodyHeight ? { maxHeight: maxBodyHeight } : undefined}
+      >
         <table className="min-w-full divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50">
             <tr>
-              {columns.map((column) => (
+              {columns.map((column) => {
+                const total = columnTotals?.[column.key];
+                const showTotal = total != null && total !== "";
+
+                return (
                 <th
                   key={column.key}
                   className={`px-4 py-3 text-left font-medium text-slate-600 ${column.className ?? ""} ${
-                    stickyFirstColumn && column.key === firstColumnKey ? stickyLeftHeader : ""
+                    stickyHeader && stickyFirstColumn && column.key === firstColumnKey
+                      ? stickyTopLeftHeader
+                      : stickyHeader
+                        ? stickyTopHeader
+                        : ""
+                  } ${
+                    !stickyHeader && stickyFirstColumn && column.key === firstColumnKey
+                      ? stickyLeftHeader
+                      : ""
                   } ${
                     stickyLastColumn && column.key === lastColumnKey ? stickyRightHeader : ""
                   }`}
                 >
-                  {column.label}
+                  <span className="block whitespace-nowrap">{column.label}</span>
+                  {showTotal ? (
+                    <span className="mt-0.5 block whitespace-nowrap text-xs font-semibold text-slate-900">
+                      ({total})
+                    </span>
+                  ) : null}
                 </th>
-              ))}
+                );
+              })}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -146,7 +185,7 @@ export function DataTable({
               </tr>
             ))}
           </tbody>
-          {footerRow && (
+          {desktopFooterRow && (
             <tfoot className="border-t-2 border-slate-300 bg-slate-50">
               <tr>
                 {columns.map((column) => (
@@ -162,7 +201,7 @@ export function DataTable({
                         : ""
                     }`}
                   >
-                    {footerRow[column.key]}
+                    {desktopFooterRow[column.key]}
                   </td>
                 ))}
               </tr>
