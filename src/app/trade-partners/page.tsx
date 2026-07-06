@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
 import { createClient } from "@/lib/supabase/client";
 import type { TradePartner } from "@/lib/types";
-import { formatCurrency, formatDate, formatPercent } from "@/lib/utils";
+import { formatCurrency, formatDate, formatPercent, calculateTradeDiscountPercentFromPricing } from "@/lib/utils";
 
 export default function TradePartnersPage() {
   const [partners, setPartners] = useState<TradePartner[]>([]);
@@ -102,11 +102,21 @@ export default function TradePartnersPage() {
           columns={[
             { key: "actions", label: "Actions" },
             { key: "company", label: "Company" },
+            { key: "retailPrice", label: "Retail Price" },
+            { key: "designerCost", label: "Designer Cost" },
             { key: "discount", label: "Discount (%)" },
             { key: "map", label: "MAP" },
             { key: "expires", label: "MAP Expires" },
           ]}
-          rows={partners.map((partner) => ({
+          rows={partners.map((partner) => {
+            const retail = Number(partner.retail_price ?? 0);
+            const designer = Number(partner.designer_cost ?? 0);
+            const discount =
+              retail > 0
+                ? calculateTradeDiscountPercentFromPricing(retail, designer)
+                : Number(partner.discount_amount ?? 0);
+
+            return {
             actions: (
               <RowActions
                 onEdit={() => {
@@ -117,10 +127,13 @@ export default function TradePartnersPage() {
               />
             ),
             company: partner.company_name,
-            discount: formatPercent(Number(partner.discount_amount)),
+            retailPrice: retail > 0 ? formatCurrency(retail) : "—",
+            designerCost: designer > 0 ? formatCurrency(designer) : "—",
+            discount: formatPercent(discount),
             map: formatCurrency(Number(partner.minimum_purchase_amount)),
             expires: formatDate(partner.map_expiration),
-          }))}
+          };
+          })}
           emptyMessage="No trade partners yet."
         />
       )}

@@ -14,9 +14,9 @@ import { SelectField, selectFieldClass } from "@/components/ui/FormFields";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { InvoiceLineItem } from "@/lib/invoice-utils";
-import { groupLedgerByInvoiceId, isInvoiceFullyPaid, isLedgerLineUninvoiced, summarizeToBeInvoiced } from "@/lib/invoice-utils";
+import { getLedgerLinesForInvoice, isInvoiceFullyPaid, isInvoicedDebitLine, isLedgerLineUninvoiced, ledgerLineAmount, normalizeInvoiceId, sumInvoiceHistoryTotal, summarizeToBeInvoiced } from "@/lib/invoice-utils";
 import type { Client, Invoice, LedgerEntry } from "@/lib/types";
-import { formatCurrency, formatDate, getLedgerInvoicedAmount, roundMoney } from "@/lib/utils";
+import { formatCurrency, formatDate, roundMoney } from "@/lib/utils";
 
 type InvoiceView = "outstanding" | "history";
 
@@ -40,7 +40,6 @@ export default function InvoicingPage() {
     lines: InvoiceLineItem[];
   } | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [invoiceAmounts, setInvoiceAmounts] = useState<Record<string, number>>({});
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -54,21 +53,17 @@ export default function InvoicingPage() {
         supabase.from("clients").select("*").order("name", { ascending: true }),
         supabase.from("ledger").select("*, clients(name)"),
       ]);
-    setInvoices((invoiceData ?? []) as Invoice[]);
+    setInvoices(
+      ((invoiceData ?? []) as Invoice[]).map((invoice) => ({
+        ...invoice,
+        invoice_id: normalizeInvoiceId(invoice.invoice_id) || invoice.invoice_id,
+      }))
+    );
     setClients(clientData ?? []);
     const normalizedLedger = (ledgerData ?? []).map((row) =>
       normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
     );
     setLedgerEntries(normalizedLedger);
-    const amounts: Record<string, number> = {};
-    for (const entry of normalizedLedger) {
-      const invoiceId = entry.invoice_id?.trim();
-      if (!invoiceId) continue;
-      amounts[invoiceId] = roundMoney(
-        (amounts[invoiceId] ?? 0) + getLedgerInvoicedAmount(entry)
-      );
-    }
-    setInvoiceAmounts(amounts);
     setLoading(false);
   }, []);
 
@@ -113,13 +108,13 @@ export default function InvoicingPage() {
   }, [invoices, clients]);
 
   const filteredUninvoiced = useMemo(() => {
-    if (!selectedClientId) return [];
-    return uninvoicedEntries
-      .filter((entry) => entry.client_id === selectedClientId)
-      .sort((a, b) => b.entry_date.localeCompare(a.entry_date));
+    const rows = selectedClientId
+      ? uninvoicedEntries.filter((entry) => entry.client_id === selectedClientId)
+      : uninvoicedEntries;
+    return rows.sort((a, b) => b.entry_date.localeCompare(a.entry_date));
   }, [uninvoicedEntries, selectedClientId]);
 
-  const clientToBeInvoiced = useMemo(
+  const toBeInvoicedSummary = useMemo(
     () => summarizeToBeInvoiced(filteredUninvoiced),
     [filteredUninvoiced]
   );
@@ -131,26 +126,38 @@ export default function InvoicingPage() {
     return rows;
   }, [invoices, historyClientId]);
 
+  const invoiceAmounts = useMemo(() => {
+    const amounts: Record<string, number> = {};
+    for (const invoice of invoices) {
+      const invoiceId = normalizeInvoiceId(invoice.invoice_id);
+      if (!invoiceId) continue;
+      const lines = getLedgerLinesForInvoice(ledgerEntries, invoiceId).filter(
+        isInvoicedDebitLine
+      );
+      amounts[invoiceId] = roundMoney(
+        lines.reduce((sum, entry) => sum + ledgerLineAmount(entry), 0)
+      );
+    }
+    return amounts;
+  }, [invoices, ledgerEntries]);
+
   const invoicePaidById = useMemo(() => {
-    const grouped = groupLedgerByInvoiceId(
-      ledgerEntries.filter((entry) => entry.invoice_id) as InvoiceLineItem[]
-    );
     const result: Record<string, boolean> = {};
-    for (const [invoiceId, lines] of grouped) {
+    for (const invoice of invoices) {
+      const invoiceId = normalizeInvoiceId(invoice.invoice_id);
+      if (!invoiceId) continue;
+      const lines = getLedgerLinesForInvoice(ledgerEntries, invoiceId).filter(
+        isInvoicedDebitLine
+      );
+      if (lines.length === 0) continue;
       result[invoiceId] = isInvoiceFullyPaid(lines);
     }
     return result;
-  }, [ledgerEntries]);
+  }, [invoices, ledgerEntries]);
 
   const historyInvoiceTotal = useMemo(
-    () =>
-      roundMoney(
-        filteredInvoices.reduce((sum, invoice) => {
-          const invoiceId = invoice.invoice_id ?? "";
-          return sum + (invoiceAmounts[invoiceId] ?? 0);
-        }, 0)
-      ),
-    [filteredInvoices, invoiceAmounts]
+    () => sumInvoiceHistoryTotal(filteredInvoices, ledgerEntries),
+    [filteredInvoices, ledgerEntries]
   );
 
   useEffect(() => {
@@ -244,7 +251,9 @@ export default function InvoicingPage() {
         mobileTitleKey="client"
         stickyFirstColumn
         stickyLastColumn
-        rowKey={(_, index) => rows[index]?.id ?? String(index)}
+        rowKey={(_, index) =>
+          rows[index]?.id ?? normalizeInvoiceId(rows[index]?.invoice_id) ?? String(index)
+        }
         columns={[
           { key: "actions", label: "Actions" },
           { key: "invoiceId", label: "Invoice ID" },
@@ -256,7 +265,7 @@ export default function InvoicingPage() {
           { key: "viewInvoice", label: "View", className: "text-right" },
         ]}
         rows={rows.map((invoice) => {
-          const invoiceId = invoice.invoice_id ?? "";
+          const invoiceId = normalizeInvoiceId(invoice.invoice_id);
           const isPaid = invoicePaidById[invoiceId] ?? false;
           return {
             actions: (
@@ -354,7 +363,7 @@ export default function InvoicingPage() {
                       value={selectedClientId}
                       onChange={(event) => setSelectedClientId(event.target.value)}
                     >
-                      <option value="">Select client...</option>
+                      <option value="">All clients</option>
                       {clientsWithUninvoiced.map((client) => (
                         <option key={client.id} value={client.id}>
                           {client.name}
@@ -371,7 +380,8 @@ export default function InvoicingPage() {
                     </Button>
                   </div>
                   <span className="mt-1.5 block text-xs text-slate-500">
-                    Select a client to view uninvoiced items or create a new invoice.
+                    Leave blank to view all uninvoiced items, or select a client to filter.
+                    Choose a client to create a new invoice.
                   </span>
                 </label>
               </div>
@@ -392,28 +402,26 @@ export default function InvoicingPage() {
                     </Button>
                   )}
                 </div>
-              ) : !selectedClientId ? (
-                <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
-                  Select a client to view uninvoiced ledger items.
-                </div>
               ) : (
                 <>
                   <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                     <p className="text-xs uppercase tracking-wide text-slate-500">
-                      To Be Invoiced
+                      {selectedClientId ? "To Be Invoiced" : "To Be Invoiced (all clients)"}
                     </p>
                     <p className="mt-1 text-2xl font-semibold text-slate-900">
-                      {formatCurrency(clientToBeInvoiced.amount)}
+                      {formatCurrency(toBeInvoicedSummary.amount)}
                     </p>
-                    {clientToBeInvoiced.count === 0 ? (
+                    {toBeInvoicedSummary.count === 0 ? (
                       <p className="mt-1 text-sm text-slate-600">
-                        No outstanding items to be invoiced for this client
+                        {selectedClientId
+                          ? "No outstanding items to be invoiced for this client"
+                          : "No outstanding items to be invoiced"}
                       </p>
                     ) : (
                       <>
                         <p className="mt-1 text-sm text-slate-600">
-                          {clientToBeInvoiced.count} outstanding{" "}
-                          {clientToBeInvoiced.count === 1 ? "item" : "items"} to be
+                          {toBeInvoicedSummary.count} outstanding{" "}
+                          {toBeInvoicedSummary.count === 1 ? "item" : "items"} to be
                           invoiced
                         </p>
                         <Link
@@ -428,7 +436,9 @@ export default function InvoicingPage() {
 
                   {filteredUninvoiced.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
-                      No uninvoiced ledger items for this client.
+                      {selectedClientId
+                        ? "No uninvoiced ledger items for this client."
+                        : "No uninvoiced ledger items."}
                     </div>
                   ) : (
                     <DataTable
@@ -436,6 +446,9 @@ export default function InvoicingPage() {
                       rowKey={(_, index) => filteredUninvoiced[index]?.id ?? String(index)}
                       columns={[
                         { key: "date", label: "Date" },
+                        ...(selectedClientId
+                          ? []
+                          : [{ key: "client", label: "Client" }]),
                         { key: "po", label: "PO Number" },
                         { key: "description", label: "Description" },
                         {
@@ -446,11 +459,19 @@ export default function InvoicingPage() {
                       ]}
                       rows={filteredUninvoiced.map((entry) => ({
                         date: formatDate(entry.entry_date),
+                        client:
+                          entry.clients?.name ??
+                          clients.find((client) => client.id === entry.client_id)?.name ??
+                          "—",
                         po: entry.po_number ?? "—",
                         description: entry.description?.trim() || "—",
-                        invoicedAmount: formatCurrency(getLedgerInvoicedAmount(entry)),
+                        invoicedAmount: formatCurrency(ledgerLineAmount(entry)),
                       }))}
-                      emptyMessage="No uninvoiced items for this client."
+                      emptyMessage={
+                        selectedClientId
+                          ? "No uninvoiced items for this client."
+                          : "No uninvoiced items."
+                      }
                     />
                   )}
                 </>

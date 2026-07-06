@@ -7,6 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
 import { ledgerFormToDb } from "@/lib/ledger-db";
+import { deriveLedgerPaidFlag } from "@/lib/invoice-utils";
 import type { Client, ClientPoNumber, LedgerEntry, Purchaser, TradePartner } from "@/lib/types";
 import {
   collectClientPoOptions,
@@ -23,6 +24,7 @@ import {
   calculateTaxFromCustomerPrice,
   defaultLedgerDiscountPercent,
   formatCurrency,
+  formatPercent,
   formatMoneyInput,
   formatDate,
   getLedgerInvoicedAmount,
@@ -252,13 +254,12 @@ export function LedgerForm({
   const shippingAmount = useWatch({ control, name: "shipping_receiving_amount" });
   const retailPrice = useWatch({ control, name: "retail_price" });
   const designerCost = useWatch({ control, name: "designer_cost" });
-  const taxAmount = useWatch({ control, name: "tax_amount" });
   const storedPaymentFee = roundMoney(initial?.payment_fee ?? 0);
   const skipPoReset = useRef(true);
   const previousClientIdRef = useRef<string | null>(null);
   const skipDiscountReset = useRef(!!initial);
   const skipDesignerCostReset = useRef(!!initial);
-  const taxManuallyEdited = useRef(false);
+  const filledInitialDiscount = useRef(false);
   const designerCostManuallyEdited = useRef(!!initial);
 
   const numericQty = Number(quantity) || 0;
@@ -284,6 +285,23 @@ export function LedgerForm({
     [tradePartners, selectedTradePartnerId]
   );
 
+  const computedDiscountPercent = useMemo(
+    () =>
+      selectedTradePartner
+        ? defaultLedgerDiscountPercent(Number(selectedTradePartner.discount_amount ?? 0))
+        : 0,
+    [selectedTradePartner]
+  );
+
+  const discountFieldUnset = numericDiscount === 0;
+  const showComputedDiscountLabel =
+    Boolean(initial) &&
+    !discountFieldUnset &&
+    Math.abs(numericDiscount - computedDiscountPercent) > 0.009;
+  const discountFieldLabel = showComputedDiscountLabel
+    ? `Discount (%) (${formatPercent(computedDiscountPercent)})`
+    : "Discount (%)";
+
   const autoDesignerCost = useMemo(
     () =>
       calculateDesignerCostFromTradePartner(
@@ -293,11 +311,7 @@ export function LedgerForm({
     [numericRetailPrice, selectedTradePartner]
   );
 
-  const effectiveTax = isWholesale
-    ? taxManuallyEdited.current
-      ? Number(taxAmount) || 0
-      : autoTax
-    : 0;
+  const effectiveTax = isWholesale ? autoTax : 0;
 
   const effectiveDesignerCost = designerCostManuallyEdited.current
     ? Number(designerCost) || 0
@@ -365,8 +379,8 @@ export function LedgerForm({
       wholesale_retail: wholesaleRetail,
       payment_fee: storedPaymentFee,
       payment_amount: initial.payment_amount,
-      write_off: initial.write_off,
-      write_off_amount: initial.write_off_amount,
+      expense: initial.expense,
+      expense_amount: initial.expense_amount,
     });
   }, [
     initial,
@@ -380,15 +394,8 @@ export function LedgerForm({
   ]);
 
   useEffect(() => {
-    if (!isWholesale) {
-      taxManuallyEdited.current = false;
-      setValue("tax_amount", 0, { shouldValidate: true });
-      return;
-    }
-    if (!taxManuallyEdited.current) {
-      setValue("tax_amount", autoTax, { shouldValidate: true });
-    }
-  }, [isWholesale, autoTax, setValue]);
+    setValue("tax_amount", effectiveTax, { shouldValidate: true });
+  }, [effectiveTax, setValue]);
 
   useEffect(() => {
     if (skipDesignerCostReset.current) {
@@ -401,20 +408,39 @@ export function LedgerForm({
   }, [autoDesignerCost, numericRetailPrice, setValue]);
 
   useEffect(() => {
+    if (!initial || filledInitialDiscount.current) return;
+    if (Number(initial.discount_percent ?? 0) !== 0) {
+      filledInitialDiscount.current = true;
+      return;
+    }
+    const partnerId = initial.trade_partner_id;
+    if (!partnerId) return;
+    const partner = tradePartners.find((tp) => tp.id === partnerId);
+    if (!partner) return;
+    setValue(
+      "discount_percent",
+      defaultLedgerDiscountPercent(Number(partner.discount_amount)),
+      { shouldValidate: true }
+    );
+    filledInitialDiscount.current = true;
+  }, [initial, tradePartners, setValue]);
+
+  useEffect(() => {
     if (skipDiscountReset.current) {
       skipDiscountReset.current = false;
       return;
     }
     if (!selectedTradePartnerId) return;
     const partner = tradePartners.find((tp) => tp.id === selectedTradePartnerId);
-    if (partner) {
-      setValue(
-        "discount_percent",
-        defaultLedgerDiscountPercent(Number(partner.discount_amount))
-      );
-    }
+    if (!partner) return;
+    if (Number(discountPercent) !== 0) return;
+    setValue(
+      "discount_percent",
+      defaultLedgerDiscountPercent(Number(partner.discount_amount)),
+      { shouldValidate: true }
+    );
     designerCostManuallyEdited.current = false;
-  }, [selectedTradePartnerId, tradePartners, setValue]);
+  }, [selectedTradePartnerId, tradePartners, setValue, discountPercent]);
 
   useEffect(() => {
     if (skipPoReset.current) {
@@ -461,17 +487,23 @@ export function LedgerForm({
       discount_percent: values.discount_percent,
       shipping_receiving_amount: values.shipping_receiving_amount,
       retail_price: values.retail_price,
-      tax_amount: values.tax_amount,
-      tax_manually_edited: taxManuallyEdited.current,
+      tax_amount: effectiveTax,
       client_id: values.client_id,
       po_number: poNumber,
       purchaser: values.purchaser,
     });
 
+    const updatePayload = initial
+      ? {
+          ...payload,
+          paid: deriveLedgerPaidFlag({ ...initial, ...payload }),
+        }
+      : payload;
+
     const { data, error: dbError } = initial
       ? await supabase
           .from("ledger")
-          .update(payload)
+          .update(updatePayload)
           .eq("id", initial.id)
           .select("id, po_number")
           .single()
@@ -514,17 +546,8 @@ export function LedgerForm({
     );
   }
 
-  function resetTaxAutoCalc() {
-    taxManuallyEdited.current = false;
-  }
-
   function resetDesignerCostAutoCalc() {
     designerCostManuallyEdited.current = false;
-  }
-
-  function resetAutoCalculatedFields() {
-    resetTaxAutoCalc();
-    resetDesignerCostAutoCalc();
   }
 
   return (
@@ -628,7 +651,7 @@ export function LedgerForm({
               label="Wholesale / Retail"
               required
               error={errors.wholesale_retail?.message}
-              {...register("wholesale_retail", { onChange: resetTaxAutoCalc })}
+              {...register("wholesale_retail")}
             >
               <option value="retail">Retail</option>
               <option value="wholesale">Wholesale</option>
@@ -645,10 +668,7 @@ export function LedgerForm({
             min="0.01"
             required
             error={errors.quantity?.message}
-            {...register("quantity", {
-              valueAsNumber: true,
-              onChange: resetTaxAutoCalc,
-            })}
+            {...register("quantity", { valueAsNumber: true })}
           />
           <CurrencyField
             control={control}
@@ -657,7 +677,7 @@ export function LedgerForm({
             required
             hint="Per-unit retail price before discount."
             error={errors.retail_price?.message}
-            onValueChange={resetAutoCalculatedFields}
+            onValueChange={resetDesignerCostAutoCalc}
           />
           <InputField
             label="Retail Price × Qty"
@@ -712,10 +732,10 @@ export function LedgerForm({
               value={formatCurrency(customerPrice)}
               readOnly
               disabled
-              hint="(Retail price × qty) − (Discount % × retail price × qty)"
+              hint="=( Retail Price x Qty ) x (1 - Discount %)"
             />
             <InputField
-              label="Discount (%)"
+              label={discountFieldLabel}
               type="number"
               step="0.01"
               min="0"
@@ -723,10 +743,7 @@ export function LedgerForm({
               required
               hint="Defaults to half of the trade partner discount."
               error={errors.discount_percent?.message}
-              {...register("discount_percent", {
-                valueAsNumber: true,
-                onChange: resetTaxAutoCalc,
-              })}
+              {...register("discount_percent", { valueAsNumber: true })}
             />
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
@@ -739,29 +756,13 @@ export function LedgerForm({
             />
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
-            {isWholesale ? (
-              <CurrencyField
-                control={control}
-                name="tax_amount"
-                label="Tax Amount"
-                allowZero
-                hint="Customer price × qty × 0.06"
-                error={errors.tax_amount?.message}
-                computedValue={
-                  taxManuallyEdited.current ? undefined : autoTax
-                }
-                onUserEdit={() => {
-                  taxManuallyEdited.current = true;
-                }}
-              />
-            ) : (
-              <InputField
-                label="Tax Amount"
-                value="N/A"
-                readOnly
-                disabled
-              />
-            )}
+            <InputField
+              label="Tax Amount"
+              value={isWholesale ? formatCurrency(effectiveTax) : "N/A"}
+              readOnly
+              disabled
+              hint={isWholesale ? "Customer price × qty × 0.06" : undefined}
+            />
             <CheckboxField
               label="Sales and Use Tax Paid"
               disabled
@@ -863,16 +864,16 @@ export function LedgerForm({
                 disabled
               />
               <CheckboxField
-                label="Write Off"
+                label="Expense"
                 disabled
-                checked={initial?.write_off ?? false}
+                checked={initial?.expense ?? false}
                 readOnly
               />
               <InputField
-                label="Write Off Amount"
+                label="Expense Amount"
                 value={
                   initial?.credit_debit === "debit"
-                    ? formatCurrency(Number(initial.write_off_amount ?? 0))
+                    ? formatCurrency(Number(initial.expense_amount ?? 0))
                     : "—"
                 }
                 readOnly

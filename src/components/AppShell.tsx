@@ -12,12 +12,6 @@ const navItems = [
   { href: "/clients", label: "Clients", shortLabel: "Clients", icon: "👤" },
   { href: "/ledger", label: "Ledger", shortLabel: "Ledger", icon: "₿" },
   { href: "/payments", label: "Payments", shortLabel: "Pay", icon: "💵" },
-  {
-    href: "/sales-use-tax",
-    label: "Sales & Use Tax Payments",
-    shortLabel: "Tax",
-    icon: "🧾",
-  },
   { href: "/invoicing", label: "Invoicing", shortLabel: "Invoice", icon: "📄" },
   { href: "/budget-tool", label: "Budget Tool", shortLabel: "Budget Tool", icon: "📊" },
 ];
@@ -58,6 +52,46 @@ function TradeAccountBox({
       >
         <span aria-hidden>🤝</span>
         Trade Accts
+      </Link>
+    </div>
+  );
+}
+
+const reconciliationHref = "/reconciliation";
+const salesUseTaxHref = "/sales-use-tax";
+const plReportHref = "/pl-report";
+
+function ReportsBox({ pathname }: { pathname: string }) {
+  return (
+    <div className="space-y-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
+      <div className="px-1.5 py-1">
+        <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+          Reports
+        </p>
+      </div>
+      <Link
+        href={plReportHref}
+        className={navLinkClass(pathname === plReportHref)}
+        title="P&L Report"
+      >
+        <span aria-hidden>📈</span>
+        P&amp;L
+      </Link>
+      <Link
+        href={reconciliationHref}
+        className={navLinkClass(pathname === reconciliationHref)}
+        title="Reconciliation Report"
+      >
+        <span aria-hidden>📋</span>
+        Reconciliation
+      </Link>
+      <Link
+        href={salesUseTaxHref}
+        className={navLinkClass(pathname === salesUseTaxHref)}
+        title="Sales & Use Tax"
+      >
+        <span aria-hidden>🧾</span>
+        Sales &amp; Use Tax
       </Link>
     </div>
   );
@@ -140,18 +174,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="mt-3">
             <TradeAccountBox count={tradeAccountCount} pathname={pathname} />
           </div>
+          <div className="mt-3">
+            <ReportsBox pathname={pathname} />
+          </div>
         </nav>
 
         <main className="min-w-0 flex-1 overflow-x-hidden">
           {children}
           <div className="mt-4 md:hidden">
             <TradeAccountBox count={tradeAccountCount} pathname={pathname} />
+            <div className="mt-3">
+              <ReportsBox pathname={pathname} />
+            </div>
           </div>
         </main>
       </div>
 
       <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white md:hidden">
-        <ul className="grid grid-cols-7">
+        <ul className="grid grid-cols-6">
           {navItems.map((item) => {
             const active = pathname === item.href;
             return (

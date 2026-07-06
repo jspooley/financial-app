@@ -7,6 +7,19 @@ interface DataTableProps {
   stickyFirstColumn?: boolean;
   /** Primary field shown as card title on mobile (defaults to first column). */
   mobileTitleKey?: string;
+  /** Optional footer row; keys should match column keys. */
+  footerRow?: Record<string, React.ReactNode>;
+}
+
+function resolveRowKey(
+  row: Record<string, React.ReactNode>,
+  index: number,
+  rowKey?: (row: Record<string, React.ReactNode>, index: number) => string
+): string {
+  const key = rowKey?.(row, index) ?? index;
+  if (typeof key === "string" && key.length > 0) return key;
+  if (typeof key === "number" && !Number.isNaN(key)) return String(key);
+  return String(index);
 }
 
 export function DataTable({
@@ -17,6 +30,7 @@ export function DataTable({
   stickyLastColumn = false,
   stickyFirstColumn = false,
   mobileTitleKey,
+  footerRow,
 }: DataTableProps) {
   if (rows.length === 0) {
     return (
@@ -49,7 +63,7 @@ export function DataTable({
       <div className="space-y-3 md:hidden">
         {rows.map((row, index) => (
           <article
-            key={rowKey?.(row, index) ?? index}
+            key={resolveRowKey(row, index, rowKey)}
             className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
           >
             {actionsFirst && actionsColumn && row.actions != null && (
@@ -71,6 +85,25 @@ export function DataTable({
             )}
           </article>
         ))}
+        {footerRow && (
+          <article className="rounded-xl border border-slate-300 bg-slate-50 p-4 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Totals (all invoiced lines)
+            </p>
+            <dl className="mt-3 space-y-2 text-sm">
+              {columns.map((column) =>
+                footerRow[column.key] != null && footerRow[column.key] !== "" ? (
+                  <div key={column.key} className="flex items-start justify-between gap-3">
+                    <dt className="shrink-0 text-slate-600">{column.label}</dt>
+                    <dd className="min-w-0 text-right font-semibold text-slate-900">
+                      {footerRow[column.key]}
+                    </dd>
+                  </div>
+                ) : null
+              )}
+            </dl>
+          </article>
+        )}
       </div>
 
       <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
@@ -93,7 +126,7 @@ export function DataTable({
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rows.map((row, index) => (
-              <tr key={rowKey?.(row, index) ?? index} className="group hover:bg-slate-50/80">
+              <tr key={resolveRowKey(row, index, rowKey)} className="group hover:bg-slate-50/80">
                 {columns.map((column) => (
                   <td
                     key={column.key}
@@ -113,6 +146,28 @@ export function DataTable({
               </tr>
             ))}
           </tbody>
+          {footerRow && (
+            <tfoot className="border-t-2 border-slate-300 bg-slate-50">
+              <tr>
+                {columns.map((column) => (
+                  <td
+                    key={column.key}
+                    className={`px-4 py-3 font-semibold text-slate-900 ${column.className ?? ""} ${
+                      stickyFirstColumn && column.key === firstColumnKey
+                        ? "sticky left-0 z-10 bg-slate-50 shadow-[4px_0_8px_-4px_rgba(0,0,0,0.08)]"
+                        : ""
+                    } ${
+                      stickyLastColumn && column.key === lastColumnKey
+                        ? "sticky right-0 z-10 bg-slate-50 shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]"
+                        : ""
+                    }`}
+                  >
+                    {footerRow[column.key]}
+                  </td>
+                ))}
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
     </>

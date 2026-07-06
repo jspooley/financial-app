@@ -10,7 +10,7 @@ import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
 import { createClient } from "@/lib/supabase/client";
-import type { Appointment } from "@/lib/types";
+import { isAppointmentsBucket, isPendingProposalSent, type Appointment } from "@/lib/types";
 import { formatDate, toDateInputValue } from "@/lib/utils";
 
 type AppointmentFilter = "all" | "pending" | "won" | "lost" | "proposal_sent";
@@ -70,7 +70,9 @@ function AppointmentsPageContent() {
 
   const visibleAppointments = useMemo(() => {
     if (filter === "pending") {
-      return appointments.filter((row) => !row.job_won && !row.job_lost);
+      return appointments.filter(
+        (row) => !row.job_won && !row.job_lost && isAppointmentsBucket(row)
+      );
     }
     if (filter === "won") {
       return appointments.filter((row) => row.job_won);
@@ -79,9 +81,9 @@ function AppointmentsPageContent() {
       return appointments.filter((row) => row.job_lost);
     }
     if (filter === "proposal_sent") {
-      return appointments.filter((row) => row.proposal_sent);
+      return appointments.filter(isPendingProposalSent);
     }
-    return appointments;
+    return appointments.filter(isAppointmentsBucket);
   }, [appointments, filter]);
 
   async function handleDelete(appointment: Appointment) {
@@ -103,7 +105,7 @@ function AppointmentsPageContent() {
         : filter === "lost"
           ? "Lost appointments"
           : filter === "proposal_sent"
-            ? "Appointments with proposal sent"
+            ? "Pending appointments with proposal sent"
             : null;
 
   return (

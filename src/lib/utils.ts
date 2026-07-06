@@ -77,7 +77,7 @@ export function calculateTaxFromCustomerPrice(
   );
 }
 
-/** Discounted retail subtotal: (retail × qty) − (discount% × retail × qty) */
+/** Discounted retail subtotal: retail price × (1 − discount %) × qty */
 export function getLedgerMerchandiseAmount(entry: {
   retail_price: number;
   quantity: number;
@@ -89,7 +89,7 @@ export function getLedgerMerchandiseAmount(entry: {
   return roundMoney(retailSubtotal - discountAmount);
 }
 
-/** Discounted retail only: (retail × qty) − (discount% × retail × qty) */
+/** Discounted retail only: retail price × (1 − discount %) × qty */
 export function getLedgerCustomerPrice(entry: {
   retail_price: number;
   quantity: number;
@@ -115,7 +115,7 @@ export function getLedgerCustomerPrice(entry: {
   });
 }
 
-/** Customer price + tax + shipping + payment fee. */
+/** Customer price × qty + tax + shipping + fee — used for invoice and payment line totals. */
 export function getLedgerInvoicedAmount(entry: {
   retail_price: number;
   quantity: number;
@@ -229,6 +229,16 @@ export function sumLedgerCreditsAndDebits(
 
 export function defaultLedgerDiscountPercent(tradePartnerPercent: number) {
   return roundMoney(tradePartnerPercent / 2);
+}
+
+/** Trade discount % from sample pricing: ((retail − designer cost) ÷ retail) × 100 */
+export function calculateTradeDiscountPercentFromPricing(
+  retailPrice: number,
+  designerCost: number
+) {
+  const retail = Number(retailPrice);
+  if (retail <= 0) return 0;
+  return roundMoney(((retail - Number(designerCost)) / retail) * 100);
 }
 
 /** Unit designer cost: retail price × (1 − trade partner discount %). */

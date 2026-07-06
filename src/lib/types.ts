@@ -37,8 +37,8 @@ export type LedgerInsert = {
   payment_amount?: number | null;
   sales_and_use_tax_paid?: boolean;
   sand_u_tax_paid?: boolean;
-  write_off?: boolean;
-  write_off_amount?: number | null;
+  expense?: boolean;
+  expense_amount?: number | null;
 };
 
 export interface LedgerDbRow extends Omit<
@@ -54,8 +54,8 @@ export interface LedgerDbRow extends Omit<
   | "payment_amount"
   | "sand_u_tax_paid"
   | "sales_and_use_tax_paid"
-  | "write_off"
-  | "write_off_amount"
+  | "expense"
+  | "expense_amount"
 > {
   id?: string;
   quantity?: number | null;
@@ -69,8 +69,8 @@ export interface LedgerDbRow extends Omit<
   payment_amount?: number | null;
   sand_u_tax_paid?: boolean | null;
   sales_and_use_tax_paid?: boolean | null;
-  write_off?: boolean | null;
-  write_off_amount?: number | null;
+  expense?: boolean | null;
+  expense_amount?: number | null;
   created_at?: string;
   updated_at?: string;
   clients?: { name: string } | null;
@@ -130,12 +130,30 @@ export interface Appointment {
   updated_at: string;
 }
 
+/** Proposal sent counts only when the job is still open (not won or lost). */
+export function isPendingProposalSent(
+  appointment: Pick<Appointment, "proposal_sent" | "job_won" | "job_lost">
+): boolean {
+  return (
+    appointment.proposal_sent && !appointment.job_won && !appointment.job_lost
+  );
+}
+
+/** Main appointments bucket — excludes rows already in the proposal-sent pipeline. */
+export function isAppointmentsBucket(
+  appointment: Pick<Appointment, "proposal_sent">
+): boolean {
+  return !appointment.proposal_sent;
+}
+
 export interface TradePartner {
   id: string;
   company_name: string;
   contact_name: string | null;
   contact_email: string | null;
   contact_phone: string | null;
+  retail_price: number;
+  designer_cost: number;
   discount_amount: number;
   minimum_purchase_amount: number;
   map_expiration: string | null;
@@ -213,8 +231,8 @@ export interface LedgerEntry {
   payment_type: PaymentType | null;
   payment_fee: number;
   payment_amount: number;
-  write_off: boolean;
-  write_off_amount: number;
+  expense: boolean;
+  expense_amount: number;
   created_at: string;
   updated_at: string;
   clients?: Pick<Client, "name"> | null;

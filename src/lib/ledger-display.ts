@@ -1,4 +1,4 @@
-import { getLedgerOutstandingBalance, isLedgerLineFullyPaid } from "@/lib/invoice-utils";
+import { getLedgerOutstandingBalance } from "@/lib/invoice-utils";
 import type { LedgerEntry } from "@/lib/types";
 import { formatCurrency, formatDate, formatQuantity, getLedgerCustomerPrice, getLedgerInvoicedAmount, getLedgerRetailSubtotal, getLedgerTotalDesignerCost } from "@/lib/utils";
 
@@ -48,24 +48,20 @@ export function ledgerDetailFields(entry: LedgerEntry) {
           : "—",
     },
     {
-      label: "Write Off",
-      value: entry.credit_debit === "debit" ? (entry.write_off ? "Yes" : "No") : "—",
+      label: "Expense",
+      value: entry.credit_debit === "debit" ? (entry.expense ? "Yes" : "No") : "—",
     },
     {
-      label: "Write Off Amount",
+      label: "Expense Amount",
       value:
         entry.credit_debit === "debit"
-          ? formatCurrency(Number(entry.write_off_amount ?? 0))
+          ? formatCurrency(Number(entry.expense_amount ?? 0))
           : "—",
     },
     {
       label: "Paid",
       value:
-        entry.credit_debit === "debit"
-          ? isLedgerLineFullyPaid(entry)
-            ? "Yes"
-            : "No"
-          : "—",
+        entry.credit_debit === "debit" ? (entry.paid ? "Yes" : "No") : "—",
     },
     { label: "Purchaser", value: entry.purchaser },
     {
@@ -117,12 +113,12 @@ export function mapLedgerTableRow(entry: LedgerEntry) {
       entry.credit_debit === "debit"
         ? formatCurrency(Number(entry.payment_amount ?? 0))
         : "—",
-    writeOff: entry.credit_debit === "debit" ? (entry.write_off ? "Yes" : "No") : "—",
-    writeOffAmount:
+    expense: entry.credit_debit === "debit" ? (entry.expense ? "Yes" : "No") : "—",
+    expenseAmount:
       entry.credit_debit === "debit"
-        ? formatCurrency(Number(entry.write_off_amount ?? 0))
+        ? formatCurrency(Number(entry.expense_amount ?? 0))
         : "—",
-    paid: entry.credit_debit === "debit" ? (isLedgerLineFullyPaid(entry) ? "Yes" : "No") : "—",
+    paid: entry.credit_debit === "debit" ? (entry.paid ? "Yes" : "No") : "—",
     purchaser: entry.purchaser,
     paidTo: entry.credit_debit === "debit" ? (entry.paid_to ?? "—") : "—",
     datePaid:
@@ -153,8 +149,8 @@ export const ledgerDebitColumns = [
   { key: "invoiced", label: "Invoiced" },
   { key: "invoiceId", label: "Invoice ID" },
   { key: "paidAmount", label: "Paid Amount" },
-  { key: "writeOff", label: "Write Off" },
-  { key: "writeOffAmount", label: "Write Off Amount" },
+  { key: "expense", label: "Expense" },
+  { key: "expenseAmount", label: "Expense Amount" },
   { key: "paid", label: "Paid" },
   { key: "purchaser", label: "Purchaser" },
   { key: "paidTo", label: "Paid To" },
@@ -185,8 +181,8 @@ export const ledgerDetailColumns = [
   { key: "invoiced", label: "Invoiced" },
   { key: "invoiceId", label: "Invoice ID" },
   { key: "paidAmount", label: "Paid Amount" },
-  { key: "writeOff", label: "Write Off" },
-  { key: "writeOffAmount", label: "Write Off Amount" },
+  { key: "expense", label: "Expense" },
+  { key: "expenseAmount", label: "Expense Amount" },
   { key: "paid", label: "Paid" },
   { key: "purchaser", label: "Purchaser" },
   { key: "paidTo", label: "Paid To" },

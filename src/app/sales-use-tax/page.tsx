@@ -10,6 +10,7 @@ import { normalizeLedgerRow, updateLedgerSalesUseTaxPaid } from "@/lib/ledger-db
 import { createClient } from "@/lib/supabase/client";
 import type { LedgerEntry } from "@/lib/types";
 import {
+  currentMonthKey,
   formatCurrency,
   formatDate,
   groupTaxDueByMonth,
@@ -165,6 +166,12 @@ function SalesUseTaxPaymentsPageContent() {
     [unpaidEntries]
   );
 
+  const monthKey = currentMonthKey();
+  const currentMonthTax = taxDueByMonth.find((row) => row.monthKey === monthKey);
+  const currentMonthTaxDue = currentMonthTax?.amount ?? 0;
+  const currentMonthJessTaxDue = currentMonthTax?.jess ?? 0;
+  const currentMonthMollyTaxDue = currentMonthTax?.molly ?? 0;
+
   const selectedEntries = useMemo(
     () => filteredEntries.filter((entry) => drafts[entry.id]?.selected),
     [filteredEntries, drafts]
@@ -251,9 +258,42 @@ function SalesUseTaxPaymentsPageContent() {
   return (
     <AppShell>
       <PageHeader
-        title="Sales & Use Tax Payments"
-        description="Mark wholesale ledger tax as paid when remitted to the state. Unpaid amounts feed the overview tax-due summary."
+        title="Sales & Use Tax"
+        description="Unpaid wholesale ledger tax due by the 20th of each month. Mark entries paid when remitted to the state."
       />
+
+      <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">
+              Sales and Use Tax Due by the 20th of each month
+            </h2>
+            <p className="text-sm text-slate-600">
+              Unpaid sales and use tax from ledger entries where Sales and Use Tax Paid is unchecked.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-3 text-right sm:justify-end sm:gap-6">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-slate-500">Jess (this month)</p>
+              <p className="text-xl font-semibold text-brand-800">
+                {formatCurrency(currentMonthJessTaxDue)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wide text-slate-500">Molly (this month)</p>
+              <p className="text-xl font-semibold text-brand-800">
+                {formatCurrency(currentMonthMollyTaxDue)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-wide text-slate-500">Total (this month)</p>
+              <p className="text-xl font-semibold text-slate-900">
+                {formatCurrency(currentMonthTaxDue)}
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
 
       {error && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">

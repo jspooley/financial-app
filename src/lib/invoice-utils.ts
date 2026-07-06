@@ -78,11 +78,12 @@ export type LedgerAmountEntry = {
   paid?: boolean | null;
   payment_fee?: number;
   payment_amount?: number;
-  write_off?: boolean | null;
-  write_off_amount?: number | null;
+  expense?: boolean | null;
+  expense_amount?: number | null;
 };
 
-function invoicedAmountForEntry(entry: LedgerAmountEntry) {
+/** Line amount: customer price × qty + tax + shipping + fee (invoice and payment totals). */
+export function ledgerLineAmount(entry: LedgerAmountEntry) {
   return getLedgerInvoicedAmount({
     retail_price: entry.retail_price,
     quantity: entry.quantity,
@@ -95,37 +96,31 @@ function invoicedAmountForEntry(entry: LedgerAmountEntry) {
   });
 }
 
-/** Cash applied to this line — payment amount plus fee when recorded separately. */
+/** Cash applied to a line (payment amount + payment fee). */
 export function getLedgerTotalPaymentReceived(entry: LedgerAmountEntry) {
-  const amount = roundMoney(Number(entry.payment_amount ?? 0));
-  const fee = roundMoney(Number(entry.payment_fee ?? 0));
-  if (fee <= 0) return amount;
-
-  const invoiced = invoicedAmountForEntry(entry);
-  const combined = roundMoney(amount + fee);
-  // Fee is part of invoiced; when payment + fee covers the line, count both toward paid.
-  if (combined <= invoiced + 0.009) return combined;
-  return amount;
+  return roundMoney(
+    Number(entry.payment_amount ?? 0) + Number(entry.payment_fee ?? 0)
+  );
 }
 
 /**
- * Signed balance: payment − invoiced.
- * Positive when overpaid, negative when underpaid. Write-off moves balance toward zero.
+ * Signed balance: cash received − line amount.
+ * Expense moves balance toward zero.
  */
 export function getLedgerOutstandingBalance(entry: LedgerAmountEntry) {
-  const invoiced = invoicedAmountForEntry(entry);
+  const owed = ledgerLineAmount(entry);
   const paid = getLedgerTotalPaymentReceived(entry);
-  const writeOffApplied = entry.write_off
-    ? roundMoney(Math.max(0, Number(entry.write_off_amount ?? 0)))
+  const expenseApplied = entry.expense
+    ? roundMoney(Math.max(0, Number(entry.expense_amount ?? 0)))
     : 0;
 
-  let balance = roundMoney(paid - invoiced);
+  let balance = roundMoney(paid - owed);
 
-  if (writeOffApplied > 0) {
+  if (expenseApplied > 0) {
     if (balance < 0) {
-      balance = roundMoney(Math.min(0, balance + writeOffApplied));
+      balance = roundMoney(Math.min(0, balance + expenseApplied));
     } else if (balance > 0) {
-      balance = roundMoney(Math.max(0, balance - writeOffApplied));
+      balance = roundMoney(Math.max(0, balance - expenseApplied));
     }
   }
 
@@ -143,16 +138,122 @@ export function getLineAmountStillOwed(entry: LedgerAmountEntry) {
   return getLedgerUnderpaymentAmount(entry);
 }
 
-/** Paid when cumulative payment (plus write-off) meets or exceeds invoiced amount. */
+/** Paid when cumulative payment (plus expense) meets or exceeds invoiced amount. */
 export function isLedgerLineFullyPaid(entry: LedgerAmountEntry) {
   return getLedgerOutstandingBalance(entry) >= 0;
 }
 
-/** True when every debit line on the invoice has been marked paid. */
+/** DB paid flag derived from balance math (set on Payments save and ledger edits). */
+export function deriveLedgerPaidFlag(entry: {
+  credit_debit?: string | null;
+  retail_price?: number;
+  quantity?: number;
+  discount_percent?: number;
+  customer_price?: number | null;
+  tax_amount?: number | null;
+  shipping_receiving_amount?: number | null;
+  wholesale_retail?: "wholesale" | "retail";
+  payment_fee?: number | null;
+  payment_amount?: number | null;
+  expense?: boolean | null;
+  expense_amount?: number | null;
+}): boolean {
+  if (entry.credit_debit !== "debit") return false;
+  return isLedgerLineFullyPaid({
+    retail_price: Number(entry.retail_price ?? 0),
+    quantity: Number(entry.quantity ?? 1),
+    discount_percent: entry.discount_percent ?? 0,
+    customer_price: entry.customer_price,
+    tax_amount: entry.tax_amount ?? 0,
+    shipping_receiving_amount: entry.shipping_receiving_amount ?? 0,
+    wholesale_retail: entry.wholesale_retail ?? "retail",
+    payment_fee: Number(entry.payment_fee ?? 0),
+    payment_amount: Number(entry.payment_amount ?? 0),
+    expense: entry.expense,
+    expense_amount: entry.expense_amount,
+  });
+}
+
+/** Invoiced debit line (goods/services on an invoice). */
+export function isInvoicedDebitLine(entry: LedgerAmountEntry): boolean {
+  return entry.credit_debit === "debit" && isLedgerLineInvoiced(entry);
+}
+
+function sumLineAmounts(entries: LedgerAmountEntry[]) {
+  return roundMoney(entries.reduce((sum, entry) => sum + ledgerLineAmount(entry), 0));
+}
+
+/** Invoice History total — sum of line amounts on invoiced debits per invoice. */
+export function sumInvoiceHistoryTotal(
+  invoices: Array<{ invoice_id?: string | null }>,
+  ledgerEntries: LedgerAmountEntry[]
+): number {
+  return roundMoney(
+    invoices.reduce((total, invoice) => {
+      const lines = getLedgerLinesForInvoice(
+        ledgerEntries,
+        normalizeInvoiceId(invoice.invoice_id)
+      ).filter(isInvoicedDebitLine);
+      return total + sumLineAmounts(lines);
+    }, 0)
+  );
+}
+
+/** Portion of invoiced line amount counted as paid (full line minus still owed). */
+export function ledgerLineAmountSettled(entry: LedgerAmountEntry): number {
+  if (!isInvoicedDebitLine(entry)) return 0;
+  return roundMoney(ledgerLineAmount(entry) - getLedgerUnderpaymentAmount(entry));
+}
+
+/** Payments History total — invoiced amount collected; excludes only what's still outstanding. */
+export function sumPaymentsHistoryTotal(entries: LedgerAmountEntry[]): number {
+  return roundMoney(
+    entries
+      .filter(isInvoicedDebitLine)
+      .reduce((sum, entry) => sum + ledgerLineAmountSettled(entry), 0)
+  );
+}
+
+export function normalizeInvoiceId(value: string | null | undefined): string {
+  return (value ?? "").trim();
+}
+
+export function getLedgerLinesForInvoice<T extends { invoice_id?: string | null }>(
+  entries: T[],
+  invoiceId: string
+): T[] {
+  const id = normalizeInvoiceId(invoiceId);
+  if (!id) return [];
+  return entries.filter(
+    (entry) => normalizeInvoiceId(entry.invoice_id) === id
+  );
+}
+
+/** True when every invoiced debit line has paid=true (synced from balance on save). */
 export function isInvoiceFullyPaid(lines: LedgerAmountEntry[]): boolean {
-  const debits = lines.filter((line) => line.credit_debit === "debit");
+  return isInvoicePaidByFlag(lines);
+}
+
+export function getInvoiceOutstandingTotal(lines: LedgerAmountEntry[]): number {
+  return roundMoney(
+    lines
+      .filter(isInvoicedDebitLine)
+      .reduce((sum, line) => sum + getLedgerUnderpaymentAmount(line), 0)
+  );
+}
+
+/** Every invoiced debit line has the paid flag set in the database. */
+export function isInvoicePaidByFlag(lines: LedgerAmountEntry[]): boolean {
+  const debits = lines.filter(isInvoicedDebitLine);
   if (debits.length === 0) return false;
   return debits.every((line) => Boolean(line.paid));
+}
+
+/** All invoiced debit lines balance-paid (matches Ledger Paid column). */
+export function isInvoicePaidByBalance(lines: LedgerAmountEntry[]): boolean {
+  const debits = lines.filter(isInvoicedDebitLine);
+  if (debits.length === 0) return false;
+  return debits.every((line) => isLedgerLineFullyPaid(line));
 }
 
 export function summarizeToBeInvoiced(entries: LedgerAmountEntry[]) {
@@ -160,7 +261,7 @@ export function summarizeToBeInvoiced(entries: LedgerAmountEntry[]) {
   return {
     count: lines.length,
     amount: roundMoney(
-      lines.reduce((sum, entry) => sum + invoicedAmountForEntry(entry), 0)
+      lines.reduce((sum, entry) => sum + ledgerLineAmount(entry), 0)
     ),
   };
 }
@@ -307,10 +408,11 @@ export function groupLedgerByInvoiceId(
 ): Map<string, InvoiceLineItem[]> {
   const grouped = new Map<string, InvoiceLineItem[]>();
   for (const entry of entries) {
-    if (!entry.invoice_id) continue;
-    const list = grouped.get(entry.invoice_id) ?? [];
+    const invoiceId = entry.invoice_id?.trim();
+    if (!invoiceId) continue;
+    const list = grouped.get(invoiceId) ?? [];
     list.push(entry);
-    grouped.set(entry.invoice_id, list);
+    grouped.set(invoiceId, list);
   }
   return grouped;
 }
@@ -335,16 +437,14 @@ export function summarizePaymentsByInvoiceId(
         projectEntry ? projectEntry(line) : line
       );
       const invoicedTotal = roundMoney(
-        lines.reduce(
-          (sum, entry) => sum + getLedgerInvoicedAmount(entry),
-          0
-        )
+        lines
+          .filter(isInvoicedDebitLine)
+          .reduce((sum, entry) => sum + ledgerLineAmount(entry), 0)
       );
       const paidTotal = roundMoney(
-        projected.reduce(
-          (sum, entry) => sum + getLedgerTotalPaymentReceived(entry),
-          0
-        )
+        projected
+          .filter(isInvoicedDebitLine)
+          .reduce((sum, entry) => sum + ledgerLineAmountSettled(entry), 0)
       );
       const outstandingTotal = roundMoney(
         projected.reduce(
@@ -364,7 +464,7 @@ export function summarizePaymentsByInvoiceId(
 }
 
 export function invoiceLineTotal(entry: InvoiceLineItem): number {
-  return getLedgerInvoicedAmount(entry);
+  return ledgerLineAmount(entry);
 }
 
 export interface InvoiceLineBreakdown {

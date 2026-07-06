@@ -5,13 +5,13 @@ import { Button } from "@/components/ui/Button";
 import { fieldClass } from "@/components/ui/FormFields";
 import { formatCurrency, roundMoney } from "@/lib/utils";
 
-interface WriteOffModalProps {
+interface ExpenseModalProps {
   outstanding: number;
   onConfirm: (amount: number) => void;
   onCancel: () => void;
 }
 
-export function WriteOffModal({ outstanding, onConfirm, onCancel }: WriteOffModalProps) {
+export function ExpenseModal({ outstanding, onConfirm, onCancel }: ExpenseModalProps) {
   const [customAmount, setCustomAmount] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -21,7 +21,7 @@ export function WriteOffModal({ outstanding, onConfirm, onCancel }: WriteOffModa
       return false;
     }
     if (amount > outstanding) {
-      setError("The write off amount must be less than the outstanding amount.");
+      setError("The expense amount must be less than the outstanding amount.");
       return false;
     }
     setError(null);
@@ -44,23 +44,23 @@ export function WriteOffModal({ outstanding, onConfirm, onCancel }: WriteOffModa
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="write-off-title"
+      aria-labelledby="expense-title"
     >
       <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
-        <h2 id="write-off-title" className="text-lg font-semibold text-slate-900">
-          Write off balance
+        <h2 id="expense-title" className="text-lg font-semibold text-slate-900">
+          Record expense
         </h2>
         <p className="mt-2 text-sm text-slate-600">
           Outstanding balance:{" "}
           <span className="font-medium text-amber-800">{formatCurrency(outstanding)}</span>
         </p>
         <p className="mt-1 text-sm text-slate-600">
-          Write off the entire amount, or enter a partial write-off.
+          Record the entire amount as expense, or enter a partial expense amount.
         </p>
 
         <div className="mt-4 flex flex-col gap-2">
           <Button type="button" onClick={confirmFull}>
-            Write off entire outstanding amount
+            Expense entire outstanding amount
           </Button>
         </div>
 
@@ -81,7 +81,7 @@ export function WriteOffModal({ outstanding, onConfirm, onCancel }: WriteOffModa
             />
           </label>
           <Button type="button" variant="secondary" className="mt-3 w-full" onClick={confirmCustom}>
-            Apply write-off amount
+            Apply expense amount
           </Button>
         </div>
 
