@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { TradePartnerForm } from "@/components/forms/TradePartnerForm";
 import { Button } from "@/components/ui/Button";
@@ -9,7 +9,69 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
 import { createClient } from "@/lib/supabase/client";
 import type { TradePartner } from "@/lib/types";
-import { formatCurrency, formatDate, formatPercent, calculateTradeDiscountPercentFromPricing } from "@/lib/utils";
+import {
+  calculateTradeDiscountPercentFromPricing,
+  defaultLedgerDiscountPercent,
+  formatCurrency,
+  formatDate,
+  formatPercent,
+  roundMoney,
+} from "@/lib/utils";
+
+function tradePartnerDiscountPercent(partner: TradePartner): number {
+  const retail = Number(partner.retail_price ?? 0);
+  const designer = Number(partner.designer_cost ?? 0);
+  if (retail > 0) {
+    return calculateTradeDiscountPercentFromPricing(retail, designer);
+  }
+  return Number(partner.discount_amount ?? 0);
+}
+
+function TradePartnerSummary({ partners }: { partners: TradePartner[] }) {
+  const { averageDiscount, grossProfitGoal } = useMemo(() => {
+    if (partners.length === 0) {
+      return { averageDiscount: 0, grossProfitGoal: 0 };
+    }
+
+    const discounts = partners.map(tradePartnerDiscountPercent);
+    const averageDiscount = roundMoney(
+      discounts.reduce((sum, discount) => sum + discount, 0) / discounts.length
+    );
+
+    return {
+      averageDiscount,
+      grossProfitGoal: defaultLedgerDiscountPercent(averageDiscount),
+    };
+  }, [partners]);
+
+  return (
+    <section className="mb-6 grid gap-4 sm:grid-cols-2">
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p className="text-xs uppercase tracking-wide text-slate-500">
+          Average Trade Discount
+        </p>
+        <p className="mt-1 text-2xl font-bold text-brand-800">
+          {partners.length === 0 ? "—" : formatPercent(averageDiscount)}
+        </p>
+        <p className="mt-1 text-sm text-slate-600">
+          Mean discount across {partners.length}{" "}
+          {partners.length === 1 ? "partner" : "partners"}
+        </p>
+      </div>
+      <div className="rounded-xl border border-brand-200 bg-brand-50 p-4 shadow-sm">
+        <p className="text-xs uppercase tracking-wide text-slate-600">
+          Gross Profit Goal
+        </p>
+        <p className="mt-1 text-2xl font-bold text-brand-800">
+          {partners.length === 0 ? "—" : formatPercent(grossProfitGoal)}
+        </p>
+        <p className="mt-1 text-sm text-slate-600">
+          Half of the average trade discount
+        </p>
+      </div>
+    </section>
+  );
+}
 
 export default function TradePartnersPage() {
   const [partners, setPartners] = useState<TradePartner[]>([]);
@@ -96,7 +158,9 @@ export default function TradePartnersPage() {
           </Button>
         </div>
       ) : (
-        <DataTable
+        <>
+          <TradePartnerSummary partners={partners} />
+          <DataTable
           stickyFirstColumn
           mobileTitleKey="company"
           columns={[
@@ -111,10 +175,7 @@ export default function TradePartnersPage() {
           rows={partners.map((partner) => {
             const retail = Number(partner.retail_price ?? 0);
             const designer = Number(partner.designer_cost ?? 0);
-            const discount =
-              retail > 0
-                ? calculateTradeDiscountPercentFromPricing(retail, designer)
-                : Number(partner.discount_amount ?? 0);
+            const discount = tradePartnerDiscountPercent(partner);
 
             return {
             actions: (
@@ -136,6 +197,7 @@ export default function TradePartnersPage() {
           })}
           emptyMessage="No trade partners yet."
         />
+        </>
       )}
     </AppShell>
   );
