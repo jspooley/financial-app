@@ -57,6 +57,7 @@ function LedgerPageContent() {
   const searchParams = useSearchParams();
   const uninvoicedOnly = searchParams.get("uninvoiced") === "1";
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
+  const [invoicedPoKeys, setInvoicedPoKeys] = useState<Set<string>>(new Set());
   const [clients, setClients] = useState<Client[]>([]);
   const [tradePartners, setTradePartners] = useState<TradePartner[]>([]);
   const [clientPoNumbers, setClientPoNumbers] = useState<ClientPoNumber[]>([]);
@@ -80,6 +81,7 @@ function LedgerPageContent() {
       { data: clientData, error: clientError },
       { data: tradeData, error: tradeError },
       { data: clientPoData, error: clientPoError },
+      { data: invoiceHeaders },
       { data: userData },
     ] = await Promise.all([
       supabase
@@ -89,6 +91,7 @@ function LedgerPageContent() {
       supabase.from("clients").select("*").order("name", { ascending: true }),
       supabase.from("trade_partners").select("*").order("company_name", { ascending: true }),
       supabase.from("client_po_numbers").select("*").order("po_number", { ascending: true }),
+      supabase.from("invoicing").select("client_id, po_number"),
       supabase.auth.getUser(),
     ]);
 
@@ -106,6 +109,14 @@ function LedgerPageContent() {
     setClients(clientData ?? []);
     setTradePartners(tradeData ?? []);
     setClientPoNumbers(clientPoData ?? []);
+    setInvoicedPoKeys(
+      new Set(
+        (invoiceHeaders ?? []).map(
+          (invoice) =>
+            `${invoice.client_id}:${(invoice.po_number ?? "").trim().toLowerCase()}`
+        )
+      )
+    );
     if (clientPoError) {
       setLoadError(
         (current) =>
@@ -487,7 +498,7 @@ function LedgerPageContent() {
                         </p>
                       </div>
                       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                        {ledgerDetailFields(entry).map((field) => (
+                        {ledgerDetailFields(entry, invoicedPoKeys).map((field) => (
                           <div key={field.label}>
                             <dt className="text-slate-500">{field.label}</dt>
                             <dd>{field.value}</dd>
@@ -520,7 +531,7 @@ function LedgerPageContent() {
                   ...ledgerDebitColumns,
                 ]}
                 rows={debitEntries.map((entry) => ({
-                  ...mapLedgerTableRow(entry),
+                  ...mapLedgerTableRow(entry, invoicedPoKeys),
                   actions: entryActions(entry),
                 }))}
                 emptyMessage="No goods and services entries yet."
@@ -541,7 +552,7 @@ function LedgerPageContent() {
                 ...ledgerDetailColumns,
               ]}
               rows={creditEntries.map((entry) => ({
-                ...mapLedgerTableRow(entry),
+                ...mapLedgerTableRow(entry, invoicedPoKeys),
                 actions: entryActions(entry),
               }))}
               emptyMessage="No credit entries yet."
