@@ -79,6 +79,17 @@ function PlTotalsCards({
           {formatCurrency(totals.grossProfit)}
         </p>
       </div>
+      <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
+        <p className="text-sm font-semibold leading-snug text-slate-700">
+          GROSS PROFIT GOAL
+        </p>
+        <p className="mt-2 text-2xl font-bold text-brand-800">
+          {tradePartnerCount === 0 ? "—" : formatPercent(grossProfitGoal)}
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          Half of average trade discount
+        </p>
+      </div>
       <div
         className={`rounded-lg border p-4 ${
           belowGrossProfitGoal
@@ -99,19 +110,10 @@ function PlTotalsCards({
         </p>
         <p className="mt-1 text-xs text-slate-500">
           {belowGrossProfitGoal
-            ? "Below gross profit goal"
-            : "Profit after direct costs"}
-        </p>
-      </div>
-      <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
-        <p className="text-sm font-semibold leading-snug text-slate-700">
-          GROSS PROFIT GOAL
-        </p>
-        <p className="mt-2 text-2xl font-bold text-brand-800">
-          {tradePartnerCount === 0 ? "—" : formatPercent(grossProfitGoal)}
-        </p>
-        <p className="mt-1 text-xs text-slate-500">
-          Half of average trade discount
+            ? `${formatPercent(grossProfitGap)} below goal`
+            : tradePartnerCount > 0
+              ? "At or above gross profit goal"
+              : "Profit after direct costs"}
         </p>
       </div>
       <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
