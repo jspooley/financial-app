@@ -1,4 +1,4 @@
-import type { PaymentType } from "./types";
+import type { PaymentType, TradePartner } from "./types";
 
 export function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-US", {
@@ -239,6 +239,34 @@ export function calculateTradeDiscountPercentFromPricing(
   const retail = Number(retailPrice);
   if (retail <= 0) return 0;
   return roundMoney(((retail - Number(designerCost)) / retail) * 100);
+}
+
+export function tradePartnerDiscountPercent(
+  partner: Pick<TradePartner, "retail_price" | "designer_cost" | "discount_amount">
+): number {
+  const retail = Number(partner.retail_price ?? 0);
+  const designer = Number(partner.designer_cost ?? 0);
+  if (retail > 0) {
+    return calculateTradeDiscountPercentFromPricing(retail, designer);
+  }
+  return Number(partner.discount_amount ?? 0);
+}
+
+export function averageTradePartnerDiscount(
+  partners: Pick<TradePartner, "retail_price" | "designer_cost" | "discount_amount">[]
+): number {
+  if (partners.length === 0) return 0;
+  const total = partners.reduce(
+    (sum, partner) => sum + tradePartnerDiscountPercent(partner),
+    0
+  );
+  return roundMoney(total / partners.length);
+}
+
+export function grossProfitGoalFromTradePartners(
+  partners: Pick<TradePartner, "retail_price" | "designer_cost" | "discount_amount">[]
+): number {
+  return defaultLedgerDiscountPercent(averageTradePartnerDiscount(partners));
 }
 
 /** Unit designer cost: retail price × (1 − trade partner discount %). */

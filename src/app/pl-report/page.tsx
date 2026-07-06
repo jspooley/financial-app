@@ -11,7 +11,8 @@ import {
 } from "@/lib/pl-report";
 import { createClient } from "@/lib/supabase/server";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
-import { formatCurrency, formatPercent } from "@/lib/utils";
+import { formatCurrency, formatPercent, grossProfitGoalFromTradePartners, roundMoney } from "@/lib/utils";
+import type { TradePartner } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -19,10 +20,19 @@ export const revalidate = 0;
 function PlTotalsCards({
   totals,
   expenseLineCount,
+  grossProfitGoal,
+  tradePartnerCount,
 }: {
   totals: PlTotals;
   expenseLineCount: number;
+  grossProfitGoal: number;
+  tradePartnerCount: number;
 }) {
+  const belowGrossProfitGoal =
+    tradePartnerCount > 0 && totals.grossProfitMargin < grossProfitGoal;
+  const grossProfitGap = roundMoney(grossProfitGoal - totals.grossProfitMargin);
+  const belowGoalValueClass = belowGrossProfitGoal ? "text-red-700" : "text-brand-800";
+
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 sm:gap-4">
       <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
@@ -51,7 +61,13 @@ function PlTotalsCards({
             : `Expense, shipping, fees & tax across ${expenseLineCount} ledger ${expenseLineCount === 1 ? "line" : "lines"}`}
         </p>
       </Link>
-      <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
+      <div
+        className={`rounded-lg border p-4 ${
+          belowGrossProfitGoal
+            ? "border-red-200 bg-red-50"
+            : "border-brand-200 bg-brand-50"
+        }`}
+      >
         <p className="text-sm font-semibold leading-snug text-slate-700">
           GROSS PROFIT
           <br />
@@ -59,18 +75,44 @@ function PlTotalsCards({
             (before expenses &amp; loans)
           </span>
         </p>
-        <p className="mt-2 text-2xl font-bold text-brand-800">
+        <p className={`mt-2 text-2xl font-bold ${belowGoalValueClass}`}>
           {formatCurrency(totals.grossProfit)}
+        </p>
+      </div>
+      <div
+        className={`rounded-lg border p-4 ${
+          belowGrossProfitGoal
+            ? "border-red-200 bg-red-50"
+            : "border-brand-200 bg-brand-50"
+        }`}
+      >
+        <p className="text-sm font-semibold leading-snug text-slate-700">
+          GROSS PROFIT MARGIN
+        </p>
+        <p className={`mt-2 text-2xl font-bold ${belowGoalValueClass}`}>
+          {formatPercent(totals.grossProfitMargin)}
+          {belowGrossProfitGoal ? (
+            <span className="ml-2 text-xl font-semibold">
+              ({formatPercent(grossProfitGap)})
+            </span>
+          ) : null}
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          {belowGrossProfitGoal
+            ? "Below gross profit goal"
+            : "Profit after direct costs"}
         </p>
       </div>
       <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
         <p className="text-sm font-semibold leading-snug text-slate-700">
-          GROSS PROFIT MARGIN
+          GROSS PROFIT GOAL
         </p>
         <p className="mt-2 text-2xl font-bold text-brand-800">
-          {formatPercent(totals.grossProfitMargin)}
+          {tradePartnerCount === 0 ? "—" : formatPercent(grossProfitGoal)}
         </p>
-        <p className="mt-1 text-xs text-slate-500">Profit after direct costs</p>
+        <p className="mt-1 text-xs text-slate-500">
+          Half of average trade discount
+        </p>
       </div>
       <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
         <p className="text-sm font-semibold leading-snug text-slate-700">NET PROFIT</p>
@@ -278,9 +320,11 @@ export default async function PlReportPage() {
   const reportYear = new Date().getFullYear();
   const throughMonth = new Date().getMonth() + 1;
 
-  const [{ data: ledgerTotals }, { data: invoiceHeaders }] = await Promise.all([
+  const [{ data: ledgerTotals }, { data: invoiceHeaders }, { data: tradePartners }] =
+    await Promise.all([
     supabase.from("ledger").select("*, clients(name)"),
     supabase.from("invoicing").select("client_id, po_number"),
+    supabase.from("trade_partners").select("retail_price, designer_cost, discount_amount"),
   ]);
 
   const invoicedPoKeys = new Set(
@@ -304,6 +348,8 @@ export default async function PlReportPage() {
     throughMonth,
     invoicedPoKeys,
   });
+  const partners = (tradePartners ?? []) as TradePartner[];
+  const grossProfitGoal = grossProfitGoalFromTradePartners(partners);
 
   return (
     <AppShell>
@@ -323,10 +369,16 @@ export default async function PlReportPage() {
           <strong>Gross profit</strong> = revenue − COGS (before expenses).{" "}
           <strong>Net profit</strong> = revenue − (COGS + expenses).{" "}
           <strong>Net profit margin</strong> = net profit ÷ revenue.
+          <strong>Gross profit goal</strong> = half of average trade partner discount.
           Uninvoiced debit costs are included in cost of goods sold only.
         </p>
         <div className="mt-4">
-          <PlTotalsCards totals={ytdTotals} expenseLineCount={expenseLineCount} />
+          <PlTotalsCards
+            totals={ytdTotals}
+            expenseLineCount={expenseLineCount}
+            grossProfitGoal={grossProfitGoal}
+            tradePartnerCount={partners.length}
+          />
         </div>
         <p className="mt-4 text-sm">
           <Link
