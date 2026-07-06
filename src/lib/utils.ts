@@ -198,6 +198,26 @@ function isInvoicedForBalance(
   return invoicedPoKeys.has(ledgerPoClientKey(entry.client_id, entry.po_number));
 }
 
+/** Revenue for one ledger line (P&L): payment amount when invoiced, else 0. */
+export function ledgerLineRevenue(
+  entry: LedgerBalanceEntry,
+  invoicedPoKeys?: Set<string>
+) {
+  if (!isInvoicedForBalance(entry, invoicedPoKeys)) return 0;
+  return ledgerRevenueAmount(entry);
+}
+
+/** COGS for one ledger line (P&L): designer cost when invoiced or uninvoiced debit, else 0. */
+export function ledgerLineCogs(
+  entry: LedgerBalanceEntry,
+  invoicedPoKeys?: Set<string>
+) {
+  const designerTotal = getLedgerTotalDesignerCost(entry);
+  if (isInvoicedForBalance(entry, invoicedPoKeys)) return designerTotal;
+  if (entry.credit_debit === "debit") return designerTotal;
+  return 0;
+}
+
 /**
  * Invoiced lines: credits = payments received, debits = designer cost.
  * Net balance = credits − debits. Uninvoiced debits add designer cost only.

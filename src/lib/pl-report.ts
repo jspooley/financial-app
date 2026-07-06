@@ -1,5 +1,10 @@
 import type { LedgerEntry } from "./types";
-import { roundMoney, sumLedgerCreditsAndDebits } from "./utils";
+import {
+  ledgerLineCogs,
+  ledgerLineRevenue,
+  roundMoney,
+  sumLedgerCreditsAndDebits,
+} from "./utils";
 
 type LedgerPlEntry = Pick<
   LedgerEntry,
@@ -44,6 +49,27 @@ export function sumPlExpenseAmount(entry: LedgerPlEntry): number {
       Number(entry.shipping_receiving_amount ?? 0) +
       Number(entry.payment_fee ?? 0) +
       Number(entry.tax_amount ?? 0)
+  );
+}
+
+/** Gross profit for one ledger line: revenue − COGS (same formula as P&L totals). */
+export function ledgerLineGrossProfit(
+  entry: LedgerPlEntry,
+  invoicedPoKeys?: Set<string>
+): number {
+  return roundMoney(
+    ledgerLineRevenue(entry, invoicedPoKeys) - ledgerLineCogs(entry, invoicedPoKeys)
+  );
+}
+
+/** Net profit for one ledger line: revenue − (COGS + expenses) (same formula as P&L totals). */
+export function ledgerLineNetProfit(
+  entry: LedgerPlEntry,
+  invoicedPoKeys?: Set<string>
+): number {
+  return roundMoney(
+    ledgerLineRevenue(entry, invoicedPoKeys) -
+      (ledgerLineCogs(entry, invoicedPoKeys) + sumPlExpenseAmount(entry))
   );
 }
 

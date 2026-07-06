@@ -1,4 +1,5 @@
 import { getLedgerOutstandingBalance } from "@/lib/invoice-utils";
+import { computePlTotals, ledgerLineGrossProfit, ledgerLineNetProfit } from "@/lib/pl-report";
 import type { LedgerEntry } from "@/lib/types";
 import { formatCurrency, formatDate, formatQuantity, getLedgerCustomerPrice, getLedgerInvoicedAmount, getLedgerRetailSubtotal, getLedgerTotalDesignerCost } from "@/lib/utils";
 
@@ -8,7 +9,10 @@ export function ledgerTaxDisplay(entry: LedgerEntry) {
     : formatCurrency(Number(entry.tax_amount));
 }
 
-export function ledgerDetailFields(entry: LedgerEntry) {
+export function ledgerDetailFields(
+  entry: LedgerEntry,
+  invoicedPoKeys?: Set<string>
+) {
   return [
     { label: "Client", value: entry.clients?.name ?? "—" },
     { label: "Date", value: formatDate(entry.entry_date) },
@@ -80,6 +84,14 @@ export function ledgerDetailFields(entry: LedgerEntry) {
       label: "Total Designer Cost",
       value: formatCurrency(getLedgerTotalDesignerCost(entry)),
     },
+    {
+      label: "Gross Profit",
+      value: formatCurrency(ledgerLineGrossProfit(entry, invoicedPoKeys)),
+    },
+    {
+      label: "Net Profit",
+      value: formatCurrency(ledgerLineNetProfit(entry, invoicedPoKeys)),
+    },
     { label: "PO", value: entry.po_number ?? "—" },
     { label: "Type", value: `${entry.credit_debit} / ${entry.wholesale_retail}` },
     {
@@ -89,7 +101,10 @@ export function ledgerDetailFields(entry: LedgerEntry) {
   ];
 }
 
-export function mapLedgerTableRow(entry: LedgerEntry) {
+export function mapLedgerTableRow(
+  entry: LedgerEntry,
+  invoicedPoKeys?: Set<string>
+) {
   return {
     client: entry.clients?.name ?? "—",
     date: formatDate(entry.entry_date),
@@ -127,9 +142,25 @@ export function mapLedgerTableRow(entry: LedgerEntry) {
         : "—",
     designerCost: formatCurrency(Number(entry.designer_cost)),
     totalDesignerCost: formatCurrency(getLedgerTotalDesignerCost(entry)),
+    grossProfit: formatCurrency(ledgerLineGrossProfit(entry, invoicedPoKeys)),
+    netProfit: formatCurrency(ledgerLineNetProfit(entry, invoicedPoKeys)),
     po: entry.po_number ?? "—",
     type: `${entry.credit_debit} / ${entry.wholesale_retail}`,
     salesUseTaxPaid: entry.sales_and_use_tax_paid ? "Yes" : "No",
+  };
+}
+
+/** Footer row with gross and net profit totals for visible ledger entries. */
+export function ledgerProfitFooterRow(
+  entries: LedgerEntry[],
+  invoicedPoKeys?: Set<string>
+) {
+  const { grossProfit, netProfit } = computePlTotals(entries, invoicedPoKeys);
+  return {
+    actions: "",
+    client: "Total",
+    grossProfit: formatCurrency(grossProfit),
+    netProfit: formatCurrency(netProfit),
   };
 }
 
@@ -157,6 +188,8 @@ export const ledgerDebitColumns = [
   { key: "datePaid", label: "Date Paid" },
   { key: "designerCost", label: "Designer Cost" },
   { key: "totalDesignerCost", label: "Total Designer Cost" },
+  { key: "grossProfit", label: "Gross Profit" },
+  { key: "netProfit", label: "Net Profit" },
   { key: "retailPrice", label: "Retail Price" },
   { key: "retailPriceQty", label: "Retail Price × Qty" },
   { key: "po", label: "PO" },
@@ -189,6 +222,8 @@ export const ledgerDetailColumns = [
   { key: "datePaid", label: "Date Paid" },
   { key: "designerCost", label: "Designer Cost" },
   { key: "totalDesignerCost", label: "Total Designer Cost" },
+  { key: "grossProfit", label: "Gross Profit" },
+  { key: "netProfit", label: "Net Profit" },
   { key: "po", label: "PO" },
   { key: "type", label: "Type" },
   { key: "salesUseTaxPaid", label: "Sales and Use Tax Paid" },
