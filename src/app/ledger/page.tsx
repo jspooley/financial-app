@@ -16,7 +16,7 @@ import {
   poNumbersForClient,
   poNumbersFromLedgerEntries,
 } from "@/lib/client-po-db";
-import { ledgerDetailFields, ledgerDetailColumns, ledgerDebitColumns, mapLedgerTableRow } from "@/lib/ledger-display";
+import { ledgerDetailFields, ledgerDetailColumns, ledgerDebitColumns, ledgerProfitFooterRow, mapLedgerTableRow } from "@/lib/ledger-display";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { Client, ClientPoNumber, LedgerEntry, TradePartner } from "@/lib/types";
@@ -245,6 +245,15 @@ function LedgerPageContent() {
 
   const debitEntries = visibleEntries.filter((entry) => entry.credit_debit === "debit");
   const creditEntries = visibleEntries.filter((entry) => entry.credit_debit === "credit");
+
+  const debitProfitFooter = useMemo(
+    () => ledgerProfitFooterRow(debitEntries, invoicedPoKeys),
+    [debitEntries, invoicedPoKeys]
+  );
+  const creditProfitFooter = useMemo(
+    () => ledgerProfitFooterRow(creditEntries, invoicedPoKeys),
+    [creditEntries, invoicedPoKeys]
+  );
 
   const poBudgetSummary = useMemo(() => {
     if (!filterClientId || !filterPo) return null;
@@ -534,6 +543,7 @@ function LedgerPageContent() {
                   ...mapLedgerTableRow(entry, invoicedPoKeys),
                   actions: entryActions(entry),
                 }))}
+                footerRow={debitProfitFooter}
                 emptyMessage="No goods and services entries yet."
               />
             </section>
@@ -555,6 +565,7 @@ function LedgerPageContent() {
                 ...mapLedgerTableRow(entry, invoicedPoKeys),
                 actions: entryActions(entry),
               }))}
+              footerRow={creditProfitFooter}
               emptyMessage="No credit entries yet."
             />
             </section>

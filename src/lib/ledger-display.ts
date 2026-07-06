@@ -1,5 +1,5 @@
 import { getLedgerOutstandingBalance } from "@/lib/invoice-utils";
-import { ledgerLineGrossProfit, ledgerLineNetProfit } from "@/lib/pl-report";
+import { computePlTotals, ledgerLineGrossProfit, ledgerLineNetProfit } from "@/lib/pl-report";
 import type { LedgerEntry } from "@/lib/types";
 import { formatCurrency, formatDate, formatQuantity, getLedgerCustomerPrice, getLedgerInvoicedAmount, getLedgerRetailSubtotal, getLedgerTotalDesignerCost } from "@/lib/utils";
 
@@ -147,6 +147,20 @@ export function mapLedgerTableRow(
     po: entry.po_number ?? "—",
     type: `${entry.credit_debit} / ${entry.wholesale_retail}`,
     salesUseTaxPaid: entry.sales_and_use_tax_paid ? "Yes" : "No",
+  };
+}
+
+/** Footer row with gross and net profit totals for visible ledger entries. */
+export function ledgerProfitFooterRow(
+  entries: LedgerEntry[],
+  invoicedPoKeys?: Set<string>
+) {
+  const { grossProfit, netProfit } = computePlTotals(entries, invoicedPoKeys);
+  return {
+    actions: "",
+    client: "Total",
+    grossProfit: formatCurrency(grossProfit),
+    netProfit: formatCurrency(netProfit),
   };
 }
 
