@@ -27,6 +27,8 @@ export type PlTotals = {
   expenseAmount: number;
   grossProfit: number;
   grossProfitMargin: number;
+  netProfit: number;
+  netProfitMargin: number;
 };
 
 export type PlReportRow =
@@ -34,6 +36,22 @@ export type PlReportRow =
   | { kind: "quarter"; quarter: number; label: string; totals: PlTotals };
 
 const QUARTER_END_MONTHS = [3, 6, 9, 12] as const;
+
+/** Expenses = expense amount + shipping, payment fees, and tax per ledger line. */
+export function sumPlExpenseAmount(entry: LedgerPlEntry): number {
+  return roundMoney(
+    Number(entry.expense_amount ?? 0) +
+      Number(entry.shipping_receiving_amount ?? 0) +
+      Number(entry.payment_fee ?? 0) +
+      Number(entry.tax_amount ?? 0)
+  );
+}
+
+function sumPlExpenses(entries: LedgerPlEntry[]): number {
+  return roundMoney(
+    entries.reduce((sum, entry) => sum + sumPlExpenseAmount(entry), 0)
+  );
+}
 
 export function computePlTotals(
   entries: LedgerPlEntry[],
@@ -43,12 +61,21 @@ export function computePlTotals(
   const revenue = roundMoney(balances.credits);
   const cogs = roundMoney(balances.debits);
   const grossProfit = roundMoney(revenue - cogs);
-  const expenseAmount = roundMoney(
-    entries.reduce((sum, entry) => sum + Number(entry.expense_amount ?? 0), 0)
-  );
+  const expenseAmount = sumPlExpenses(entries);
+  const netProfit = roundMoney(revenue - (cogs + expenseAmount));
   const grossProfitMargin =
     revenue > 0 ? roundMoney((grossProfit / revenue) * 100) : 0;
-  return { revenue, cogs, expenseAmount, grossProfit, grossProfitMargin };
+  const netProfitMargin =
+    revenue > 0 ? roundMoney((netProfit / revenue) * 100) : 0;
+  return {
+    revenue,
+    cogs,
+    expenseAmount,
+    grossProfit,
+    grossProfitMargin,
+    netProfit,
+    netProfitMargin,
+  };
 }
 
 export function filterLedgerEntriesForYear(

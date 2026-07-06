@@ -5,6 +5,7 @@ import {
   buildPlMonthlyRows,
   computePlTotals,
   filterLedgerEntriesForYear,
+  sumPlExpenseAmount,
   type PlReportRow,
   type PlTotals,
 } from "@/lib/pl-report";
@@ -17,13 +18,13 @@ export const revalidate = 0;
 
 function PlTotalsCards({
   totals,
-  expenseCount,
+  expenseLineCount,
 }: {
   totals: PlTotals;
-  expenseCount: number;
+  expenseLineCount: number;
 }) {
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5 sm:gap-4">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 sm:gap-4">
       <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
         <p className="text-xs uppercase tracking-wide text-slate-500">Revenue</p>
         <p className="mt-1 text-xl font-semibold text-brand-800">
@@ -45,9 +46,9 @@ function PlTotalsCards({
           {formatCurrency(totals.expenseAmount)}
         </p>
         <p className="mt-1 text-sm text-slate-600">
-          {expenseCount === 0
-            ? "No expenses recorded"
-            : `Total across ${expenseCount} ledger ${expenseCount === 1 ? "entry" : "entries"}`}
+          {expenseLineCount === 0
+            ? "No expense components recorded"
+            : `Expense, shipping, fees & tax across ${expenseLineCount} ledger ${expenseLineCount === 1 ? "line" : "lines"}`}
         </p>
       </Link>
       <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
@@ -70,6 +71,24 @@ function PlTotalsCards({
           {formatPercent(totals.grossProfitMargin)}
         </p>
         <p className="mt-1 text-xs text-slate-500">Profit after direct costs</p>
+      </div>
+      <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
+        <p className="text-sm font-semibold leading-snug text-slate-700">NET PROFIT</p>
+        <p className="mt-2 text-2xl font-bold text-brand-800">
+          {formatCurrency(totals.netProfit)}
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          Revenue − (COGS + expenses)
+        </p>
+      </div>
+      <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
+        <p className="text-sm font-semibold leading-snug text-slate-700">
+          NET PROFIT MARGIN
+        </p>
+        <p className="mt-2 text-2xl font-bold text-brand-800">
+          {formatPercent(totals.netProfitMargin)}
+        </p>
+        <p className="mt-1 text-xs text-slate-500">Net profit ÷ revenue</p>
       </div>
     </div>
   );
@@ -106,7 +125,9 @@ function PlMonthlyTable({ rows }: { rows: PlReportRow[] }) {
     { key: "cogs", label: "COGS", className: "text-right" },
     { key: "expense", label: "Expenses", className: "text-right" },
     { key: "grossProfit", label: "Gross Profit", className: "text-right" },
-    { key: "margin", label: "Margin", className: "text-right" },
+    { key: "margin", label: "Gross Margin", className: "text-right" },
+    { key: "netProfit", label: "Net Profit", className: "text-right" },
+    { key: "netMargin", label: "Net Margin", className: "text-right" },
   ] as const;
 
   return (
@@ -156,10 +177,25 @@ function PlMonthlyTable({ rows }: { rows: PlReportRow[] }) {
                   </dd>
                 </div>
                 <div className="flex justify-between gap-3">
-                  <dt className="text-slate-500">Margin</dt>
+                  <dt className="text-slate-500">Gross Margin</dt>
                   <dd>
                     <PlMarginCell
                       value={row.totals.grossProfitMargin}
+                      emphasize={emphasize}
+                    />
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-slate-500">Net Profit</dt>
+                  <dd>
+                    <PlAmountCell value={row.totals.netProfit} emphasize={emphasize} />
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-slate-500">Net Margin</dt>
+                  <dd>
+                    <PlMarginCell
+                      value={row.totals.netProfitMargin}
                       emphasize={emphasize}
                     />
                   </dd>
@@ -218,6 +254,15 @@ function PlMonthlyTable({ rows }: { rows: PlReportRow[] }) {
                       emphasize={emphasize}
                     />
                   </td>
+                  <td className="px-4 py-3 text-right">
+                    <PlAmountCell value={row.totals.netProfit} emphasize={emphasize} />
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <PlMarginCell
+                      value={row.totals.netProfitMargin}
+                      emphasize={emphasize}
+                    />
+                  </td>
                 </tr>
               );
             })}
@@ -251,8 +296,8 @@ export default async function PlReportPage() {
 
   const ytdEntries = filterLedgerEntriesForYear(allLedgerEntries, reportYear);
   const ytdTotals = computePlTotals(ytdEntries, invoicedPoKeys);
-  const expenseCount = ytdEntries.filter(
-    (entry) => Number(entry.expense_amount ?? 0) > 0
+  const expenseLineCount = ytdEntries.filter(
+    (entry) => sumPlExpenseAmount(entry) > 0
   ).length;
   const monthlyRows = buildPlMonthlyRows(allLedgerEntries, {
     year: reportYear,
@@ -264,7 +309,7 @@ export default async function PlReportPage() {
     <AppShell>
       <PageHeader
         title="P&L Report"
-        description="Revenue, cost of goods sold, expenses, and gross profit from ledger activity."
+        description="Revenue, cost of goods sold, expenses, gross profit, and net profit from ledger activity."
       />
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
@@ -274,11 +319,14 @@ export default async function PlReportPage() {
         <p className="mt-1 text-sm text-slate-600">
           For each invoiced line: <strong>Revenue</strong> = payments received,{" "}
           <strong>Cost of goods sold</strong> = total designer cost.{" "}
-          <strong>Gross profit</strong> = revenue − cost (before expenses &amp; loans).
+          <strong>Expenses</strong> = expense amount + shipping + fees + tax.{" "}
+          <strong>Gross profit</strong> = revenue − COGS (before expenses).{" "}
+          <strong>Net profit</strong> = revenue − (COGS + expenses).{" "}
+          <strong>Net profit margin</strong> = net profit ÷ revenue.
           Uninvoiced debit costs are included in cost of goods sold only.
         </p>
         <div className="mt-4">
-          <PlTotalsCards totals={ytdTotals} expenseCount={expenseCount} />
+          <PlTotalsCards totals={ytdTotals} expenseLineCount={expenseLineCount} />
         </div>
         <p className="mt-4 text-sm">
           <Link
