@@ -34,7 +34,7 @@ async function waitForPaint(): Promise<void> {
   });
 }
 
-export async function saveInvoicePdf(element: HTMLElement, filename: string): Promise<void> {
+async function renderElementToPdf(element: HTMLElement): Promise<jsPDF> {
   await waitForImages(element);
   await waitForPaint();
 
@@ -72,6 +72,16 @@ export async function saveInvoicePdf(element: HTMLElement, filename: string): Pr
     heightLeft -= pageHeight;
   }
 
+  return pdf;
+}
+
+export async function renderElementToPdfBlob(element: HTMLElement): Promise<Blob> {
+  const pdf = await renderElementToPdf(element);
+  return pdf.output("blob");
+}
+
+export async function saveInvoicePdf(element: HTMLElement, filename: string): Promise<void> {
+  const pdf = await renderElementToPdf(element);
   pdf.save(filename);
 }
 

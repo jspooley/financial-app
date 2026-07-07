@@ -94,6 +94,8 @@ export interface ClientPoNumber {
   client_id: string;
   po_number: string;
   budget: number;
+  budget_plan?: unknown;
+  budget_pdf_path?: string | null;
   created_at?: string;
 }
 

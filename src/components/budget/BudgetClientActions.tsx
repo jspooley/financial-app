@@ -5,29 +5,50 @@ import { BudgetPdfContent } from "@/components/budget/BudgetPdfContent";
 import { BudgetPdfPreview } from "@/components/budget/BudgetPdfPreview";
 import { Button } from "@/components/ui/Button";
 import { SelectField } from "@/components/ui/FormFields";
+import {
+  mergeLoadedBudgetPlan,
+  parseClientBudgetPlanSaved,
+  type BudgetPlannerState,
+} from "@/lib/budget-planner-state";
+import {
+  downloadSavedClientBudgetPdf,
+  saveClientBudgetPlan,
+} from "@/lib/client-budget-plan-db";
 import { CLIENT_BUDGET_SETUP_SQL } from "@/lib/client-budget-db";
 import { budgetPdfFilename, saveBudgetPdf } from "@/lib/budget-pdf";
 import type { BudgetPlanSnapshot } from "@/lib/budget-utils";
 import { createClient } from "@/lib/supabase/client";
-import type { Client, ClientPoNumber } from "@/lib/types";
-import { formatCurrency, roundMoney } from "@/lib/utils";
+import type { BudgetItem, Client, ClientPoNumber } from "@/lib/types";
+import { formatCurrency, formatDate, roundMoney } from "@/lib/utils";
 
 interface BudgetClientActionsProps {
   clients: Client[];
   poNumbers: ClientPoNumber[];
+  items: BudgetItem[];
+  rooms: string[];
   plan: BudgetPlanSnapshot;
+  plannerState: BudgetPlannerState;
+  onClientsUpdated: () => void;
+  onLoadPlan: (state: BudgetPlannerState) => void;
 }
 
 export function BudgetClientActions({
   clients,
   poNumbers,
+  items,
+  rooms,
   plan,
+  plannerState,
+  onClientsUpdated,
+  onLoadPlan,
 }: BudgetClientActionsProps) {
   const pdfRef = useRef<HTMLDivElement>(null);
   const [selectedClientId, setSelectedClientId] = useState("");
   const [selectedPoId, setSelectedPoId] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loadingPlan, setLoadingPlan] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -37,6 +58,7 @@ export function BudgetClientActions({
   const clientPos = poNumbers.filter((row) => row.client_id === selectedClientId);
   const selectedPo = clientPos.find((row) => row.id === selectedPoId);
   const budgetAmount = roundMoney(plan.grandTotal);
+  const savedPlan = selectedPo ? parseClientBudgetPlanSaved(selectedPo.budget_plan) : null;
 
   function handleClientChange(clientId: string) {
     setSelectedClientId(clientId);
@@ -45,7 +67,16 @@ export function BudgetClientActions({
     setSuccess(null);
   }
 
-  async function handleUpdateClientBudget() {
+  function isBudgetSchemaError(message: string) {
+    const lower = message.toLowerCase();
+    return (
+      lower.includes("budget_plan") ||
+      lower.includes("budget_pdf_path") ||
+      lower.includes("budget")
+    );
+  }
+
+  async function handleSaveClientBudget() {
     setError(null);
     setSuccess(null);
     setNeedsBudgetSetup(false);
@@ -62,40 +93,95 @@ export function BudgetClientActions({
       setError("Include at least one room and item in the budget before saving.");
       return;
     }
+    if (!pdfRef.current) {
+      setError("PDF preview is not ready.");
+      return;
+    }
 
     setSaving(true);
-    const supabase = createClient();
-
-    const { error: clientError } = await supabase
-      .from("clients")
-      .update({ budget: budgetAmount })
-      .eq("id", selectedClientId);
-
-    if (clientError) {
+    try {
+      const result = await saveClientBudgetPlan({
+        clientId: selectedClientId,
+        poId: selectedPoId,
+        plannerState,
+        grandTotal: budgetAmount,
+        pdfElement: pdfRef.current,
+      });
+      onClientsUpdated();
+      setSuccess(
+        result.pdfWarning ??
+          `Saved budget (${formatCurrency(budgetAmount)}) for ${selectedClient?.name ?? "client"} · PO ${selectedPo?.po_number ?? ""}.`
+      );
+    } catch (saveError) {
+      const message =
+        saveError instanceof Error ? saveError.message : "Could not save client budget.";
+      if (isBudgetSchemaError(message)) setNeedsBudgetSetup(true);
+      setError(message);
+    } finally {
       setSaving(false);
-      const message = clientError.message.toLowerCase();
-      if (message.includes("budget")) setNeedsBudgetSetup(true);
-      setError(clientError.message);
+    }
+  }
+
+  async function handleLoadClientBudget() {
+    setError(null);
+    setSuccess(null);
+    setNeedsBudgetSetup(false);
+
+    if (!selectedPoId) {
+      setError("Select a client PO first.");
       return;
     }
 
-    const { error: poError } = await supabase
+    setLoadingPlan(true);
+    const supabase = createClient();
+    const { data, error: fetchError } = await supabase
       .from("client_po_numbers")
-      .update({ budget: budgetAmount })
-      .eq("id", selectedPoId);
+      .select("budget_plan")
+      .eq("id", selectedPoId)
+      .single();
 
-    setSaving(false);
+    setLoadingPlan(false);
 
-    if (poError) {
-      const message = poError.message.toLowerCase();
-      if (message.includes("budget")) setNeedsBudgetSetup(true);
-      setError(poError.message);
+    if (fetchError) {
+      if (isBudgetSchemaError(fetchError.message)) setNeedsBudgetSetup(true);
+      setError(fetchError.message);
       return;
     }
 
+    const parsed = parseClientBudgetPlanSaved(data?.budget_plan);
+    if (!parsed) {
+      setError("No saved budget found for this PO.");
+      return;
+    }
+
+    onLoadPlan(mergeLoadedBudgetPlan(parsed, items, rooms));
     setSuccess(
-      `Saved ${formatCurrency(budgetAmount)} to ${selectedClient?.name ?? "client"} · PO ${selectedPo?.po_number ?? ""}.`
+      `Loaded budget saved ${formatDate(parsed.savedAt)} for PO ${selectedPo?.po_number ?? ""}.`
     );
+  }
+
+  async function handleDownloadSavedPdf() {
+    setError(null);
+    setSuccess(null);
+
+    if (!selectedPo?.budget_pdf_path) {
+      setError("No saved PDF for this PO yet.");
+      return;
+    }
+
+    setDownloadingPdf(true);
+    try {
+      await downloadSavedClientBudgetPdf(selectedPo.budget_pdf_path);
+      setSuccess("Saved PDF downloaded.");
+    } catch (downloadError) {
+      setError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : "Could not download saved PDF."
+      );
+    } finally {
+      setDownloadingPdf(false);
+    }
   }
 
   function handleViewPdf() {
@@ -137,7 +223,7 @@ export function BudgetClientActions({
         pdfRef.current,
         budgetPdfFilename(selectedClient.name, selectedPo?.po_number)
       );
-      setSuccess("PDF saved.");
+      setSuccess("PDF saved to your downloads folder.");
     } catch (exportError) {
       setError(
         exportError instanceof Error ? exportError.message : "Could not save PDF."
@@ -154,8 +240,8 @@ export function BudgetClientActions({
           Client budget
         </h2>
         <p className="mt-1 text-sm text-slate-600">
-          Save the current total investment ({formatCurrency(budgetAmount)}) to a client and PO, or
-          export an investment approach PDF.
+          Save the current investment approach ({formatCurrency(budgetAmount)}) to a client and PO,
+          then load it later with the same sliders and amounts.
         </p>
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -192,14 +278,31 @@ export function BudgetClientActions({
             {clientPos.map((row) => (
               <option key={row.id} value={row.id}>
                 {row.po_number}
+                {parseClientBudgetPlanSaved(row.budget_plan) ? " · saved" : ""}
               </option>
             ))}
           </SelectField>
         </div>
 
+        {savedPlan && (
+          <p className="mt-3 text-sm text-slate-600">
+            Last saved for this PO: {formatCurrency(savedPlan.grandTotal)} on{" "}
+            {formatDate(savedPlan.savedAt)}.
+          </p>
+        )}
+
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button type="button" loading={saving} onClick={handleUpdateClientBudget}>
-            Update client budget
+          <Button type="button" loading={saving} onClick={handleSaveClientBudget}>
+            Save Client Budget
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            loading={loadingPlan}
+            disabled={!selectedPoId}
+            onClick={handleLoadClientBudget}
+          >
+            Load Client Budget
           </Button>
           <Button type="button" variant="secondary" onClick={handleViewPdf}>
             View PDF
@@ -207,6 +310,16 @@ export function BudgetClientActions({
           <Button type="button" variant="secondary" loading={exporting} onClick={handleSavePdf}>
             Save PDF
           </Button>
+          {selectedPo?.budget_pdf_path ? (
+            <Button
+              type="button"
+              variant="secondary"
+              loading={downloadingPdf}
+              onClick={handleDownloadSavedPdf}
+            >
+              Download Saved PDF
+            </Button>
+          ) : null}
         </div>
 
         {needsBudgetSetup && (

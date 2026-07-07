@@ -7,4 +7,10 @@ export function budgetPdfFilename(clientName: string, poNumber?: string): string
   return `Investment-Approach-${safeClient}.pdf`;
 }
 
-export { saveInvoicePdf as saveBudgetPdf } from "@/lib/invoice-pdf";
+export function clientBudgetPdfStoragePath(clientId: string, poId: string) {
+  return `${clientId}/${poId}.pdf`;
+}
+
+export const CLIENT_BUDGET_PDF_BUCKET = "client-budgets";
+
+export { saveInvoicePdf as saveBudgetPdf, renderElementToPdfBlob } from "@/lib/invoice-pdf";

@@ -9,7 +9,12 @@ import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
-import { sortBudgetRooms, type BudgetPlanSnapshot } from "@/lib/budget-utils";
+import { type BudgetPlannerState } from "@/lib/budget-planner-state";
+import {
+  groupBudgetItemsByRoom,
+  sortBudgetRooms,
+  type BudgetPlanSnapshot,
+} from "@/lib/budget-utils";
 import { createClient } from "@/lib/supabase/client";
 import { BUDGET_DB_SETUP_SQL } from "@/lib/budget-db";
 import { BUDGET_ROOM_OPTIONS, type BudgetItem, type Client, type ClientPoNumber } from "@/lib/types";
@@ -39,6 +44,14 @@ export default function BudgetToolPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [poNumbers, setPoNumbers] = useState<ClientPoNumber[]>([]);
   const [plan, setPlan] = useState<BudgetPlanSnapshot>(EMPTY_PLAN);
+  const [plannerState, setPlannerState] = useState<BudgetPlannerState>({
+    includedRooms: {},
+    includedItems: {},
+    quantities: {},
+    sliderPercents: {},
+  });
+  const [loadedPlanState, setLoadedPlanState] = useState<BudgetPlannerState | null>(null);
+  const [loadPlanToken, setLoadPlanToken] = useState(0);
   const [roomFilter, setRoomFilter] = useState("");
 
   const loadItems = useCallback(async () => {
@@ -79,7 +92,7 @@ export default function BudgetToolPage() {
       supabase.from("clients").select("*").order("name", { ascending: true }),
       supabase
         .from("client_po_numbers")
-        .select("id, client_id, po_number, budget")
+        .select("id, client_id, po_number, budget, budget_plan, budget_pdf_path")
         .order("po_number", { ascending: true }),
     ]);
 
@@ -106,6 +119,24 @@ export default function BudgetToolPage() {
     () => [...new Set(items.map((item) => item.room))],
     [items]
   );
+
+  const plannerRooms = useMemo(() => {
+    const grouped = groupBudgetItemsByRoom(items);
+    return sortBudgetRooms([...grouped.keys()], BUDGET_ROOM_OPTIONS);
+  }, [items]);
+
+  const handlePlanChange = useCallback((nextPlan: BudgetPlanSnapshot) => {
+    setPlan(nextPlan);
+  }, []);
+
+  const handlePlannerStateChange = useCallback((state: BudgetPlannerState) => {
+    setPlannerState(state);
+  }, []);
+
+  const handleLoadPlan = useCallback((state: BudgetPlannerState) => {
+    setLoadedPlanState(state);
+    setLoadPlanToken((token) => token + 1);
+  }, []);
 
   const roomFilterOptions = useMemo(
     () => sortBudgetRooms(customRooms, BUDGET_ROOM_OPTIONS),
@@ -230,8 +261,23 @@ export default function BudgetToolPage() {
           <p className="text-sm text-slate-500">Loading budget items...</p>
         ) : (
           <>
-            <BudgetClientActions clients={clients} poNumbers={poNumbers} plan={plan} />
-            <BudgetPlanner items={items} onPlanChange={setPlan} />
+            <BudgetClientActions
+              clients={clients}
+              poNumbers={poNumbers}
+              items={items}
+              rooms={plannerRooms}
+              plan={plan}
+              plannerState={plannerState}
+              onClientsUpdated={loadClients}
+              onLoadPlan={handleLoadPlan}
+            />
+            <BudgetPlanner
+              items={items}
+              onPlanChange={handlePlanChange}
+              onPlannerStateChange={handlePlannerStateChange}
+              loadedPlanState={loadedPlanState}
+              loadPlanToken={loadPlanToken}
+            />
           </>
         )
       ) : showForm ? (

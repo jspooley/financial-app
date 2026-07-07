@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { BudgetPlannerState } from "@/lib/budget-planner-state";
 import {
   BUDGET_SLIDER_DEFAULT_PERCENT,
   budgetLineTotal,
@@ -17,9 +18,18 @@ import { formatCurrency } from "@/lib/utils";
 interface BudgetPlannerProps {
   items: BudgetItem[];
   onPlanChange?: (plan: BudgetPlanSnapshot) => void;
+  onPlannerStateChange?: (state: BudgetPlannerState) => void;
+  loadedPlanState?: BudgetPlannerState | null;
+  loadPlanToken?: number;
 }
 
-export function BudgetPlanner({ items, onPlanChange }: BudgetPlannerProps) {
+export function BudgetPlanner({
+  items,
+  onPlanChange,
+  onPlannerStateChange,
+  loadedPlanState,
+  loadPlanToken = 0,
+}: BudgetPlannerProps) {
   const rooms = useMemo(() => {
     const grouped = groupBudgetItemsByRoom(items);
     return sortBudgetRooms([...grouped.keys()], BUDGET_ROOM_OPTIONS);
@@ -30,6 +40,15 @@ export function BudgetPlanner({ items, onPlanChange }: BudgetPlannerProps) {
   const [includedItems, setIncludedItems] = useState<Record<string, boolean>>({});
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [sliderPercents, setSliderPercents] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    if (!loadedPlanState || loadPlanToken === 0) return;
+
+    setIncludedRooms(loadedPlanState.includedRooms);
+    setIncludedItems(loadedPlanState.includedItems);
+    setQuantities(loadedPlanState.quantities);
+    setSliderPercents(loadedPlanState.sliderPercents);
+  }, [loadedPlanState, loadPlanToken]);
 
   useEffect(() => {
     setIncludedRooms((current) => {
@@ -130,9 +149,23 @@ export function BudgetPlanner({ items, onPlanChange }: BudgetPlannerProps) {
     [items, rooms, includedRooms, includedItems, quantities, sliderPercents]
   );
 
+  const plannerState = useMemo(
+    () => ({
+      includedRooms,
+      includedItems,
+      quantities,
+      sliderPercents,
+    }),
+    [includedRooms, includedItems, quantities, sliderPercents]
+  );
+
   useEffect(() => {
     onPlanChange?.(planSnapshot);
   }, [planSnapshot, onPlanChange]);
+
+  useEffect(() => {
+    onPlannerStateChange?.(plannerState);
+  }, [plannerState, onPlannerStateChange]);
 
   if (items.length === 0) {
     return (
