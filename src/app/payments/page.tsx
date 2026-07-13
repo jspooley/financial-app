@@ -43,7 +43,6 @@ import {
 type PaymentView = "outstanding" | "history";
 
 type PaymentRowDraft = {
-  selected: boolean;
   editing: boolean;
   date_paid: string;
   paid_to: Purchaser;
@@ -199,7 +198,6 @@ function paymentDraftFromEntry(entry: LedgerEntry): PaymentRowDraft {
     : savedFee > 0;
 
   return {
-    selected: false,
     editing: false,
     date_paid: draftDatePaidFromEntry(entry),
     paid_to: entry.paid_to ?? defaultPaidTo,
@@ -620,38 +618,38 @@ export default function PaymentsPage() {
     }
   }, [clientsWithPaid, historyClientId]);
 
-  const selectedEntries = useMemo(
-    () => filteredEntries.filter((entry) => drafts[entry.id]?.selected),
+  const editingEntries = useMemo(
+    () => filteredEntries.filter((entry) => drafts[entry.id]?.editing),
     [filteredEntries, drafts]
   );
 
   const totalPaymentAmount = useMemo(
     () =>
       roundMoney(
-        selectedEntries.reduce((sum, entry) => {
+        editingEntries.reduce((sum, entry) => {
           const draft = drafts[entry.id];
           if (!draft) return sum;
           return sum + paymentReceivedForDraft(entry, draft);
         }, 0)
       ),
-    [selectedEntries, drafts]
+    [editingEntries, drafts]
   );
 
-  const selectedHistoryEntries = useMemo(
-    () => filteredPaidEntries.filter((entry) => drafts[entry.id]?.selected),
+  const editingHistoryEntries = useMemo(
+    () => filteredPaidEntries.filter((entry) => drafts[entry.id]?.editing),
     [filteredPaidEntries, drafts]
   );
 
   const totalHistoryPaymentAmount = useMemo(
     () =>
       roundMoney(
-        selectedHistoryEntries.reduce((sum, entry) => {
+        editingHistoryEntries.reduce((sum, entry) => {
           const draft = drafts[entry.id];
           if (!draft) return sum;
           return sum + paymentReceivedForDraft(entry, draft);
         }, 0)
       ),
-    [selectedHistoryEntries, drafts]
+    [editingHistoryEntries, drafts]
   );
 
   function resetDraftFromEntry(entry: LedgerEntry) {
@@ -723,7 +721,7 @@ export default function PaymentsPage() {
 
     const today = todayDateInputValue();
     const target =
-      filteredEntries.find((entry) => !drafts[entry.id]?.selected) ?? filteredEntries[0];
+      filteredEntries.find((entry) => !drafts[entry.id]?.editing) ?? filteredEntries[0];
     const balance = getLedgerOutstandingBalance(target);
     const amountOwed = balance < 0 ? roundMoney(-balance) : 0;
     const targetDatePaid = toDateInputValue(target.date_paid) || today;
@@ -733,7 +731,6 @@ export default function PaymentsPage() {
       for (const entry of filteredEntries) {
         next[entry.id] = {
           ...(next[entry.id] ?? {
-            selected: false,
             editing: false,
             date_paid: draftDatePaidFromEntry(entry),
             paid_to: defaultPaidTo,
@@ -747,13 +744,11 @@ export default function PaymentsPage() {
             variance_amount: 0,
             variance_notes: "",
           }),
-          selected: entry.id === target.id,
           editing: entry.id === target.id,
         };
       }
       next[target.id] = {
         ...next[target.id],
-        selected: true,
         editing: true,
         date_paid: targetDatePaid,
         paid_to: defaultPaidTo,
@@ -771,30 +766,40 @@ export default function PaymentsPage() {
     });
   }
 
-  function handleEditSelected() {
+  function beginEditRow(entry: LedgerEntry) {
     setError(null);
-    if (selectedEntries.length === 0) {
-      setError("Select at least one item to edit.");
+    setSuccess(null);
+    if (!selectedClientId) {
+      setError("Select a client first.");
       return;
     }
-    for (const entry of selectedEntries) {
-      updateDraft(entry.id, beginEditingPayment(entry));
-    }
+    updateDraft(entry.id, beginEditingPayment(entry));
   }
 
-  async function handleDeleteSelected() {
-    if (selectedEntries.length === 0) {
-      setError("Select at least one item to delete.");
+  function beginEditHistoryRow(entry: LedgerEntry) {
+    setError(null);
+    setSuccess(null);
+    updateDraft(entry.id, beginEditingPayment(entry));
+  }
+
+  function cancelRowEdit(entry: LedgerEntry) {
+    setError(null);
+    resetDraftFromEntry(entry);
+  }
+
+  async function handleDeleteEditing() {
+    if (editingEntries.length === 0) {
+      setError("Click Edit on at least one item to clear.");
       return;
     }
-    if (!confirm(`Clear payment and variance for ${selectedEntries.length} item(s)?`)) return;
+    if (!confirm(`Clear payment and variance for ${editingEntries.length} item(s)?`)) return;
 
     setError(null);
     setSuccess(null);
     setSaving(true);
     const supabase = createClient();
 
-    for (const entry of selectedEntries) {
+    for (const entry of editingEntries) {
       const { error: updateError } = await supabase
         .from("ledger")
         .update({
@@ -822,28 +827,8 @@ export default function PaymentsPage() {
     }
 
     setSaving(false);
-    setSuccess(`Cleared ${selectedEntries.length} item${selectedEntries.length === 1 ? "" : "s"}.`);
+    setSuccess(`Cleared ${editingEntries.length} item${editingEntries.length === 1 ? "" : "s"}.`);
     await loadData();
-  }
-
-  function handleEditHistorySelected() {
-    setError(null);
-    if (selectedHistoryEntries.length === 0) {
-      setError("Select at least one payment to edit.");
-      return;
-    }
-    for (const entry of selectedHistoryEntries) {
-      updateDraft(entry.id, beginEditingPayment(entry));
-    }
-  }
-
-  function cancelHistoryEdit() {
-    setError(null);
-    for (const entry of filteredPaidEntries) {
-      if (drafts[entry.id]?.editing) {
-        resetDraftFromEntry(entry);
-      }
-    }
   }
 
   async function persistPaymentDrafts(
@@ -994,18 +979,12 @@ export default function PaymentsPage() {
   async function submitHistoryUpdates() {
     setSuccess(null);
     setError(null);
-    const rows = selectedHistoryEntries
+    const rows = editingHistoryEntries
       .map((entry) => ({ entry, draft: drafts[entry.id] }))
       .filter((row) => row.draft);
 
     if (rows.length === 0) {
-      setError("Select at least one payment, then click Edit.");
-      return;
-    }
-
-    const notEditing = rows.filter(({ draft }) => !draft.editing);
-    if (notEditing.length > 0) {
-      setError("Click Edit on selected payments before saving.");
+      setError("Click Edit on at least one payment before saving.");
       return;
     }
 
@@ -1018,18 +997,12 @@ export default function PaymentsPage() {
   async function submitUpdates() {
     setSuccess(null);
     setError(null);
-    const rows = selectedEntries
+    const rows = editingEntries
       .map((entry) => ({ entry, draft: drafts[entry.id] }))
       .filter((row) => row.draft);
 
     if (rows.length === 0) {
-      setError("Select at least one item, then click Edit or Add Payment.");
-      return;
-    }
-
-    const notEditing = rows.filter(({ draft }) => !draft.editing);
-    if (notEditing.length > 0) {
-      setError("Click Edit on selected items before saving.");
+      setError("Click Edit on at least one item, or use Add Payment.");
       return;
     }
 
@@ -1218,7 +1191,7 @@ export default function PaymentsPage() {
           </h2>
           <p className="text-xs text-slate-500">
             {selectedClientId
-              ? "Select items below, then use Edit, Delete, or Save at the bottom."
+              ? "Click Edit on a row, enter payment details, then Save. Cancel discards that row."
               : "All invoiced lines with a balance due. Select a client above to add or edit payments."}
           </p>
         </div>
@@ -1235,16 +1208,27 @@ export default function PaymentsPage() {
                 key={entry.id}
                 className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
               >
-                <label className="flex items-start gap-3">
-                  <input
-                    type="checkbox"
-                    checked={draft.selected}
-                    disabled={!selectedClientId}
-                    onChange={(event) =>
-                      updateDraft(entry.id, { selected: event.target.checked })
-                    }
-                    className="mt-1 size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500 disabled:opacity-50"
-                  />
+                <div className="flex items-start gap-3">
+                  <div className="flex w-21 shrink-0 flex-col gap-1.5">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="w-full min-h-[33px] px-3 py-1.5"
+                      onClick={() => beginEditRow(entry)}
+                      disabled={!selectedClientId || draft.editing}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="danger"
+                      className="w-full min-h-[33px] px-3 py-1.5"
+                      onClick={() => cancelRowEdit(entry)}
+                      disabled={!draft.editing}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
                   <div className="min-w-0 flex-1">
                     <p className="font-medium text-slate-900">{clientName}</p>
                     <p className="text-sm text-slate-500">
@@ -1261,7 +1245,7 @@ export default function PaymentsPage() {
                       </span>
                     </p>
                   </div>
-                </label>
+                </div>
 
                 <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
                   <div className="block text-sm">
@@ -1374,7 +1358,7 @@ export default function PaymentsPage() {
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-slate-600">
               <tr>
-                <th className={paymentsStickyHeaderClass}>Select</th>
+                <th className={paymentsStickyHeaderClass}>Actions</th>
                 <th className={paymentsStickyHeaderClass}>Client</th>
                 <th className={paymentsStickyHeaderClass}>Date</th>
                 <th className={paymentsStickyHeaderClass}>Invoice ID</th>
@@ -1398,15 +1382,26 @@ export default function PaymentsPage() {
                 return (
                   <tr key={entry.id}>
                     <td className="px-3 py-3">
-                      <input
-                        type="checkbox"
-                        checked={draft.selected}
-                        disabled={!selectedClientId}
-                        onChange={(event) =>
-                          updateDraft(entry.id, { selected: event.target.checked })
-                        }
-                        className="size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500 disabled:opacity-50"
-                      />
+                      <div className="flex w-21 flex-col gap-1.5">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="w-full min-h-[33px] px-3 py-1.5"
+                          onClick={() => beginEditRow(entry)}
+                          disabled={!selectedClientId || draft.editing}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="danger"
+                          className="w-full min-h-[33px] px-3 py-1.5"
+                          onClick={() => cancelRowEdit(entry)}
+                          disabled={!draft.editing}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
                     </td>
                     <td className="px-3 py-3">
                       {entry.clients?.name ?? clientNames.get(entry.client_id) ?? "—"}
@@ -1620,16 +1615,13 @@ export default function PaymentsPage() {
       {clientsWithUnpaid.length > 0 && selectedClientId && filteredEntries.length > 0 && (
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div>
-          <p className="text-xs uppercase tracking-wide text-slate-500">Selected Payment Total</p>
+          <p className="text-xs uppercase tracking-wide text-slate-500">Editing payment total</p>
           <p className="text-xl font-semibold text-brand-800">
             {formatCurrency(totalPaymentAmount)}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="secondary" onClick={handleEditSelected}>
-            Edit
-          </Button>
-          <Button type="button" variant="danger" loading={saving} onClick={handleDeleteSelected}>
+          <Button type="button" variant="danger" loading={saving} onClick={handleDeleteEditing}>
             Delete
           </Button>
           <Button type="button" loading={saving} onClick={submitUpdates}>
@@ -1727,7 +1719,7 @@ export default function PaymentsPage() {
           ) : (
             <>
             <p className="mb-3 text-xs text-slate-500">
-              Select payments below, click Edit, make changes, then Save.
+              Click Edit on a payment, make changes, then Save. Cancel discards that row.
             </p>
             <div className="space-y-3 md:hidden">
               {filteredPaidEntries.map((entry) => {
@@ -1739,15 +1731,27 @@ export default function PaymentsPage() {
                     key={entry.id}
                     className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm text-sm"
                   >
-                    <label className="flex items-start gap-3">
-                      <input
-                        type="checkbox"
-                        checked={draft.selected}
-                        onChange={(event) =>
-                          updateDraft(entry.id, { selected: event.target.checked })
-                        }
-                        className="mt-1 size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
-                      />
+                    <div className="flex items-start gap-3">
+                      <div className="flex w-21 shrink-0 flex-col gap-1.5">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="w-full min-h-[33px] px-3 py-1.5"
+                          onClick={() => beginEditHistoryRow(entry)}
+                          disabled={draft.editing}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="danger"
+                          className="w-full min-h-[33px] px-3 py-1.5"
+                          onClick={() => cancelRowEdit(entry)}
+                          disabled={!draft.editing}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
                       <div className="min-w-0 flex-1">
                         <p className="font-medium text-slate-900">
                           {entry.clients?.name ?? clientNames.get(entry.client_id) ?? "—"}
@@ -1774,7 +1778,7 @@ export default function PaymentsPage() {
                             : "Partial payment"}
                         </p>
                       </div>
-                    </label>
+                    </div>
 
                     {draft.editing && (
                       <div className="mt-4 space-y-3 border-t border-slate-100 pt-4">
@@ -1880,7 +1884,7 @@ export default function PaymentsPage() {
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-50 text-left text-slate-600">
                   <tr>
-                    <th className={paymentsStickyHeaderClass}>Select</th>
+                    <th className={paymentsStickyHeaderClass}>Actions</th>
                     <th className={paymentsStickyHeaderClass}>Client</th>
                     <th className={paymentsStickyHeaderClass}>Date Paid</th>
                     <th className={paymentsStickyHeaderClass}>Invoice ID</th>
@@ -1902,14 +1906,26 @@ export default function PaymentsPage() {
                     return (
                       <tr key={entry.id}>
                         <td className="px-3 py-3">
-                          <input
-                            type="checkbox"
-                            checked={draft.selected}
-                            onChange={(event) =>
-                              updateDraft(entry.id, { selected: event.target.checked })
-                            }
-                            className="size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
-                          />
+                          <div className="flex w-21 flex-col gap-1.5">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="w-full min-h-[33px] px-3 py-1.5"
+                              onClick={() => beginEditHistoryRow(entry)}
+                              disabled={draft.editing}
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="danger"
+                              className="w-full min-h-[33px] px-3 py-1.5"
+                              onClick={() => cancelRowEdit(entry)}
+                              disabled={!draft.editing}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
                         </td>
                         <td className="px-3 py-3">
                           {entry.clients?.name ?? clientNames.get(entry.client_id) ?? "—"}
@@ -2027,23 +2043,15 @@ export default function PaymentsPage() {
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <div>
                 <p className="text-xs uppercase tracking-wide text-slate-500">
-                  Selected payment total
+                  Editing payment total
                 </p>
                 <p className="text-xl font-semibold text-brand-800">
                   {formatCurrency(totalHistoryPaymentAmount)}
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="secondary" onClick={handleEditHistorySelected}>
-                  Edit
-                </Button>
-                <Button type="button" variant="secondary" onClick={cancelHistoryEdit}>
-                  Cancel
-                </Button>
-                <Button type="button" loading={saving} onClick={submitHistoryUpdates}>
-                  Save
-                </Button>
-              </div>
+              <Button type="button" loading={saving} onClick={submitHistoryUpdates}>
+                Save
+              </Button>
             </div>
             </>
           )}
