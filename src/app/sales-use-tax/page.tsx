@@ -22,7 +22,6 @@ type TaxView = "unpaid" | "paid";
 type StatementFilter = "" | "Bal Sheet - Personal" | "Income Statement";
 
 type TaxRowDraft = {
-  selected: boolean;
   editing: boolean;
   sales_and_use_tax_paid: boolean;
 };
@@ -44,7 +43,6 @@ function compareEntryDatesDesc(a: LedgerEntry, b: LedgerEntry) {
 
 function taxDraftFromEntry(entry: LedgerEntry): TaxRowDraft {
   return {
-    selected: false,
     editing: false,
     sales_and_use_tax_paid: isSalesUseTaxPaid(entry),
   };
@@ -238,15 +236,15 @@ function SalesUseTaxPaymentsPageContent() {
   const summaryMonthMollyTaxDue = summaryMonthTax?.molly ?? 0;
   const summaryMonthLabel = monthLabel(summaryMonthKey);
 
-  const selectedEntries = useMemo(
-    () => filteredEntries.filter((entry) => drafts[entry.id]?.selected),
+  const editingEntries = useMemo(
+    () => filteredEntries.filter((entry) => drafts[entry.id]?.editing),
     [filteredEntries, drafts]
   );
 
-  const selectedTaxTotal = useMemo(
+  const editingTaxTotal = useMemo(
     () =>
-      selectedEntries.reduce((sum, entry) => sum + Number(entry.tax_amount), 0),
-    [selectedEntries]
+      editingEntries.reduce((sum, entry) => sum + Number(entry.tax_amount), 0),
+    [editingEntries]
   );
 
   function updateDraft(entryId: string, patch: Partial<TaxRowDraft>) {
@@ -262,41 +260,26 @@ function SalesUseTaxPaymentsPageContent() {
     updateDraft(entry.id, taxDraftFromEntry(entry));
   }
 
-  function handleEditSelected() {
+  function beginEdit(entry: LedgerEntry) {
     setError(null);
-    if (selectedEntries.length === 0) {
-      setError("Select at least one item to edit.");
-      return;
-    }
-    for (const entry of selectedEntries) {
-      updateDraft(entry.id, { editing: true });
-    }
+    updateDraft(entry.id, { editing: true });
   }
 
-  function cancelEdit() {
+  function cancelRowEdit(entry: LedgerEntry) {
     setError(null);
-    for (const entry of filteredEntries) {
-      if (drafts[entry.id]?.editing) {
-        resetDraftFromEntry(entry);
-      }
-    }
+    resetDraftFromEntry(entry);
   }
 
   async function submitUpdates() {
     setSuccess(null);
     setError(null);
 
-    const rows = selectedEntries
+    const rows = editingEntries
       .map((entry) => ({ entry, draft: drafts[entry.id] }))
       .filter((row) => row.draft);
 
     if (rows.length === 0) {
-      setError("Select at least one item, then click Edit.");
-      return;
-    }
-
-    if (rows.some(({ draft }) => !draft.editing)) {
-      setError("Click Edit on selected items before saving.");
+      setError("Click Edit on at least one item before saving.");
       return;
     }
 
@@ -519,7 +502,8 @@ function SalesUseTaxPaymentsPageContent() {
       ) : (
         <>
           <p className="mb-3 text-xs text-slate-500">
-            Select items below, click Edit, change Tax Paid, then Save.
+            Click Edit on a row, change Tax Paid, then Save. Cancel discards changes for that
+            row.
           </p>
 
           <div className="space-y-3 md:hidden">
@@ -532,15 +516,27 @@ function SalesUseTaxPaymentsPageContent() {
                   key={entry.id}
                   className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm text-sm"
                 >
-                  <label className="flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      checked={draft.selected}
-                      onChange={(event) =>
-                        updateDraft(entry.id, { selected: event.target.checked })
-                      }
-                      className="mt-1 size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
-                    />
+                  <div className="flex items-start gap-3">
+                    <div className="flex w-21 shrink-0 flex-col gap-1.5">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        className="w-full min-h-[33px] px-3 py-1.5"
+                        onClick={() => beginEdit(entry)}
+                        disabled={draft.editing}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="danger"
+                        className="w-full min-h-[33px] px-3 py-1.5"
+                        onClick={() => cancelRowEdit(entry)}
+                        disabled={!draft.editing}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
                     <div className="min-w-0 flex-1">
                       <p className="font-medium text-slate-900">
                         {entry.clients?.name ?? "—"}
@@ -557,7 +553,7 @@ function SalesUseTaxPaymentsPageContent() {
                       </p>
                       <p className="text-slate-600">Purchaser: {entry.purchaser ?? "—"}</p>
                     </div>
-                  </label>
+                  </div>
 
                   <div className="mt-4 border-t border-slate-100 pt-4">
                     <label className="inline-flex items-center gap-2">
@@ -586,7 +582,7 @@ function SalesUseTaxPaymentsPageContent() {
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 text-left text-slate-600">
                 <tr>
-                  <th className="px-3 py-3 w-10" aria-label="Select" />
+                  <th className="px-3 py-3">Actions</th>
                   <th className="px-3 py-3">Date</th>
                   <th className="px-3 py-3">Client</th>
                   <th className="px-3 py-3">Description</th>
@@ -606,14 +602,26 @@ function SalesUseTaxPaymentsPageContent() {
                   return (
                     <tr key={entry.id} className="border-t border-slate-100">
                       <td className="px-3 py-3">
-                        <input
-                          type="checkbox"
-                          checked={draft.selected}
-                          onChange={(event) =>
-                            updateDraft(entry.id, { selected: event.target.checked })
-                          }
-                          className="size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
-                        />
+                        <div className="flex w-21 flex-col gap-1.5">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="w-full min-h-[33px] px-3 py-1.5"
+                            onClick={() => beginEdit(entry)}
+                            disabled={draft.editing}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="danger"
+                            className="w-full min-h-[33px] px-3 py-1.5"
+                            onClick={() => cancelRowEdit(entry)}
+                            disabled={!draft.editing}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap">
                         {formatDate(entry.entry_date)}
@@ -663,22 +671,16 @@ function SalesUseTaxPaymentsPageContent() {
 
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <div>
-              <p className="text-xs uppercase tracking-wide text-slate-500">Selected tax total</p>
+              <p className="text-xs uppercase tracking-wide text-slate-500">
+                Editing tax total
+              </p>
               <p className="text-xl font-semibold text-brand-800">
-                {formatCurrency(selectedTaxTotal)}
+                {formatCurrency(editingTaxTotal)}
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="secondary" onClick={handleEditSelected}>
-                Edit
-              </Button>
-              <Button type="button" variant="secondary" onClick={cancelEdit}>
-                Cancel
-              </Button>
-              <Button type="button" loading={saving} onClick={submitUpdates}>
-                Save
-              </Button>
-            </div>
+            <Button type="button" loading={saving} onClick={submitUpdates}>
+              Save
+            </Button>
           </div>
         </>
       )}

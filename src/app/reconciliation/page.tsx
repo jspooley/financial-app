@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, syncAllLedgerPaidFlags, type LedgerDbRow } from "@/lib/ledger-db";
 import { buildReconciliationReport } from "@/lib/reconciliation";
-import type { Client, Invoice, LedgerEntry } from "@/lib/types";
+import type { Client, Invoice, LedgerEntry, TradePartner } from "@/lib/types";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
 function PaidBadge({ paid, label }: { paid: boolean; label: string }) {
@@ -55,6 +55,9 @@ export default function ReconciliationPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
+  const [tradePartners, setTradePartners] = useState<
+    Pick<TradePartner, "id" | "company_name" | "account_owner">[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -65,21 +68,32 @@ export default function ReconciliationPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     const supabase = createClient();
-    const [{ data: invoiceData }, { data: clientData }, { data: ledgerData }] =
-      await Promise.all([
-        supabase
-          .from("invoicing")
-          .select("*, clients(name)")
-          .order("created_at", { ascending: false }),
-        supabase.from("clients").select("*").order("name", { ascending: true }),
-        supabase.from("ledger").select("*, clients(name)"),
-      ]);
+    const [
+      { data: invoiceData },
+      { data: clientData },
+      { data: ledgerData },
+      { data: tradeData },
+    ] = await Promise.all([
+      supabase
+        .from("invoicing")
+        .select("*, clients(name)")
+        .order("created_at", { ascending: false }),
+      supabase.from("clients").select("*").order("name", { ascending: true }),
+      supabase.from("ledger").select("*, clients(name)"),
+      supabase
+        .from("trade_partners")
+        .select("id, company_name, account_owner")
+        .order("company_name", { ascending: true }),
+    ]);
     setInvoices((invoiceData ?? []) as Invoice[]);
     setClients(clientData ?? []);
     setLedgerEntries(
       (ledgerData ?? []).map((row) =>
         normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
       )
+    );
+    setTradePartners(
+      (tradeData ?? []) as Pick<TradePartner, "id" | "company_name" | "account_owner">[]
     );
     setLoading(false);
   }, []);
@@ -156,8 +170,15 @@ export default function ReconciliationPage() {
   );
 
   const report = useMemo(
-    () => buildReconciliationReport(invoices, ledgerEntries, clientNames),
-    [invoices, ledgerEntries, clientNames]
+    () =>
+      buildReconciliationReport(
+        invoices,
+        ledgerEntries,
+        clientNames,
+        new Date().getFullYear(),
+        tradePartners
+      ),
+    [invoices, ledgerEntries, clientNames, tradePartners]
   );
 
   const problemLineRows = report.problemLines.map((line) => ({
@@ -739,6 +760,66 @@ export default function ReconciliationPage() {
             </section>
           )}
 
+          {report.tradeAccountOwnerMismatches.length > 0 && (
+            <section
+              id="trade-account-owner-mismatches"
+              className="scroll-mt-6 rounded-xl border border-amber-200 bg-amber-50/40 p-4 shadow-sm sm:p-6"
+            >
+              <h2 className="text-lg font-semibold text-slate-900">
+                Trade Account Owner vs Purchaser
+              </h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Ledger lines where the purchaser does not match the trade partner&apos;s
+                account owner ({report.tradeAccountOwnerMismatches.length} mismatch
+                {report.tradeAccountOwnerMismatches.length === 1 ? "" : "es"}). Partners
+                without an account owner are not listed.
+              </p>
+              <div className="mt-4">
+                <DataTable
+                  columns={[
+                    { key: "entryDate", label: "Date" },
+                    { key: "invoiceId", label: "Invoice" },
+                    { key: "clientName", label: "Client" },
+                    { key: "description", label: "Description" },
+                    { key: "tradePartner", label: "Trade Partner" },
+                    { key: "accountOwner", label: "Account Owner" },
+                    { key: "purchaser", label: "Purchaser" },
+                    { key: "poNumber", label: "PO" },
+                  ]}
+                  rows={report.tradeAccountOwnerMismatches.map((line) => ({
+                    entryDate: formatDate(line.entryDate),
+                    invoiceId: line.invoiceId,
+                    clientName: line.clientName,
+                    description: (
+                      <span className="max-w-xs truncate block" title={line.description}>
+                        {line.description}
+                      </span>
+                    ),
+                    tradePartner: line.tradePartnerName,
+                    accountOwner: (
+                      <span className="font-medium text-amber-900">{line.accountOwner}</span>
+                    ),
+                    purchaser: (
+                      <span className="font-medium text-amber-900">{line.purchaser}</span>
+                    ),
+                    poNumber: line.poNumber,
+                  }))}
+                  emptyMessage="No trade account owner mismatches."
+                  rowKey={(_, index) =>
+                    report.tradeAccountOwnerMismatches[index]?.id ?? String(index)
+                  }
+                  mobileTitleKey="invoiceId"
+                />
+              </div>
+              <Link
+                href="/ledger"
+                className="mt-4 inline-block text-sm font-medium text-brand-700 hover:underline"
+              >
+                Open Ledger to correct purchaser →
+              </Link>
+            </section>
+          )}
+
           {(report.problemLines.length > 0 || report.outstandingCount > 0) && (
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
               <h2 className="text-lg font-semibold text-slate-900">
@@ -827,6 +908,11 @@ export default function ReconciliationPage() {
                 <strong>Accepted Underpayment Variances</strong> — sum of accepted short
                 payments (invoiced − payment after expense). Excluded from outstanding
                 revenue and discrepancy; listed in the section above.
+              </li>
+              <li>
+                <strong>Trade Account Owner vs Purchaser</strong> — ledger lines whose
+                purchaser is not the same as the linked trade partner&apos;s account owner
+                (Molly or Jess).
               </li>
               <li>
                 <strong>Outstanding Payments</strong> — Total Amount Invoiced minus Payments

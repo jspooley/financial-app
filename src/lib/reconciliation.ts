@@ -14,7 +14,7 @@ import {
   normalizeInvoiceId,
 } from "./invoice-utils";
 import { computePlTotals } from "./pl-report";
-import type { Invoice, LedgerEntry } from "./types";
+import type { Invoice, LedgerEntry, TradePartner } from "./types";
 import {
   isLedgerLineInvoicedForRevenue,
   ledgerLineRevenue,
@@ -76,6 +76,18 @@ export interface PaymentsVsInvoicedGapRow {
   paymentAmount: number;
   /** Payment amount − invoiced (+ fees). */
   difference: number;
+}
+
+export interface TradeAccountOwnerMismatchRow {
+  id: string;
+  entryDate: string;
+  clientName: string;
+  invoiceId: string;
+  description: string;
+  poNumber: string;
+  tradePartnerName: string;
+  accountOwner: string;
+  purchaser: string;
 }
 
 export interface PaymentsVsRevenueGapRow {
@@ -342,8 +354,12 @@ export function buildReconciliationReport(
   invoices: Invoice[],
   ledgerEntries: LedgerEntry[],
   clientNames: Map<string, string>,
-  reportYear: number = new Date().getFullYear()
+  reportYear: number = new Date().getFullYear(),
+  tradePartners: Pick<TradePartner, "id" | "company_name" | "account_owner">[] = []
 ) {
+  const tradePartnerById = new Map(
+    tradePartners.map((partner) => [partner.id, partner] as const)
+  );
   const invoicedPoKeys = invoicedPoKeysFromInvoices(invoices);
   const yearPrefix = `${reportYear}-`;
   const ytdEntries = ledgerEntries.filter(
@@ -591,6 +607,35 @@ export function buildReconciliationReport(
     (row) => row.paidByBalance && !row.paidByFlag
   );
 
+  const tradeAccountOwnerMismatches: TradeAccountOwnerMismatchRow[] = ledgerEntries
+    .filter((entry) => Boolean(entry.trade_partner_id))
+    .map((entry) => {
+      const partner = tradePartnerById.get(entry.trade_partner_id!);
+      if (!partner) return null;
+      const accountOwner = partner.account_owner?.trim() || "";
+      if (!accountOwner) return null;
+      const purchaser = (entry.purchaser ?? "").trim();
+      if (!purchaser || purchaser === accountOwner) return null;
+      return {
+        id: entry.id,
+        entryDate: entry.entry_date,
+        clientName: clientNameFor(entry, clientNames),
+        invoiceId: entry.invoice_id?.trim() || "—",
+        description: entry.description?.trim() || "—",
+        poNumber: entry.po_number?.trim() || "—",
+        tradePartnerName: partner.company_name?.trim() || "—",
+        accountOwner,
+        purchaser,
+      } satisfies TradeAccountOwnerMismatchRow;
+    })
+    .filter((row): row is TradeAccountOwnerMismatchRow => row !== null)
+    .sort((a, b) => {
+      if (a.entryDate !== b.entryDate) {
+        return b.entryDate.localeCompare(a.entryDate);
+      }
+      return a.tradePartnerName.localeCompare(b.tradePartnerName);
+    });
+
   return {
     summary,
     invoiceRows,
@@ -599,6 +644,7 @@ export function buildReconciliationReport(
     acceptedVarianceLines,
     paymentsVsRevenueGapLines,
     paymentsVsInvoicedGapLines,
+    tradeAccountOwnerMismatches,
     invoicesMissingPaidBadge: invoicesWithUnsetPaidFlag,
     outstandingCount: outstanding.count,
   };
