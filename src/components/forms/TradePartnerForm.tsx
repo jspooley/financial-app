@@ -5,9 +5,9 @@ import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
-import type { TradePartner } from "@/lib/types";
+import { TRADE_ACCOUNT_OWNERS, type TradePartner } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
-import { InputField } from "@/components/ui/FormFields";
+import { InputField, SelectField } from "@/components/ui/FormFields";
 import {
   calculateTradeDiscountPercentFromPricing,
   formatPercent,
@@ -19,6 +19,7 @@ const schema = z.object({
   contact_name: z.string().optional(),
   contact_email: z.string().email("Invalid email").optional().or(z.literal("")),
   contact_phone: z.string().optional(),
+  account_owner: z.enum(["", ...TRADE_ACCOUNT_OWNERS]),
   retail_price: z.coerce.number().min(0, "Retail price must be 0 or greater"),
   designer_cost: z.coerce.number().min(0, "Designer cost must be 0 or greater"),
   minimum_purchase_amount: z.coerce.number().min(0, "MAP must be 0 or greater"),
@@ -51,6 +52,7 @@ export function TradePartnerForm({
       contact_name: initial?.contact_name ?? "",
       contact_email: initial?.contact_email ?? "",
       contact_phone: initial?.contact_phone ?? "",
+      account_owner: initial?.account_owner ?? "",
       retail_price: initial?.retail_price ?? 0,
       designer_cost: initial?.designer_cost ?? 0,
       minimum_purchase_amount: initial?.minimum_purchase_amount ?? 0,
@@ -82,6 +84,7 @@ export function TradePartnerForm({
       contact_name: values.contact_name || null,
       contact_email: values.contact_email || null,
       contact_phone: values.contact_phone || null,
+      account_owner: values.account_owner || null,
       retail_price: retail,
       designer_cost: designer,
       discount_amount: discountAmount,
@@ -123,6 +126,18 @@ export function TradePartnerForm({
           {...register("contact_email")}
         />
         <InputField label="Contact Phone" {...register("contact_phone")} />
+        <SelectField
+          label="Trade Account Owner"
+          error={errors.account_owner?.message}
+          {...register("account_owner")}
+        >
+          <option value="">Select owner</option>
+          {TRADE_ACCOUNT_OWNERS.map((owner) => (
+            <option key={owner} value={owner}>
+              {owner}
+            </option>
+          ))}
+        </SelectField>
         <InputField
           label="Retail Price"
           type="number"

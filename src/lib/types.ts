@@ -165,6 +165,10 @@ export function isAppointmentsBucket(
   return !appointment.proposal_sent;
 }
 
+export const TRADE_ACCOUNT_OWNERS = ["Molly", "Jess"] as const;
+
+export type TradeAccountOwner = (typeof TRADE_ACCOUNT_OWNERS)[number];
+
 export interface TradePartner {
   id: string;
   company_name: string;
@@ -176,6 +180,7 @@ export interface TradePartner {
   discount_amount: number;
   minimum_purchase_amount: number;
   map_expiration: string | null;
+  account_owner: TradeAccountOwner | null;
   created_at: string;
   updated_at: string;
 }

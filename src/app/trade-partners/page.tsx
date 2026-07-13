@@ -131,6 +131,7 @@ export default function TradePartnersPage() {
           columns={[
             { key: "actions", label: "Actions" },
             { key: "company", label: "Company" },
+            { key: "accountOwner", label: "Account Owner" },
             { key: "retailPrice", label: "Retail Price" },
             { key: "designerCost", label: "Designer Cost" },
             { key: "discount", label: "Discount (%)" },
@@ -153,6 +154,7 @@ export default function TradePartnersPage() {
               />
             ),
             company: partner.company_name,
+            accountOwner: partner.account_owner?.trim() || "—",
             retailPrice: retail > 0 ? formatCurrency(retail) : "—",
             designerCost: designer > 0 ? formatCurrency(designer) : "—",
             discount: formatPercent(discount),
