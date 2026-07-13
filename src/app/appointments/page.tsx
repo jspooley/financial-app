@@ -11,7 +11,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
 import { createClient } from "@/lib/supabase/client";
 import { isAppointmentsBucket, isPendingProposalSent, type Appointment } from "@/lib/types";
-import { formatDate, toDateInputValue } from "@/lib/utils";
+import { formatDateTime, toDateInputValue, toTimeInputValue } from "@/lib/utils";
 
 type AppointmentFilter = "all" | "pending" | "won" | "lost" | "proposal_sent";
 
@@ -47,10 +47,13 @@ function AppointmentsPageContent() {
     } else {
       setAppointments(
         (data ?? []).map((row) => ({
-          ...row,
+          ...(row as Appointment),
           appointment_date:
             toDateInputValue(row.appointment_date as string | Date) ||
             String(row.appointment_date ?? ""),
+          appointment_time: toTimeInputValue(
+            (row as Appointment).appointment_time
+          ) || null,
         }))
       );
     }
@@ -186,7 +189,7 @@ function AppointmentsPageContent() {
           stickyFirstColumn
           columns={[
             { key: "actions", label: "Actions" },
-            { key: "date", label: "Date" },
+            { key: "date", label: "Date & Time" },
             { key: "client", label: "Client" },
             { key: "contact", label: "Contact" },
             { key: "referral", label: "Referral" },
@@ -205,7 +208,10 @@ function AppointmentsPageContent() {
                 onDelete={() => handleDelete(appointment)}
               />
             ),
-            date: formatDate(appointment.appointment_date),
+            date: formatDateTime(
+              appointment.appointment_date,
+              appointment.appointment_time
+            ),
             client: appointment.client_name,
             contact: (
               <div className="text-sm">

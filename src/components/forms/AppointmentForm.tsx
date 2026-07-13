@@ -6,7 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
 import { REFERRAL_SOURCE_OPTIONS, type Appointment, type ReferralSource } from "@/lib/types";
-import { todayDateInputValue, toDateInputValue } from "@/lib/utils";
+import { nowTimeInputValue, todayDateInputValue, toDateInputValue, toTimeInputValue } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 import { CheckboxField, InputField, SelectField, TextareaField } from "@/components/ui/FormFields";
 
@@ -21,6 +21,7 @@ const referralSourceSchema = z.enum([
 const schema = z
   .object({
     appointment_date: z.string().min(1, "Appointment date is required"),
+    appointment_time: z.string().min(1, "Appointment time is required"),
     client_name: z.string().min(1, "Client name is required"),
     client_email: z.string().email("Invalid email").optional().or(z.literal("")),
     client_phone: z.string().optional(),
@@ -51,6 +52,8 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
     () => ({
       appointment_date:
         toDateInputValue(initial?.appointment_date) || todayDateInputValue(),
+      appointment_time:
+        toTimeInputValue(initial?.appointment_time) || nowTimeInputValue(),
       client_name: initial?.client_name ?? "",
       client_email: initial?.client_email ?? "",
       client_phone: initial?.client_phone ?? "",
@@ -113,6 +116,7 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
 
     const payload = {
       appointment_date: toDateInputValue(values.appointment_date),
+      appointment_time: toTimeInputValue(values.appointment_time) || null,
       client_name: values.client_name,
       client_email: values.client_email || null,
       client_phone: values.client_phone || null,
@@ -157,8 +161,26 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
             <InputField
               label="Appointment Date"
               type="date"
+              required
               error={errors.appointment_date?.message}
               value={toDateInputValue(field.value)}
+              onChange={(event) => field.onChange(event.target.value)}
+              onBlur={field.onBlur}
+              name={field.name}
+              ref={field.ref}
+            />
+          )}
+        />
+        <Controller
+          control={control}
+          name="appointment_time"
+          render={({ field }) => (
+            <InputField
+              label="Appointment Time"
+              type="time"
+              required
+              error={errors.appointment_time?.message}
+              value={toTimeInputValue(field.value)}
               onChange={(event) => field.onChange(event.target.value)}
               onBlur={field.onBlur}
               name={field.name}

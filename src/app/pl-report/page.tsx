@@ -260,7 +260,8 @@ export default async function PlReportPage() {
           Year to Date — {reportYear}
         </h2>
         <p className="mt-1 text-sm text-slate-600">
-          For each invoiced line: <strong>Revenue</strong> = payments received,{" "}
+          For each invoiced line: <strong>Revenue</strong> = invoiced amount (customer
+          price + tax + shipping; payment fees excluded).{" "}
           <strong>Cost of goods sold</strong> = total designer cost.{" "}
           <strong>Expenses</strong> = expense amount + shipping + fees + tax.{" "}
           <strong>Gross profit</strong> = revenue − COGS (before expenses).{" "}

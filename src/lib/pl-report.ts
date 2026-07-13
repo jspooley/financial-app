@@ -22,6 +22,7 @@ type LedgerPlEntry = Pick<
   | "payment_amount"
   | "expense_amount"
   | "discount_percent"
+  | "customer_price"
   | "tax_amount"
   | "shipping_receiving_amount"
   | "wholesale_retail"

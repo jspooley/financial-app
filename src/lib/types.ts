@@ -133,6 +133,7 @@ export const REFERRAL_SOURCE_OPTIONS: ReferralSource[] = [
 export interface Appointment {
   id: string;
   appointment_date: string;
+  appointment_time: string | null;
   client_name: string;
   client_email: string | null;
   client_phone: string | null;

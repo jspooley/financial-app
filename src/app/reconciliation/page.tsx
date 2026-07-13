@@ -60,6 +60,7 @@ export default function ReconciliationPage() {
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [showAcceptedUnderpayments, setShowAcceptedUnderpayments] = useState(false);
   const [showPaymentsVsRevenue, setShowPaymentsVsRevenue] = useState(false);
+  const [showPaymentsVsInvoiced, setShowPaymentsVsInvoiced] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -112,12 +113,23 @@ export default function ReconciliationPage() {
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [showPaymentsVsRevenue]);
 
+  useEffect(() => {
+    if (!showPaymentsVsInvoiced) return;
+    document
+      .getElementById("payments-vs-invoiced-gap")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [showPaymentsVsInvoiced]);
+
   function toggleAcceptedUnderpayments() {
     setShowAcceptedUnderpayments((open) => !open);
   }
 
   function togglePaymentsVsRevenue() {
     setShowPaymentsVsRevenue((open) => !open);
+  }
+
+  function togglePaymentsVsInvoiced() {
+    setShowPaymentsVsInvoiced((open) => !open);
   }
 
   async function handleSyncPaidFlags() {
@@ -307,13 +319,15 @@ export default function ReconciliationPage() {
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
                   <p className="text-xs uppercase tracking-wide text-slate-500">
-                    Total Amount Invoiced
+                    Total Amount Invoiced (+ fees)
                   </p>
                   <p className="mt-1 text-xl font-semibold text-slate-900">
                     {formatCurrency(report.summary.invoiceHistoryTotal)}
                   </p>
                   <p className="mt-1 text-sm text-slate-600">
-                    Sum of invoiced amounts on all invoices (balance-sheet lines excluded)
+                    Sum of invoiced amounts for the current year using the same P&amp;L
+                    invoiced-line rule as Revenue (including fees;
+                    balance-sheet lines excluded)
                   </p>
                 </div>
                 <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
@@ -350,14 +364,35 @@ export default function ReconciliationPage() {
                     {formatCurrency(report.summary.paymentsHistoryTotal)}
                   </p>
                   <p className="mt-1 text-sm text-slate-600">
-                    Current-year revenue minus accepted underpayment variances
-                    {report.summary.acceptedUnderpaymentVarianceTotal >= 0.005 && (
+                    Total Amount Invoiced (+ fees) (
+                    {formatCurrency(report.summary.invoiceHistoryTotal)})
+                    {report.summary.acceptedUnderpaymentVarianceTotal >= 0.005 ? (
                       <>
                         {" "}
-                        (−{formatCurrency(report.summary.acceptedUnderpaymentVarianceTotal)})
+                        − accepted underpayments (
+                        {formatCurrency(report.summary.acceptedUnderpaymentVarianceTotal)})
                       </>
-                    )}
+                    ) : null}
+                    {report.summary.overpaymentTotal >= 0.005 ? (
+                      <>
+                        {" "}
+                        + overpayments (
+                        {formatCurrency(report.summary.overpaymentTotal)})
+                      </>
+                    ) : null}
+                    .
                   </p>
+                  {report.summary.overpaymentTotal >= 0.005 && (
+                    <button
+                      type="button"
+                      onClick={togglePaymentsVsInvoiced}
+                      className="mt-2 inline-block text-xs font-medium text-brand-700 hover:text-brand-800 hover:underline"
+                    >
+                      {showPaymentsVsInvoiced
+                        ? "Hide overpayment lines ↑"
+                        : "View overpayment lines →"}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -375,8 +410,7 @@ export default function ReconciliationPage() {
                     {formatCurrency(report.summary.outstandingTotal)}
                   </p>
                   <p className="mt-1 text-sm text-slate-600">
-                    Total Amount Invoiced minus Payments Received — invoiced amount not yet
-                    collected
+                    Invoiced amount not yet collected on unpaid lines
                     {report.outstandingCount > 0 && (
                       <>
                         {" "}
@@ -388,21 +422,28 @@ export default function ReconciliationPage() {
                 </div>
                 <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
                   <p className="text-xs uppercase tracking-wide text-slate-500">
-                    Revenue
+                    Revenue (Total Amount Invoiced − Fees)
                   </p>
                   <p className="mt-1 text-xl font-semibold text-brand-800">
                     {formatCurrency(report.summary.revenueTotal)}
                   </p>
                   <p className="mt-1 text-sm text-slate-600">
-                    Same as P&amp;L: sum of <code className="text-xs">payment_amount</code> on
-                    invoiced lines for the current year (balance-sheet lines excluded). Does not
-                    deduct accepted underpayments.
+                    Sum of invoiced amounts on invoiced lines for the current year
+                    (balance-sheet lines and payment fees excluded).
+                    {report.summary.invoicedPaymentFeesTotal >= 0.005 && (
+                      <>
+                        {" "}
+                        Total Amount Invoiced (+ fees) − Revenue = payment fees (
+                        {formatCurrency(report.summary.invoicedPaymentFeesTotal)}).
+                      </>
+                    )}
                   </p>
                   {Math.abs(report.summary.revenueMinusPaymentsReceived) >= 0.005 && (
                     <>
                       <p className="mt-1 text-sm text-amber-800">
                         {formatCurrency(Math.abs(report.summary.revenueMinusPaymentsReceived))}{" "}
-                        differs from settled collection on some lines
+                        of revenue still not reflected in payment amounts (excludes fees,
+                        accepted underpayments, and overpayments)
                       </p>
                       <button
                         type="button"
@@ -504,6 +545,83 @@ export default function ReconciliationPage() {
             </section>
           )}
 
+          {showPaymentsVsInvoiced &&
+            report.paymentsVsInvoicedGapLines.some((line) => line.difference > 0) && (
+            <section
+              id="payments-vs-invoiced-gap"
+              className="scroll-mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Overpayments
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Lines where payment amount is higher than invoiced amount including fees.
+                    Per-line overs may be larger than the net overpayment on the Payments
+                    Received card (net = total payments − total invoiced, after underpayments
+                    offset some of these lines).
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setShowPaymentsVsInvoiced(false)}
+                >
+                  Close
+                </Button>
+              </div>
+              <div className="mt-4">
+                <DataTable
+                  columns={[
+                    { key: "entryDate", label: "Date" },
+                    { key: "invoiceId", label: "Invoice" },
+                    { key: "clientName", label: "Client" },
+                    { key: "description", label: "Description" },
+                    { key: "poNumber", label: "PO" },
+                    { key: "invoicedWithFees", label: "Invoiced (+ fees)" },
+                    { key: "paymentAmount", label: "Payment Amount" },
+                    { key: "difference", label: "Overpayment" },
+                  ]}
+                  rows={report.paymentsVsInvoicedGapLines
+                    .filter((line) => line.difference > 0)
+                    .map((line) => ({
+                      entryDate: formatDate(line.entryDate),
+                      invoiceId: line.invoiceId,
+                      clientName: line.clientName,
+                      description: (
+                        <span className="max-w-xs truncate block" title={line.description}>
+                          {line.description}
+                        </span>
+                      ),
+                      poNumber: line.poNumber,
+                      invoicedWithFees: formatCurrency(line.invoicedWithFees),
+                      paymentAmount: formatCurrency(line.paymentAmount),
+                      difference: (
+                        <span className="font-medium text-amber-800">
+                          {formatCurrency(line.difference)}
+                        </span>
+                      ),
+                    }))}
+                  emptyMessage="No overpayments."
+                  rowKey={(_, index) =>
+                    report.paymentsVsInvoicedGapLines.filter((line) => line.difference > 0)[
+                      index
+                    ]?.id ?? String(index)
+                  }
+                  mobileTitleKey="invoiceId"
+                />
+              </div>
+              <p className="mt-3 text-sm font-medium text-slate-800">
+                Per-line overpayments:{" "}
+                {formatCurrency(report.summary.grossOverpaymentTotal)}
+                {" · "}
+                Net overpayment in Payments Received:{" "}
+                {formatCurrency(report.summary.overpaymentTotal)}
+              </p>
+            </section>
+          )}
+
           {showPaymentsVsRevenue && report.paymentsVsRevenueGapLines.length > 0 && (
             <section
               id="payments-vs-revenue-gap"
@@ -515,9 +633,9 @@ export default function ReconciliationPage() {
                     Payments Received vs Revenue
                   </h2>
                   <p className="mt-1 text-sm text-slate-600">
-                    Ledger lines where Payments Received (settled invoiced amount) differs from
-                    Revenue (<code className="text-xs">payment_amount</code>). Overpayments and
-                    other posting gaps usually appear here.
+                    Ledger lines where revenue cash expected (after fees and accepted
+                    underpayments) is still above payment amount. Overpayments are not listed
+                    here.
                   </p>
                 </div>
                 <Button
@@ -570,15 +688,9 @@ export default function ReconciliationPage() {
                 />
               </div>
               <p className="mt-3 text-sm font-medium text-slate-800">
-                Line differences total:{" "}
-                {formatCurrency(
-                  report.paymentsVsRevenueGapLines.reduce(
-                    (sum, line) => sum + line.difference,
-                    0
-                  )
-                )}{" "}
-                (Revenue − Payments Received ={" "}
-                {formatCurrency(report.summary.revenueMinusPaymentsReceived)})
+                Uncollected revenue total:{" "}
+                {formatCurrency(report.summary.revenueMinusPaymentsReceived)}{" "}
+                (excludes fees, accepted underpayments, and overpayments)
               </p>
             </section>
           )}
@@ -680,19 +792,21 @@ export default function ReconciliationPage() {
             <p className="font-medium text-slate-800">How totals are calculated</p>
             <ul className="mt-2 list-disc space-y-1 pl-5">
               <li>
-                <strong>Total Amount Invoiced</strong> — sum of line amount (customer price × qty
-                + tax + shipping + fee) on invoiced debit lines per invoice (balance-sheet lines
-                excluded).
+                <strong>Total Amount Invoiced (+ fees)</strong> — current-year sum of invoiced
+                line amounts (customer price × qty + tax + shipping + fee) on P&amp;L “counts as
+                invoiced” lines (including fees; balance-sheet lines excluded).
               </li>
               <li>
-                <strong>Payments Received</strong> — current-year Revenue minus accepted
-                underpayment variances.
+                <strong>Payments Received</strong> — Total Amount Invoiced (+ fees) minus
+                accepted underpayments, plus net overpayment (total payments − total invoiced,
+                when positive).
               </li>
               <li>
-                <strong>Revenue</strong> — same as P&amp;L YTD: sum of{" "}
-                <code className="text-xs">payment_amount</code> on invoiced ledger lines for the
-                current year (balance-sheet lines excluded). Accepted underpayments are not
-                deducted here.
+                <strong>Revenue (Total Amount Invoiced − Fees)</strong> — current-year sum of
+                invoiced amounts on the same invoiced lines (balance-sheet lines and payment
+                fees excluded). Used as P&amp;L Revenue. Total Amount Invoiced (+ fees) −
+                Revenue equals payment fees on those lines (overpayments are not part of
+                Revenue).
               </li>
               <li>
                 <strong>Invoiced − Payments</strong> — per line, invoiced amount minus

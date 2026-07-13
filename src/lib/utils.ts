@@ -218,15 +218,29 @@ type LedgerBalanceEntry = {
   invoiced?: boolean;
   invoice_id?: string | null;
   discount_percent?: number;
+  customer_price?: number | null;
   tax_amount?: number;
   shipping_receiving_amount?: number;
   wholesale_retail?: "wholesale" | "retail" | "service";
   payment_fee?: number;
   payment_amount?: number;
+  balance_sheet?: boolean | null;
 };
 
+/** Invoiced amount (excl. payment fee) — used as P&L / reconciliation revenue. */
 function ledgerRevenueAmount(entry: LedgerBalanceEntry) {
-  return roundMoney(Number(entry.payment_amount ?? 0));
+  return getLedgerInvoicedAmountExcludingPaymentFee({
+    retail_price: entry.retail_price,
+    quantity: entry.quantity,
+    discount_percent: entry.discount_percent ?? 0,
+    customer_price: entry.customer_price,
+    tax_amount: entry.tax_amount ?? 0,
+    shipping_receiving_amount: entry.shipping_receiving_amount ?? 0,
+    wholesale_retail: entry.wholesale_retail ?? "retail",
+    payment_fee: entry.payment_fee ?? 0,
+    balance_sheet: entry.balance_sheet,
+    designer_cost: entry.designer_cost,
+  });
 }
 
 function ledgerPoClientKey(clientId: string, po: string | null | undefined) {
@@ -242,7 +256,15 @@ function isInvoicedForBalance(
   return invoicedPoKeys.has(ledgerPoClientKey(entry.client_id, entry.po_number));
 }
 
-/** Revenue for one ledger line (P&L): payment amount when invoiced, else 0. */
+/** Whether a ledger line contributes to P&L / reconciliation revenue. */
+export function isLedgerLineInvoicedForRevenue(
+  entry: LedgerBalanceEntry,
+  invoicedPoKeys?: Set<string>
+) {
+  return isInvoicedForBalance(entry, invoicedPoKeys);
+}
+
+/** Revenue for one ledger line: invoiced amount (excl. payment fee) when invoiced, else 0. */
 export function ledgerLineRevenue(
   entry: LedgerBalanceEntry,
   invoicedPoKeys?: Set<string>
@@ -263,7 +285,7 @@ export function ledgerLineCogs(
 }
 
 /**
- * Invoiced lines: credits = payments received, debits = designer cost.
+ * Invoiced lines: credits = invoiced amount (revenue), debits = designer cost.
  * Net balance = credits − debits. Uninvoiced debits add designer cost only.
  */
 export function sumLedgerCreditsAndDebits(
@@ -397,6 +419,20 @@ export function todayDateInputValue() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
+/** Value for HTML time inputs from a DB TIME string (HH:MM[:SS]). */
+export function toTimeInputValue(value: string | null | undefined) {
+  if (value == null || value === "") return "";
+  const match = String(value).trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return "";
+  return `${String(Number(match[1])).padStart(2, "0")}:${match[2]}`;
+}
+
+/** Current local time for HTML time inputs (HH:MM). */
+export function nowTimeInputValue() {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+}
+
 export function formatDate(value: string | Date | null | undefined) {
   const iso = toDateInputValue(value);
   if (!iso) return "—";
@@ -409,6 +445,33 @@ export function formatDate(value: string | Date | null | undefined) {
     month: "short",
     day: "numeric",
   }).format(date);
+}
+
+/** Format a DB TIME / HH:MM value for display (e.g. 2:30 PM). */
+export function formatTime(value: string | null | undefined) {
+  const hhmm = toTimeInputValue(value);
+  if (!hhmm) return "—";
+  const [hoursRaw, minutes] = hhmm.split(":");
+  const hours = Number(hoursRaw);
+  if (Number.isNaN(hours) || minutes == null) return "—";
+  const date = new Date();
+  date.setHours(hours, Number(minutes), 0, 0);
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+/** Date and optional time together for appointment lists. */
+export function formatDateTime(
+  dateValue: string | Date | null | undefined,
+  timeValue?: string | null
+) {
+  const date = formatDate(dateValue);
+  if (date === "—") return "—";
+  const time = formatTime(timeValue);
+  if (time === "—") return date;
+  return `${date} · ${time}`;
 }
 
 export function purchaserFromEmail(email: string | undefined): "Jess" | "Molly" | null {
