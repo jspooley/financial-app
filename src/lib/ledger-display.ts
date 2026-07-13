@@ -1,5 +1,5 @@
 import { getLedgerOutstandingBalance } from "@/lib/invoice-utils";
-import { computePlTotals, ledgerLineGrossProfit, ledgerLineNetProfit } from "@/lib/pl-report";
+import { computePlTotals, isPlBalanceSheetEntry, ledgerLineGrossProfit, ledgerLineNetProfit } from "@/lib/pl-report";
 import type { LedgerEntry } from "@/lib/types";
 import {
   formatCurrency,
@@ -14,9 +14,9 @@ import {
 } from "@/lib/utils";
 
 export function ledgerTaxDisplay(entry: LedgerEntry) {
-  return entry.wholesale_retail === "retail"
-    ? "N/A"
-    : formatCurrency(Number(entry.tax_amount));
+  return entry.wholesale_retail === "wholesale"
+    ? formatCurrency(Number(entry.tax_amount))
+    : "N/A";
 }
 
 export function ledgerDetailFields(
@@ -63,11 +63,15 @@ export function ledgerDetailFields(
     },
     {
       label: "Gross Profit",
-      value: formatCurrency(ledgerLineGrossProfit(entry, invoicedPoKeys)),
+      value: isPlBalanceSheetEntry(entry)
+        ? "—"
+        : formatCurrency(ledgerLineGrossProfit(entry, invoicedPoKeys)),
     },
     {
       label: "Net Profit",
-      value: formatCurrency(ledgerLineNetProfit(entry, invoicedPoKeys)),
+      value: isPlBalanceSheetEntry(entry)
+        ? "—"
+        : formatCurrency(ledgerLineNetProfit(entry, invoicedPoKeys)),
     },
     {
       label: "Expense",
@@ -78,6 +82,29 @@ export function ledgerDetailFields(
       value:
         entry.credit_debit === "debit"
           ? formatCurrency(Number(entry.expense_amount ?? 0))
+          : "—",
+    },
+    {
+      label: "Variance Accepted",
+      value:
+        entry.credit_debit === "debit"
+          ? entry.variance_accepted
+            ? "Yes"
+            : "No"
+          : "—",
+    },
+    {
+      label: "Variance Amount",
+      value:
+        entry.credit_debit === "debit"
+          ? formatCurrency(Number(entry.variance_amount ?? 0))
+          : "—",
+    },
+    {
+      label: "Variance Notes",
+      value:
+        entry.credit_debit === "debit" && entry.variance_accepted
+          ? entry.variance_notes?.trim() || "—"
           : "—",
     },
     {
@@ -108,6 +135,8 @@ export function ledgerDetailFields(
       label: "Sales and Use Tax Paid",
       value: entry.sales_and_use_tax_paid ? "Yes" : "No",
     },
+    { label: "Income Statement", value: entry.income_statement ? "Yes" : "No" },
+    { label: "Balance Sheet", value: entry.balance_sheet ? "Yes" : "No" },
   ];
 }
 
@@ -143,6 +172,20 @@ export function mapLedgerTableRow(
       entry.credit_debit === "debit"
         ? formatCurrency(Number(entry.expense_amount ?? 0))
         : "—",
+    varianceAccepted:
+      entry.credit_debit === "debit"
+        ? entry.variance_accepted
+          ? "Yes"
+          : "No"
+        : "—",
+    varianceAmount:
+      entry.credit_debit === "debit"
+        ? formatCurrency(Number(entry.variance_amount ?? 0))
+        : "—",
+    varianceNotes:
+      entry.credit_debit === "debit" && entry.variance_accepted
+        ? entry.variance_notes?.trim() || "—"
+        : "—",
     paid: entry.credit_debit === "debit" ? (entry.paid ? "Yes" : "No") : "—",
     purchaser: entry.purchaser,
     paidTo: entry.credit_debit === "debit" ? (entry.paid_to ?? "—") : "—",
@@ -152,11 +195,17 @@ export function mapLedgerTableRow(
         : "—",
     designerCost: formatCurrency(Number(entry.designer_cost)),
     totalDesignerCost: formatCurrency(getLedgerTotalDesignerCost(entry)),
-    grossProfit: formatCurrency(ledgerLineGrossProfit(entry, invoicedPoKeys)),
-    netProfit: formatCurrency(ledgerLineNetProfit(entry, invoicedPoKeys)),
+    grossProfit: isPlBalanceSheetEntry(entry)
+      ? "—"
+      : formatCurrency(ledgerLineGrossProfit(entry, invoicedPoKeys)),
+    netProfit: isPlBalanceSheetEntry(entry)
+      ? "—"
+      : formatCurrency(ledgerLineNetProfit(entry, invoicedPoKeys)),
     po: entry.po_number ?? "—",
     type: `${entry.credit_debit} / ${entry.wholesale_retail}`,
     salesUseTaxPaid: entry.sales_and_use_tax_paid ? "Yes" : "No",
+    incomeStatement: entry.income_statement ? "Yes" : "No",
+    balanceSheet: entry.balance_sheet ? "Yes" : "No",
   };
 }
 
@@ -192,6 +241,7 @@ export function ledgerDebitColumnTotals(
   let outstandingBalance = 0;
   let paidAmount = 0;
   let expenseAmount = 0;
+  let varianceAmount = 0;
   let designerCost = 0;
   let totalDesignerCost = 0;
 
@@ -209,6 +259,9 @@ export function ledgerDebitColumnTotals(
     outstandingBalance += getLedgerOutstandingBalance(entry);
     paidAmount += Number(entry.payment_amount ?? 0);
     expenseAmount += Number(entry.expense_amount ?? 0);
+    if (entry.variance_accepted) {
+      varianceAmount += Number(entry.variance_amount ?? 0);
+    }
     designerCost += Number(entry.designer_cost);
     totalDesignerCost += getLedgerTotalDesignerCost(entry);
   }
@@ -228,6 +281,7 @@ export function ledgerDebitColumnTotals(
     outstandingBalance: formatCurrency(roundMoney(outstandingBalance)),
     paidAmount: formatCurrency(roundMoney(paidAmount)),
     expenseAmount: formatCurrency(roundMoney(expenseAmount)),
+    varianceAmount: formatCurrency(roundMoney(varianceAmount)),
     designerCost: formatCurrency(roundMoney(designerCost)),
     totalDesignerCost: formatCurrency(roundMoney(totalDesignerCost)),
     grossProfit: formatCurrency(grossProfit),
@@ -255,6 +309,9 @@ export const ledgerDebitColumns = [
   { key: "netProfit", label: "Net Profit" },
   { key: "expense", label: "Expense" },
   { key: "expenseAmount", label: "Expense Amount" },
+  { key: "varianceAccepted", label: "Variance Accepted" },
+  { key: "varianceAmount", label: "Variance Amount" },
+  { key: "varianceNotes", label: "Variance Notes" },
   { key: "paid", label: "Paid" },
   { key: "purchaser", label: "Purchaser" },
   { key: "paidTo", label: "Paid To" },
@@ -266,6 +323,8 @@ export const ledgerDebitColumns = [
   { key: "po", label: "PO" },
   { key: "type", label: "Type" },
   { key: "salesUseTaxPaid", label: "Sales and Use Tax Paid" },
+  { key: "incomeStatement", label: "Income Statement" },
+  { key: "balanceSheet", label: "Balance Sheet" },
 ] as const;
 
 function csvEscape(value: string | number | null | undefined): string {
@@ -345,6 +404,9 @@ export const ledgerDetailColumns = [
   { key: "netProfit", label: "Net Profit" },
   { key: "expense", label: "Expense" },
   { key: "expenseAmount", label: "Expense Amount" },
+  { key: "varianceAccepted", label: "Variance Accepted" },
+  { key: "varianceAmount", label: "Variance Amount" },
+  { key: "varianceNotes", label: "Variance Notes" },
   { key: "paid", label: "Paid" },
   { key: "purchaser", label: "Purchaser" },
   { key: "paidTo", label: "Paid To" },
@@ -354,4 +416,6 @@ export const ledgerDetailColumns = [
   { key: "po", label: "PO" },
   { key: "type", label: "Type" },
   { key: "salesUseTaxPaid", label: "Sales and Use Tax Paid" },
+  { key: "incomeStatement", label: "Income Statement" },
+  { key: "balanceSheet", label: "Balance Sheet" },
 ] as const;

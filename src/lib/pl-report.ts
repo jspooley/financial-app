@@ -1,4 +1,5 @@
 import type { LedgerEntry } from "./types";
+import { getLedgerVarianceBeforeAcceptance } from "./invoice-utils";
 import {
   ledgerLineCogs,
   ledgerLineRevenue,
@@ -8,6 +9,7 @@ import {
 
 type LedgerPlEntry = Pick<
   LedgerEntry,
+  | "id"
   | "entry_date"
   | "client_id"
   | "po_number"
@@ -24,12 +26,21 @@ type LedgerPlEntry = Pick<
   | "shipping_receiving_amount"
   | "wholesale_retail"
   | "payment_fee"
->;
+  | "variance_accepted"
+  | "variance_amount"
+  | "variance_notes"
+  | "description"
+  | "balance_sheet"
+> & {
+  clients?: { name: string } | null;
+};
 
 export type PlTotals = {
   revenue: number;
   cogs: number;
   expenseAmount: number;
+  varianceAmount: number;
+  shortfallAmount: number;
   grossProfit: number;
   grossProfitMargin: number;
   netProfit: number;
@@ -42,6 +53,31 @@ export type PlReportRow =
 
 const QUARTER_END_MONTHS = [3, 6, 9, 12] as const;
 
+/** Balance-sheet (e.g. personal use) lines are excluded from P&L profit math. */
+export function isPlBalanceSheetEntry(
+  entry: Pick<LedgerPlEntry, "balance_sheet">
+): boolean {
+  return Boolean(entry.balance_sheet);
+}
+
+function entriesForPlTotals(entries: LedgerPlEntry[]): LedgerPlEntry[] {
+  return entries.filter((entry) => !isPlBalanceSheetEntry(entry));
+}
+
+/** Ledger lines that contribute expense amount to P&L (excludes balance sheet). */
+export function filterPlExpenseEntries<T extends LedgerPlEntry>(entries: T[]): T[] {
+  return entries.filter(
+    (entry) => !isPlBalanceSheetEntry(entry) && sumPlExpenseAmount(entry) > 0
+  );
+}
+
+/** Ledger lines with accepted underpayment variance in P&L (excludes balance sheet). */
+export function filterPlVarianceEntries<T extends LedgerPlEntry>(entries: T[]): T[] {
+  return entries.filter(
+    (entry) => !isPlBalanceSheetEntry(entry) && sumPlAcceptedVariance(entry) > 0
+  );
+}
+
 /** Expenses = expense amount + shipping, payment fees, and tax per ledger line. */
 export function sumPlExpenseAmount(entry: LedgerPlEntry): number {
   return roundMoney(
@@ -52,24 +88,50 @@ export function sumPlExpenseAmount(entry: LedgerPlEntry): number {
   );
 }
 
+/** Accepted underpayment variance (magnitude) that reduces net profit. */
+export function sumPlAcceptedVariance(entry: LedgerPlEntry): number {
+  if (!entry.variance_accepted) return 0;
+  const live = getLedgerVarianceBeforeAcceptance({
+    retail_price: entry.retail_price,
+    quantity: entry.quantity,
+    discount_percent: entry.discount_percent,
+    tax_amount: entry.tax_amount,
+    shipping_receiving_amount: entry.shipping_receiving_amount,
+    wholesale_retail: entry.wholesale_retail,
+    designer_cost: entry.designer_cost,
+    payment_fee: entry.payment_fee,
+    payment_amount: entry.payment_amount,
+  });
+  return live < 0 ? roundMoney(-live) : 0;
+}
+
+/** @deprecated Use sumPlAcceptedVariance */
+export function sumPlAcceptedShortfall(entry: LedgerPlEntry): number {
+  return sumPlAcceptedVariance(entry);
+}
+
 /** Gross profit for one ledger line: revenue − COGS (same formula as P&L totals). */
 export function ledgerLineGrossProfit(
   entry: LedgerPlEntry,
   invoicedPoKeys?: Set<string>
 ): number {
+  if (isPlBalanceSheetEntry(entry)) return 0;
   return roundMoney(
     ledgerLineRevenue(entry, invoicedPoKeys) - ledgerLineCogs(entry, invoicedPoKeys)
   );
 }
 
-/** Net profit for one ledger line: revenue − (COGS + expenses) (same formula as P&L totals). */
+/** Net profit: revenue − (COGS + expenses + accepted underpayment variance). */
 export function ledgerLineNetProfit(
   entry: LedgerPlEntry,
   invoicedPoKeys?: Set<string>
 ): number {
+  if (isPlBalanceSheetEntry(entry)) return 0;
   return roundMoney(
     ledgerLineRevenue(entry, invoicedPoKeys) -
-      (ledgerLineCogs(entry, invoicedPoKeys) + sumPlExpenseAmount(entry))
+      (ledgerLineCogs(entry, invoicedPoKeys) +
+        sumPlExpenseAmount(entry) +
+        sumPlAcceptedVariance(entry))
   );
 }
 
@@ -79,16 +141,24 @@ function sumPlExpenses(entries: LedgerPlEntry[]): number {
   );
 }
 
+function sumPlVariances(entries: LedgerPlEntry[]): number {
+  return roundMoney(
+    entries.reduce((sum, entry) => sum + sumPlAcceptedVariance(entry), 0)
+  );
+}
+
 export function computePlTotals(
   entries: LedgerPlEntry[],
   invoicedPoKeys?: Set<string>
 ): PlTotals {
-  const balances = sumLedgerCreditsAndDebits(entries, { invoicedPoKeys });
+  const plEntries = entriesForPlTotals(entries);
+  const balances = sumLedgerCreditsAndDebits(plEntries, { invoicedPoKeys });
   const revenue = roundMoney(balances.credits);
   const cogs = roundMoney(balances.debits);
   const grossProfit = roundMoney(revenue - cogs);
-  const expenseAmount = sumPlExpenses(entries);
-  const netProfit = roundMoney(revenue - (cogs + expenseAmount));
+  const expenseAmount = sumPlExpenses(plEntries);
+  const varianceAmount = sumPlVariances(plEntries);
+  const netProfit = roundMoney(revenue - (cogs + expenseAmount + varianceAmount));
   const grossProfitMargin =
     revenue > 0 ? roundMoney((grossProfit / revenue) * 100) : 0;
   const netProfitMargin =
@@ -97,6 +167,8 @@ export function computePlTotals(
     revenue,
     cogs,
     expenseAmount,
+    varianceAmount,
+    shortfallAmount: varianceAmount,
     grossProfit,
     grossProfitMargin,
     netProfit,

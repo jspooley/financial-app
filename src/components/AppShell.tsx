@@ -11,8 +11,8 @@ const navItems = [
   { href: "/appointments", label: "Appointments", shortLabel: "Appts", icon: "📅" },
   { href: "/clients", label: "Clients", shortLabel: "Clients", icon: "👤" },
   { href: "/ledger", label: "Ledger", shortLabel: "Ledger", icon: "₿" },
-  { href: "/payments", label: "Payments", shortLabel: "Pay", icon: "💵" },
   { href: "/invoicing", label: "Invoicing", shortLabel: "Invoice", icon: "📄" },
+  { href: "/payments", label: "Payments", shortLabel: "Pay", icon: "💵" },
   { href: "/budget-tool", label: "Budget Tool", shortLabel: "Budget Tool", icon: "📊" },
 ];
 

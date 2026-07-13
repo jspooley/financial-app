@@ -8,7 +8,7 @@ import type {
   WholesaleRetail,
 } from "./types";
 import { deriveLedgerPaidFlag } from "./invoice-utils";
-import { calculateTaxFromCustomerPrice, calculateCustomerPrice, normalizeQuantity } from "./utils";
+import { calculateTaxFromCustomerPrice, calculateCustomerPrice, calculateRetailPriceFromMarkup, normalizeQuantity, roundMoney } from "./utils";
 
 export type { LedgerDbRow, LedgerInsert };
 
@@ -68,6 +68,45 @@ CREATE INDEX IF NOT EXISTS idx_ledger_expense ON ledger(expense);
 
 NOTIFY pgrst, 'reload schema';`;
 
+export const LEDGER_VARIANCE_SETUP_SQL = `ALTER TABLE ledger
+  ADD COLUMN IF NOT EXISTS variance_accepted BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE ledger
+  ADD COLUMN IF NOT EXISTS variance_amount NUMERIC(12, 2) NOT NULL DEFAULT 0;
+
+ALTER TABLE ledger
+  ADD COLUMN IF NOT EXISTS variance_notes TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE ledger
+  DROP CONSTRAINT IF EXISTS ledger_variance_notes_length;
+
+ALTER TABLE ledger
+  ADD CONSTRAINT ledger_variance_notes_length
+  CHECK (char_length(variance_notes) <= 250);
+
+ALTER TABLE ledger DROP COLUMN IF EXISTS shortfall_accepted;
+ALTER TABLE ledger DROP COLUMN IF EXISTS shortfall_amount;
+
+DROP INDEX IF EXISTS idx_ledger_shortfall_accepted;
+CREATE INDEX IF NOT EXISTS idx_ledger_variance_accepted ON ledger(variance_accepted);
+
+NOTIFY pgrst, 'reload schema';`;
+
+export const VARIANCE_NOTES_MAX_LENGTH = 250;
+
+export const LEDGER_SHORTFALL_SETUP_SQL = LEDGER_VARIANCE_SETUP_SQL;
+
+export const LEDGER_FINANCIAL_STATEMENT_SETUP_SQL = `ALTER TABLE ledger
+  ADD COLUMN IF NOT EXISTS income_statement BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE ledger
+  ADD COLUMN IF NOT EXISTS balance_sheet BOOLEAN NOT NULL DEFAULT false;
+
+CREATE INDEX IF NOT EXISTS idx_ledger_income_statement ON ledger(income_statement);
+CREATE INDEX IF NOT EXISTS idx_ledger_balance_sheet ON ledger(balance_sheet);
+
+NOTIFY pgrst, 'reload schema';`;
+
 export function normalizeLedgerRow(
   row: LedgerDbRow | Record<string, unknown>
 ): LedgerEntry {
@@ -102,6 +141,13 @@ export function normalizeLedgerRow(
     payment_amount: Number(r.payment_amount ?? 0),
     expense: Boolean(r.expense ?? false),
     expense_amount: Number(r.expense_amount ?? 0),
+    income_statement: Boolean(r.income_statement ?? false),
+    balance_sheet: Boolean(r.balance_sheet ?? false),
+    variance_accepted: Boolean(
+      r.variance_accepted ?? r.shortfall_accepted ?? false
+    ),
+    variance_amount: Number(r.variance_amount ?? r.shortfall_amount ?? 0),
+    variance_notes: String(r.variance_notes ?? "").slice(0, VARIANCE_NOTES_MAX_LENGTH),
     created_at: r.created_at as string,
     updated_at: r.updated_at as string,
     clients: r.clients ?? null,
@@ -154,8 +200,13 @@ export function ledgerFormToDb(values: {
   const quantity = normalizeQuantity(Number(values.quantity) || 1);
   const designerCost = Number(values.designer_cost) || 0;
   const discountPercent = Number(values.discount_percent) || 0;
-  const retailPrice = Number(values.retail_price) || 0;
-  const merchandise = calculateCustomerPrice(retailPrice, quantity, discountPercent);
+  const isService = values.wholesale_retail === "service";
+  const retailPrice = isService
+    ? calculateRetailPriceFromMarkup(designerCost, discountPercent)
+    : Number(values.retail_price) || 0;
+  const merchandise = isService
+    ? roundMoney(retailPrice * quantity)
+    : calculateCustomerPrice(retailPrice, quantity, discountPercent);
   const tax =
     values.wholesale_retail === "wholesale"
       ? calculateTaxFromCustomerPrice(retailPrice, quantity, discountPercent)

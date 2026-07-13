@@ -217,6 +217,7 @@ function ClientsPageContent() {
           columns={[
             { key: "actions", label: "Actions" },
             { key: "name", label: "Name" },
+            { key: "personalUse", label: "Personal Use" },
             { key: "poBudget", label: "PO / Budget" },
             { key: "email", label: "Email" },
             { key: "phone", label: "Phone" },
@@ -232,6 +233,7 @@ function ClientsPageContent() {
               />
             ),
             name: client.name,
+            personalUse: client.personal_use ? "Yes" : "No",
             poBudget:
               (client.client_po_numbers ?? []).length === 0 ? (
                 "—"

@@ -15,7 +15,7 @@ import {
 import { normalizePoNumber } from "@/lib/invoice-utils";
 import type { Client } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
-import { editableControlClass, InputField } from "@/components/ui/FormFields";
+import { CheckboxField, editableControlClass, InputField } from "@/components/ui/FormFields";
 import { roundMoney } from "@/lib/utils";
 
 const schema = z.object({
@@ -24,6 +24,7 @@ const schema = z.object({
   address: z.string().optional(),
   phone: z.string().optional(),
   email: z.string().email("Invalid email").optional().or(z.literal("")),
+  personal_use: z.boolean(),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -71,6 +72,7 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
       address: initial?.address ?? "",
       phone: initial?.phone ?? "",
       email: initial?.email ?? "",
+      personal_use: initial?.personal_use ?? false,
     },
   });
 
@@ -271,6 +273,7 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
       address: values.address || null,
       phone: values.phone || null,
       email: values.email || null,
+      personal_use: values.personal_use,
     };
 
     if (initial) {
@@ -529,6 +532,11 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
         <InputField label="Phone" {...register("phone")} />
         <InputField label="Email" error={errors.email?.message} {...register("email")} />
         <InputField label="Address" className="sm:col-span-2" {...register("address")} />
+        <CheckboxField
+          label="Personal Use"
+          hint="Ledger entries for this client are marked Balance Sheet."
+          {...register("personal_use")}
+        />
       </div>
 
       {needsBudgetSetup && (

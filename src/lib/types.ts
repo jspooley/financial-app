@@ -1,5 +1,5 @@
 export type CreditDebit = "credit" | "debit";
-export type WholesaleRetail = "wholesale" | "retail";
+export type WholesaleRetail = "wholesale" | "retail" | "service";
 export type Purchaser = "Jess" | "Molly";
 export type PaymentType = "Cash" | "Check" | "CC" | "Venmo" | "Other";
 
@@ -39,6 +39,11 @@ export type LedgerInsert = {
   sand_u_tax_paid?: boolean;
   expense?: boolean;
   expense_amount?: number | null;
+  income_statement?: boolean;
+  balance_sheet?: boolean;
+  variance_accepted?: boolean;
+  variance_amount?: number | null;
+  variance_notes?: string | null;
 };
 
 export interface LedgerDbRow extends Omit<
@@ -56,6 +61,11 @@ export interface LedgerDbRow extends Omit<
   | "sales_and_use_tax_paid"
   | "expense"
   | "expense_amount"
+  | "income_statement"
+  | "balance_sheet"
+  | "variance_accepted"
+  | "variance_amount"
+  | "variance_notes"
 > {
   id?: string;
   quantity?: number | null;
@@ -71,6 +81,11 @@ export interface LedgerDbRow extends Omit<
   sales_and_use_tax_paid?: boolean | null;
   expense?: boolean | null;
   expense_amount?: number | null;
+  income_statement?: boolean | null;
+  balance_sheet?: boolean | null;
+  variance_accepted?: boolean | null;
+  variance_amount?: number | null;
+  variance_notes?: string | null;
   created_at?: string;
   updated_at?: string;
   clients?: { name: string } | null;
@@ -84,6 +99,7 @@ export interface Client {
   phone: string | null;
   email: string | null;
   budget: number;
+  personal_use?: boolean;
   created_at: string;
   updated_at: string;
   client_po_numbers?: ClientPoNumber[];
@@ -235,6 +251,11 @@ export interface LedgerEntry {
   payment_amount: number;
   expense: boolean;
   expense_amount: number;
+  income_statement: boolean;
+  balance_sheet: boolean;
+  variance_accepted: boolean;
+  variance_amount: number;
+  variance_notes: string;
   created_at: string;
   updated_at: string;
   clients?: Pick<Client, "name"> | null;

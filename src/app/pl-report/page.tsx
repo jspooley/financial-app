@@ -1,142 +1,25 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import {
+  PlTotalsCards,
+  type PlExpenseDetailRow,
+} from "@/components/pl-report/PlTotalsCards";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
   buildPlMonthlyRows,
   computePlTotals,
   filterLedgerEntriesForYear,
+  filterPlExpenseEntries,
   sumPlExpenseAmount,
   type PlReportRow,
-  type PlTotals,
 } from "@/lib/pl-report";
 import { createClient } from "@/lib/supabase/server";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
-import { formatCurrency, formatPercent, grossProfitGoalFromTradePartners, roundMoney } from "@/lib/utils";
+import { formatCurrency, formatPercent, grossProfitGoalFromTradePartners } from "@/lib/utils";
 import type { TradePartner } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
-function PlTotalsCards({
-  totals,
-  expenseLineCount,
-  grossProfitGoal,
-  tradePartnerCount,
-}: {
-  totals: PlTotals;
-  expenseLineCount: number;
-  grossProfitGoal: number;
-  tradePartnerCount: number;
-}) {
-  const belowGrossProfitGoal =
-    tradePartnerCount > 0 && totals.grossProfitMargin < grossProfitGoal;
-  const grossProfitGap = roundMoney(grossProfitGoal - totals.grossProfitMargin);
-  const belowGoalValueClass = belowGrossProfitGoal ? "text-red-700" : "text-brand-800";
-
-  return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 sm:gap-4">
-      <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
-        <p className="text-xs uppercase tracking-wide text-slate-500">Revenue</p>
-        <p className="mt-1 text-xl font-semibold text-brand-800">
-          {formatCurrency(totals.revenue)}
-        </p>
-      </div>
-      <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
-        <p className="text-xs uppercase tracking-wide text-slate-500">Cost of Goods Sold</p>
-        <p className="mt-1 text-xl font-semibold text-slate-900">
-          {formatCurrency(totals.cogs)}
-        </p>
-      </div>
-      <Link
-        href="/payments"
-        className="rounded-lg border border-slate-100 bg-slate-50 p-4 transition hover:border-brand-200"
-      >
-        <p className="text-xs uppercase tracking-wide text-slate-500">Expense Amount</p>
-        <p className="mt-1 text-xl font-semibold text-slate-900">
-          {formatCurrency(totals.expenseAmount)}
-        </p>
-        <p className="mt-1 text-sm text-slate-600">
-          {expenseLineCount === 0
-            ? "No expense components recorded"
-            : `Expense, shipping, fees & tax across ${expenseLineCount} ledger ${expenseLineCount === 1 ? "line" : "lines"}`}
-        </p>
-      </Link>
-      <div
-        className={`rounded-lg border p-4 ${
-          belowGrossProfitGoal
-            ? "border-red-200 bg-red-50"
-            : "border-brand-200 bg-brand-50"
-        }`}
-      >
-        <p className="text-sm font-semibold leading-snug text-slate-700">
-          GROSS PROFIT
-          <br />
-          <span className="text-xs font-medium text-slate-500">
-            (before expenses &amp; loans)
-          </span>
-        </p>
-        <p className={`mt-2 text-2xl font-bold ${belowGoalValueClass}`}>
-          {formatCurrency(totals.grossProfit)}
-        </p>
-      </div>
-      <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
-        <p className="text-sm font-semibold leading-snug text-slate-700">
-          GROSS PROFIT GOAL
-        </p>
-        <p className="mt-2 text-2xl font-bold text-brand-800">
-          {tradePartnerCount === 0 ? "—" : formatPercent(grossProfitGoal)}
-        </p>
-        <p className="mt-1 text-xs text-slate-500">
-          Half of average trade discount
-        </p>
-      </div>
-      <div
-        className={`rounded-lg border p-4 ${
-          belowGrossProfitGoal
-            ? "border-red-200 bg-red-50"
-            : "border-brand-200 bg-brand-50"
-        }`}
-      >
-        <p className="text-sm font-semibold leading-snug text-slate-700">
-          GROSS PROFIT MARGIN
-        </p>
-        <p className={`mt-2 text-2xl font-bold ${belowGoalValueClass}`}>
-          {formatPercent(totals.grossProfitMargin)}
-          {belowGrossProfitGoal ? (
-            <span className="ml-2 text-xl font-semibold">
-              ({formatPercent(grossProfitGap)})
-            </span>
-          ) : null}
-        </p>
-        <p className="mt-1 text-xs text-slate-500">
-          {belowGrossProfitGoal
-            ? `${formatPercent(grossProfitGap)} below goal`
-            : tradePartnerCount > 0
-              ? "At or above gross profit goal"
-              : "Profit after direct costs"}
-        </p>
-      </div>
-      <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
-        <p className="text-sm font-semibold leading-snug text-slate-700">NET PROFIT</p>
-        <p className="mt-2 text-2xl font-bold text-brand-800">
-          {formatCurrency(totals.netProfit)}
-        </p>
-        <p className="mt-1 text-xs text-slate-500">
-          Revenue − (COGS + expenses)
-        </p>
-      </div>
-      <div className="rounded-lg border border-brand-200 bg-brand-50 p-4">
-        <p className="text-sm font-semibold leading-snug text-slate-700">
-          NET PROFIT MARGIN
-        </p>
-        <p className="mt-2 text-2xl font-bold text-brand-800">
-          {formatPercent(totals.netProfitMargin)}
-        </p>
-        <p className="mt-1 text-xs text-slate-500">Net profit ÷ revenue</p>
-      </div>
-    </div>
-  );
-}
 
 function PlAmountCell({ value, emphasize }: { value: number; emphasize?: boolean }) {
   return (
@@ -342,9 +225,21 @@ export default async function PlReportPage() {
 
   const ytdEntries = filterLedgerEntriesForYear(allLedgerEntries, reportYear);
   const ytdTotals = computePlTotals(ytdEntries, invoicedPoKeys);
-  const expenseLineCount = ytdEntries.filter(
-    (entry) => sumPlExpenseAmount(entry) > 0
-  ).length;
+  const expenseEntries = filterPlExpenseEntries(ytdEntries).sort((a, b) =>
+    b.entry_date.localeCompare(a.entry_date)
+  );
+  const expenseRows: PlExpenseDetailRow[] = expenseEntries.map((entry) => ({
+    id: entry.id,
+    entry_date: entry.entry_date,
+    clientName: entry.clients?.name ?? "—",
+    description: entry.description ?? "",
+    po_number: entry.po_number,
+    expense_amount: Number(entry.expense_amount ?? 0),
+    shipping_receiving_amount: Number(entry.shipping_receiving_amount ?? 0),
+    payment_fee: Number(entry.payment_fee ?? 0),
+    tax_amount: Number(entry.tax_amount ?? 0),
+    expenseTotal: sumPlExpenseAmount(entry),
+  }));
   const monthlyRows = buildPlMonthlyRows(allLedgerEntries, {
     year: reportYear,
     throughMonth,
@@ -369,17 +264,19 @@ export default async function PlReportPage() {
           <strong>Cost of goods sold</strong> = total designer cost.{" "}
           <strong>Expenses</strong> = expense amount + shipping + fees + tax.{" "}
           <strong>Gross profit</strong> = revenue − COGS (before expenses).{" "}
-          <strong>Net profit</strong> = revenue − (COGS + expenses).{" "}
-          <strong>Net profit margin</strong> = net profit ÷ revenue.
+          <strong>Net profit</strong> = revenue − (COGS + expenses + accepted underpayment
+          variances). <strong>Net profit margin</strong> = net profit ÷ revenue.{" "}
           <strong>Gross profit goal</strong> = half of average trade partner discount.
-          Uninvoiced debit costs are included in cost of goods sold only.
+          Uninvoiced debit costs are included in cost of goods sold only. Accepted
+          underpayment variance detail is on the reconciliation report.
         </p>
         <div className="mt-4">
           <PlTotalsCards
             totals={ytdTotals}
-            expenseLineCount={expenseLineCount}
+            expenseLineCount={expenseRows.length}
             grossProfitGoal={grossProfitGoal}
             tradePartnerCount={partners.length}
+            expenseRows={expenseRows}
           />
         </div>
         <p className="mt-4 text-sm">
@@ -391,7 +288,7 @@ export default async function PlReportPage() {
           </Link>
           <span className="text-slate-500">
             {" "}
-            — compare Invoice History, Payments, and Revenue totals
+            — compare Invoice History, Payments, Revenue, and accepted underpayment variances
           </span>
         </p>
       </section>

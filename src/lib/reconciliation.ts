@@ -2,6 +2,7 @@ import {
   getLedgerOutstandingBalance,
   getLedgerTotalPaymentReceived,
   getLedgerUnderpaymentAmount,
+  getLedgerAcceptedVarianceAmount,
   getLedgerLinesForInvoice,
   isInvoicePaidByBalance,
   isInvoicePaidByFlag,
@@ -9,21 +10,52 @@ import {
   isInvoicedDebitLine,
   ledgerLineAmount,
   ledgerLineAmountSettled,
-  sumPaymentsHistoryTotal,
   summarizeInvoicedUnpaid,
   normalizeInvoiceId,
 } from "./invoice-utils";
+import { computePlTotals } from "./pl-report";
 import type { Invoice, LedgerEntry } from "./types";
-import { roundMoney } from "./utils";
+import { ledgerLineRevenue, roundMoney } from "./utils";
 
 export interface ReconciliationSummary {
   invoiceHistoryTotal: number;
   paymentsHistoryTotal: number;
   revenueTotal: number;
+  /** Revenue − Payments Received (positive when revenue is higher). */
+  revenueMinusPaymentsReceived: number;
   outstandingTotal: number;
   totalExpense: number;
+  acceptedUnderpaymentVarianceTotal: number;
   invoiceMinusRevenue: number;
   revenueMinusPayments: number;
+}
+
+export interface AcceptedVarianceReconciliationRow {
+  id: string;
+  entryDate: string;
+  clientName: string;
+  invoiceId: string;
+  description: string;
+  poNumber: string;
+  invoicedAmount: number;
+  paymentAmount: number;
+  varianceAmount: number;
+  varianceNotes: string;
+}
+
+export interface PaymentsVsRevenueGapRow {
+  id: string;
+  entryDate: string;
+  clientName: string;
+  invoiceId: string;
+  description: string;
+  poNumber: string;
+  invoicedAmount: number;
+  paymentsReceived: number;
+  paymentAmount: number;
+  revenueAmount: number;
+  /** Revenue (payment_amount) − payments received for this line. */
+  difference: number;
 }
 
 export interface InvoiceReconciliationRow {
@@ -82,23 +114,61 @@ function clientNameFor(
   return entry.clients?.name ?? clientNames.get(entry.client_id) ?? "Unknown client";
 }
 
-function linePaymentsRevenueGap(entry: LedgerEntry): number {
-  const settled = ledgerLineAmountSettled(entry);
-  const revenue = roundMoney(Number(entry.payment_amount ?? 0));
-  return roundMoney(revenue - settled);
+function acceptedVarianceUnderpayment(entry: LedgerEntry): number {
+  if (!entry.variance_accepted) return 0;
+  const amount = getLedgerAcceptedVarianceAmount(entry);
+  return amount < 0 ? roundMoney(-amount) : 0;
 }
 
-/** Invoiced amount not yet recorded in payment_amount (zero when overpaid). */
+function appliedExpenseAmount(entry: LedgerEntry): number {
+  if (!entry.expense) return 0;
+  return roundMoney(Math.max(0, Number(entry.expense_amount ?? 0)));
+}
+
+function paymentFeeAmount(entry: LedgerEntry): number {
+  return roundMoney(Math.max(0, Number(entry.payment_fee ?? 0)));
+}
+
+/**
+ * Amount expected in payment_amount when a line is fully settled for collection.
+ * Invoiced includes payment fee, but revenue is payment_amount only — so fee,
+ * accepted underpayment variance, and expense are not expected as revenue.
+ */
+function expectedPaymentAmountRevenue(entry: LedgerEntry): number {
+  return roundMoney(
+    ledgerLineAmount(entry) -
+      paymentFeeAmount(entry) -
+      acceptedVarianceUnderpayment(entry) -
+      appliedExpenseAmount(entry)
+  );
+}
+
+function linePaymentsRevenueGap(entry: LedgerEntry): number {
+  const revenue = roundMoney(Number(entry.payment_amount ?? 0));
+  // Only compare revenue to the settled portion that should live in payment_amount.
+  // If the line is still underpaid, reduce expected revenue by the remaining balance.
+  const stillOwed = getLedgerUnderpaymentAmount(entry);
+  const expectedRevenue = roundMoney(
+    Math.max(0, expectedPaymentAmountRevenue(entry) - stillOwed)
+  );
+  return roundMoney(revenue - expectedRevenue);
+}
+
+/**
+ * Invoiced client revenue not yet in payment_amount.
+ * Excludes payment fees (in invoiced total but not revenue), accepted underpayment
+ * variances, and expense.
+ */
 function lineOutstandingRevenueAmount(entry: LedgerEntry): number {
-  const invoiced = ledgerLineAmount(entry);
-  const paymentAmount = roundMoney(Number(entry.payment_amount ?? 0));
-  const gap = roundMoney(invoiced - paymentAmount);
+  const revenue = roundMoney(Number(entry.payment_amount ?? 0));
+  const gap = roundMoney(expectedPaymentAmountRevenue(entry) - revenue);
   return gap > 0 ? gap : 0;
 }
 
 /**
- * Structural gap only when revenue is below payments received (e.g. payment fees).
- * Overpayment (revenue > settled) is additional revenue, not a discrepancy.
+ * Gap only when payment_amount is below the revenue expected for the settled line
+ * (unusual posting issues). Payment fees, accepted underpayment variances, expenses, and
+ * overpayments are not counted as discrepancies.
  */
 function lineDiscrepancyAmount(entry: LedgerEntry): number {
   const gap = linePaymentsRevenueGap(entry);
@@ -177,16 +247,17 @@ function mapProblemLine(
 function sumInvoicedDebitLineAmounts(entries: LedgerEntry[]) {
   return roundMoney(
     entries
-      .filter(isInvoicedDebitLine)
+      .filter((entry) => isInvoicedDebitLine(entry) && !entry.balance_sheet)
       .reduce((sum, entry) => sum + ledgerLineAmount(entry), 0)
   );
 }
 
-function sumInvoicedDebitRevenue(entries: LedgerEntry[]) {
-  return roundMoney(
-    entries
-      .filter(isInvoicedDebitLine)
-      .reduce((sum, entry) => sum + Number(entry.payment_amount ?? 0), 0)
+function invoicedPoKeysFromInvoices(invoices: Invoice[]) {
+  return new Set(
+    invoices.map(
+      (invoice) =>
+        `${invoice.client_id}:${(invoice.po_number ?? "").trim().toLowerCase()}`
+    )
   );
 }
 
@@ -228,13 +299,23 @@ function sumAttentionTotals(
 export function buildReconciliationReport(
   invoices: Invoice[],
   ledgerEntries: LedgerEntry[],
-  clientNames: Map<string, string>
+  clientNames: Map<string, string>,
+  reportYear: number = new Date().getFullYear()
 ) {
+  const invoicedPoKeys = invoicedPoKeysFromInvoices(invoices);
+  const yearPrefix = `${reportYear}-`;
+  const ytdEntries = ledgerEntries.filter(
+    (entry) =>
+      typeof entry.entry_date === "string" && entry.entry_date.startsWith(yearPrefix)
+  );
+  const ytdPlEntries = ytdEntries.filter((entry) => !entry.balance_sheet);
+
+  // Same revenue as P&L YTD: payment_amount on invoiced lines (excl. balance sheet).
+  const revenueTotal = computePlTotals(ytdEntries, invoicedPoKeys).revenue;
+
   const invoicedDebits = ledgerEntries.filter((entry) => isInvoicedDebitLine(entry));
 
   const invoiceHistoryTotal = sumInvoicedDebitLineAmounts(ledgerEntries);
-  const paymentsHistoryTotal = sumPaymentsHistoryTotal(ledgerEntries);
-  const revenueTotal = sumInvoicedDebitRevenue(ledgerEntries);
 
   const outstanding = summarizeInvoicedUnpaid(ledgerEntries);
   const totalExpense = roundMoney(
@@ -244,12 +325,77 @@ export function buildReconciliationReport(
     )
   );
 
+  const acceptedVarianceLines: AcceptedVarianceReconciliationRow[] = ytdPlEntries
+    .filter((entry) => acceptedVarianceUnderpayment(entry) >= 0.005)
+    .map((entry) => ({
+      id: entry.id,
+      entryDate: entry.entry_date,
+      clientName: clientNameFor(entry, clientNames),
+      invoiceId: entry.invoice_id?.trim() || "—",
+      description: entry.description?.trim() || "—",
+      poNumber: entry.po_number?.trim() || "—",
+      invoicedAmount: ledgerLineAmount(entry),
+      paymentAmount: roundMoney(Number(entry.payment_amount ?? 0)),
+      varianceAmount: acceptedVarianceUnderpayment(entry),
+      varianceNotes: entry.variance_notes?.trim() || "",
+    }))
+    .sort((a, b) => {
+      if (b.varianceAmount !== a.varianceAmount) {
+        return b.varianceAmount - a.varianceAmount;
+      }
+      return b.entryDate.localeCompare(a.entryDate);
+    });
+
+  const acceptedUnderpaymentVarianceTotal = roundMoney(
+    acceptedVarianceLines.reduce((sum, row) => sum + row.varianceAmount, 0)
+  );
+
+  // Payments Received = P&L revenue minus accepted underpayments (Revenue itself is gross).
+  const paymentsHistoryTotal = roundMoney(
+    revenueTotal - acceptedUnderpaymentVarianceTotal
+  );
+
+  const paymentsVsRevenueGapLines: PaymentsVsRevenueGapRow[] = ytdPlEntries
+    .filter((entry) => ledgerLineRevenue(entry, invoicedPoKeys) > 0 || Number(entry.payment_amount ?? 0) > 0)
+    .map((entry) => {
+      const paymentsReceived = ledgerLineAmountSettled(entry);
+      const paymentAmount = roundMoney(Number(entry.payment_amount ?? 0));
+      const revenueAmount = ledgerLineRevenue(entry, invoicedPoKeys);
+      const difference = roundMoney(revenueAmount - paymentsReceived);
+      return {
+        id: entry.id,
+        entryDate: entry.entry_date,
+        clientName: clientNameFor(entry, clientNames),
+        invoiceId: entry.invoice_id?.trim() || "—",
+        description: entry.description?.trim() || "—",
+        poNumber: entry.po_number?.trim() || "—",
+        invoicedAmount: ledgerLineAmount(entry),
+        paymentsReceived,
+        paymentAmount,
+        revenueAmount,
+        difference,
+      };
+    })
+    .filter((row) => Math.abs(row.difference) >= 0.005)
+    .sort((a, b) => {
+      if (Math.abs(b.difference) !== Math.abs(a.difference)) {
+        return Math.abs(b.difference) - Math.abs(a.difference);
+      }
+      return b.entryDate.localeCompare(a.entryDate);
+    });
+
+  const revenueMinusPaymentsReceived = roundMoney(
+    paymentsVsRevenueGapLines.reduce((sum, row) => sum + row.difference, 0)
+  );
+
   const summary: ReconciliationSummary = {
     invoiceHistoryTotal,
     paymentsHistoryTotal,
     revenueTotal,
+    revenueMinusPaymentsReceived,
     outstandingTotal: outstanding.amount,
     totalExpense,
+    acceptedUnderpaymentVarianceTotal,
     invoiceMinusRevenue: sumInvoicedDebitOutstandingRevenue(ledgerEntries),
     revenueMinusPayments: sumInvoicedDebitDiscrepancy(ledgerEntries),
   };
@@ -327,6 +473,8 @@ export function buildReconciliationReport(
     invoiceRows,
     problemLines,
     attentionLineTotals,
+    acceptedVarianceLines,
+    paymentsVsRevenueGapLines,
     invoicesMissingPaidBadge: invoicesWithUnsetPaidFlag,
     outstandingCount: outstanding.count,
   };

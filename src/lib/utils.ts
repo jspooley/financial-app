@@ -77,25 +77,43 @@ export function calculateTaxFromCustomerPrice(
   );
 }
 
-/** Discounted retail subtotal: retail price × (1 − discount %) × qty */
+/** Discounted retail subtotal: retail price × (1 − discount %) × qty.
+ * Service lines: designer cost × (1 + markup %) × qty (discount_percent is markup). */
 export function getLedgerMerchandiseAmount(entry: {
   retail_price: number;
   quantity: number;
   discount_percent: number;
+  designer_cost?: number;
+  wholesale_retail?: "wholesale" | "retail" | "service";
 }) {
   const qty = normalizeQuantity(entry.quantity);
+  if (entry.wholesale_retail === "service") {
+    const designer = Number(entry.designer_cost ?? 0);
+    if (designer > 0) {
+      return roundMoney(
+        calculateRetailPriceFromMarkup(designer, entry.discount_percent) * qty
+      );
+    }
+    return roundMoney(Number(entry.retail_price) * qty);
+  }
   const retailSubtotal = Number(entry.retail_price) * qty;
   const discountAmount = (Number(entry.discount_percent) / 100) * retailSubtotal;
   return roundMoney(retailSubtotal - discountAmount);
 }
 
-/** Discounted retail only: retail price × (1 − discount %) × qty */
+/** Discounted retail only: retail price × (1 − discount %) × qty.
+ * Service lines use designer markup instead of retail markdown. */
 export function getLedgerCustomerPrice(entry: {
   retail_price: number;
   quantity: number;
   discount_percent: number;
   customer_price?: number | null;
+  designer_cost?: number;
+  wholesale_retail?: "wholesale" | "retail" | "service";
 }) {
+  if (entry.wholesale_retail === "service") {
+    return getLedgerMerchandiseAmount(entry);
+  }
   const discountPercent = Number(entry.discount_percent) || 0;
   if (discountPercent > 0) {
     return getLedgerMerchandiseAmount({
@@ -115,7 +133,8 @@ export function getLedgerCustomerPrice(entry: {
   });
 }
 
-/** Customer price × qty + tax + shipping + fee — used for invoice and payment line totals. */
+/** Customer price × qty + tax + shipping + fee — used for invoice and payment line totals.
+ * Personal use (balance sheet) lines invoice tax amount only. */
 export function getLedgerInvoicedAmount(entry: {
   retail_price: number;
   quantity: number;
@@ -123,16 +142,30 @@ export function getLedgerInvoicedAmount(entry: {
   customer_price?: number | null;
   tax_amount: number;
   shipping_receiving_amount: number;
-  wholesale_retail: "wholesale" | "retail";
+  wholesale_retail: "wholesale" | "retail" | "service";
   payment_fee?: number;
+  balance_sheet?: boolean | null;
+  designer_cost?: number;
 }) {
   const tax =
-    entry.wholesale_retail === "wholesale" ? Number(entry.tax_amount) : 0;
+    entry.wholesale_retail === "wholesale" ? Number(entry.tax_amount) || 0 : 0;
+
+  if (entry.balance_sheet) {
+    return roundMoney(tax);
+  }
+
   const shipping = Number(entry.shipping_receiving_amount) || 0;
   const fee = Number(entry.payment_fee ?? 0);
   return roundMoney(
     getLedgerCustomerPrice(entry) + tax + shipping + fee
   );
+}
+
+/** Client invoice total without payment processing fee (fee is shown separately on Payments). */
+export function getLedgerInvoicedAmountExcludingPaymentFee(
+  entry: Parameters<typeof getLedgerInvoicedAmount>[0]
+) {
+  return getLedgerInvoicedAmount({ ...entry, payment_fee: 0 });
 }
 
 /** Form helper — discounted retail subtotal only. */
@@ -176,7 +209,7 @@ type LedgerBalanceEntry = {
   discount_percent?: number;
   tax_amount?: number;
   shipping_receiving_amount?: number;
-  wholesale_retail?: "wholesale" | "retail";
+  wholesale_retail?: "wholesale" | "retail" | "service";
   payment_fee?: number;
   payment_amount?: number;
 };
@@ -289,13 +322,37 @@ export function grossProfitGoalFromTradePartners(
   return defaultLedgerDiscountPercent(averageTradePartnerDiscount(partners));
 }
 
-/** Unit designer cost: retail price × (1 − trade partner discount %). */
+/** Unit designer cost from retail and trade discount %: retail × (1 − discount/100). */
 export function calculateDesignerCostFromTradePartner(
   retailPrice: number,
   tradePartnerDiscountPercent: number
 ) {
   const discountRate = Number(tradePartnerDiscountPercent) / 100;
   return roundMoney(Number(retailPrice) * (1 - discountRate));
+}
+
+/** Unit retail price from designer cost and trade discount %: designer ÷ (1 − discount/100). */
+export function calculateRetailPriceFromTradePartner(
+  designerCost: number,
+  tradePartnerDiscountPercent: number
+) {
+  const cost = Number(designerCost);
+  if (cost <= 0) return 0;
+  const discountRate = Number(tradePartnerDiscountPercent) / 100;
+  const divisor = 1 - discountRate;
+  if (divisor <= 0) return 0;
+  return roundMoney(cost / divisor);
+}
+
+/** Unit retail from designer markup %: designer × (1 + markup/100). */
+export function calculateRetailPriceFromMarkup(
+  designerCost: number,
+  markupPercent: number
+) {
+  return roundMoney(
+    Math.max(0, Number(designerCost) || 0) *
+      (1 + Math.max(0, Number(markupPercent) || 0) / 100)
+  );
 }
 
 /** Parse YYYY-MM-DD (or leading ISO datetime) as a calendar date — no UTC shift. */
@@ -369,13 +426,23 @@ type TaxDueEntry = {
   purchaser?: "Jess" | "Molly" | string | null;
   sales_and_use_tax_paid?: boolean;
   sand_u_tax_paid?: boolean;
-  wholesale_retail?: "wholesale" | "retail";
+  wholesale_retail?: "wholesale" | "retail" | "service";
+  balance_sheet?: boolean | null;
+  income_statement?: boolean | null;
   clients?: { name?: string } | null;
   id?: string;
 };
 
 export function isSalesUseTaxPaid(entry: TaxDueEntry) {
   return Boolean(entry.sales_and_use_tax_paid ?? entry.sand_u_tax_paid);
+}
+
+/** Tax source for reporting: Bal Sheet - Personal vs Income Statement. */
+export function salesUseTaxStatementType(
+  entry: Pick<TaxDueEntry, "balance_sheet" | "income_statement">
+): "Bal Sheet - Personal" | "Income Statement" {
+  if (entry.balance_sheet) return "Bal Sheet - Personal";
+  return "Income Statement";
 }
 
 function isUnpaidSalesUseTax(entry: TaxDueEntry) {
@@ -396,7 +463,7 @@ export function getSalesUseTaxLineItems(entries: TaxDueEntry[]) {
   return entries
     .filter(
       (entry) =>
-        entry.wholesale_retail !== "retail" && Number(entry.tax_amount) > 0
+        entry.wholesale_retail === "wholesale" && Number(entry.tax_amount) > 0
     )
     .sort((a, b) => b.entry_date.localeCompare(a.entry_date));
 }

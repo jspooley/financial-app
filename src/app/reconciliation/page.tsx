@@ -58,6 +58,8 @@ export default function ReconciliationPage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [showAcceptedUnderpayments, setShowAcceptedUnderpayments] = useState(false);
+  const [showPaymentsVsRevenue, setShowPaymentsVsRevenue] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -95,6 +97,28 @@ export default function ReconciliationPage() {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [loadData]);
+
+  useEffect(() => {
+    if (!showAcceptedUnderpayments) return;
+    document
+      .getElementById("accepted-underpayment-variances")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [showAcceptedUnderpayments]);
+
+  useEffect(() => {
+    if (!showPaymentsVsRevenue) return;
+    document
+      .getElementById("payments-vs-revenue-gap")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [showPaymentsVsRevenue]);
+
+  function toggleAcceptedUnderpayments() {
+    setShowAcceptedUnderpayments((open) => !open);
+  }
+
+  function togglePaymentsVsRevenue() {
+    setShowPaymentsVsRevenue((open) => !open);
+  }
 
   async function handleSyncPaidFlags() {
     setSyncing(true);
@@ -275,87 +299,289 @@ export default function ReconciliationPage() {
           <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
             <h2 className="text-lg font-semibold text-slate-900">Summary Totals</h2>
             <p className="mt-1 text-sm text-slate-600">
-              Total Amount Invoiced − Payments Received = Outstanding Payments; Total
-              Amount Invoiced − Revenue = Outstanding Revenue.
+              Outstanding Payments uses collection balance (including expense and accepted
+              underpayment variance). Outstanding Revenue is invoiced amount not yet in payment_amount
+              after expense and accepted underpayment variance.
             </p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <div className="rounded-lg border border-slate-100 bg-slate-50 p-4 sm:col-start-1 sm:row-start-1">
-                <p className="text-xs uppercase tracking-wide text-slate-500">
-                  Total Amount Invoiced
-                </p>
-                <p className="mt-1 text-xl font-semibold text-slate-900">
-                  {formatCurrency(report.summary.invoiceHistoryTotal)}
-                </p>
-                <p className="mt-1 text-sm text-slate-600">
-                  Sum of invoiced amounts on all invoices
-                </p>
-              </div>
-              <div className="rounded-lg border border-slate-100 bg-slate-50 p-4 sm:col-start-1 sm:row-start-2">
-                <p className="text-xs uppercase tracking-wide text-slate-500">
-                  Payments Received
-                </p>
-                <p className="mt-1 text-xl font-semibold text-slate-900">
-                  {formatCurrency(report.summary.paymentsHistoryTotal)}
-                </p>
-                <p className="mt-1 text-sm text-slate-600">
-                  Invoiced amount collected so far
-                </p>
-              </div>
-              <div className="rounded-lg border border-slate-100 bg-slate-50 p-4 sm:col-start-2 sm:row-start-2">
-                <p className="text-xs uppercase tracking-wide text-slate-500">
-                  Revenue
-                </p>
-                <p className="mt-1 text-xl font-semibold text-brand-800">
-                  {formatCurrency(report.summary.revenueTotal)}
-                </p>
-                <p className="mt-1 text-sm text-slate-600">
-                  Sum of <code className="text-xs">payment_amount</code> on invoiced
-                  debit lines
-                </p>
-              </div>
-              <div className="rounded-lg border border-slate-100 bg-slate-50 p-4 sm:col-start-1 sm:row-start-3">
-                <p className="text-xs uppercase tracking-wide text-slate-500">
-                  Outstanding Payments
-                </p>
-                <p className="mt-1 text-xl font-semibold text-amber-800">
-                  {formatCurrency(report.summary.outstandingTotal)}
-                </p>
-                <p className="mt-1 text-sm text-slate-600">
-                  Total Amount Invoiced minus Payments Received — invoiced amount not yet
-                  collected
-                  {report.outstandingCount > 0 && (
-                    <>
-                      {" "}
-                      ({report.outstandingCount} line
-                      {report.outstandingCount === 1 ? "" : "s"} with balance due)
-                    </>
+            <div className="mt-4 space-y-3">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">
+                    Total Amount Invoiced
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-slate-900">
+                    {formatCurrency(report.summary.invoiceHistoryTotal)}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Sum of invoiced amounts on all invoices (balance-sheet lines excluded)
+                  </p>
+                </div>
+                <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">
+                    Accepted Underpayment Variances
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-amber-800">
+                    {formatCurrency(report.summary.acceptedUnderpaymentVarianceTotal)}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {report.acceptedVarianceLines.length === 0
+                      ? "No accepted underpayment variances"
+                      : `${report.acceptedVarianceLines.length} accepted underpayment ${
+                          report.acceptedVarianceLines.length === 1 ? "line" : "lines"
+                        } (written off from collection)`}
+                  </p>
+                  {report.acceptedVarianceLines.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={toggleAcceptedUnderpayments}
+                      className="mt-2 inline-block text-xs font-medium text-brand-700 hover:text-brand-800 hover:underline"
+                    >
+                      {showAcceptedUnderpayments
+                        ? "Hide accepted underpayment variances ↑"
+                        : "View accepted underpayment variances →"}
+                    </button>
                   )}
-                </p>
+                </div>
+                <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">
+                    Payments Received
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-slate-900">
+                    {formatCurrency(report.summary.paymentsHistoryTotal)}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Current-year revenue minus accepted underpayment variances
+                    {report.summary.acceptedUnderpaymentVarianceTotal >= 0.005 && (
+                      <>
+                        {" "}
+                        (−{formatCurrency(report.summary.acceptedUnderpaymentVarianceTotal)})
+                      </>
+                    )}
+                  </p>
+                </div>
               </div>
-              <div className="sm:col-start-2 sm:row-start-3">
+
+              <div className="grid gap-3 sm:grid-cols-3">
                 <GapRow
                   label="Outstanding Revenue"
                   amount={report.summary.invoiceMinusRevenue}
-                  hint="Total Amount Invoiced minus Revenue — invoiced amount not yet in payment_amount"
+                  hint="Expected client revenue not yet in payment_amount (excludes payment fees, expenses, and accepted underpayment variances)"
+                />
+                <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">
+                    Outstanding Payments
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-amber-800">
+                    {formatCurrency(report.summary.outstandingTotal)}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Total Amount Invoiced minus Payments Received — invoiced amount not yet
+                    collected
+                    {report.outstandingCount > 0 && (
+                      <>
+                        {" "}
+                        ({report.outstandingCount} line
+                        {report.outstandingCount === 1 ? "" : "s"} with balance due)
+                      </>
+                    )}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">
+                    Revenue
+                  </p>
+                  <p className="mt-1 text-xl font-semibold text-brand-800">
+                    {formatCurrency(report.summary.revenueTotal)}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Same as P&amp;L: sum of <code className="text-xs">payment_amount</code> on
+                    invoiced lines for the current year (balance-sheet lines excluded). Does not
+                    deduct accepted underpayments.
+                  </p>
+                  {Math.abs(report.summary.revenueMinusPaymentsReceived) >= 0.005 && (
+                    <>
+                      <p className="mt-1 text-sm text-amber-800">
+                        {formatCurrency(Math.abs(report.summary.revenueMinusPaymentsReceived))}{" "}
+                        differs from settled collection on some lines
+                      </p>
+                      <button
+                        type="button"
+                        onClick={togglePaymentsVsRevenue}
+                        className="mt-2 inline-block text-xs font-medium text-brand-700 hover:text-brand-800 hover:underline"
+                      >
+                        {showPaymentsVsRevenue
+                          ? "Hide ledger lines causing this difference ↑"
+                          : "View ledger lines causing this difference →"}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Expenses</p>
+                  <p className="mt-1 text-xl font-semibold text-slate-900">
+                    {formatCurrency(report.summary.totalExpense)}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">Total expense amount on ledger</p>
+                </div>
+                <GapRow
+                  label="Discrepancy Amount"
+                  amount={report.summary.revenueMinusPayments}
+                  hint="Payment_amount below expected revenue for the settled line. Payment fees, accepted underpayment variances, expenses, and overpayments are not counted here."
                 />
               </div>
             </div>
-
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Expenses</p>
-                <p className="mt-1 text-xl font-semibold text-slate-900">
-                  {formatCurrency(report.summary.totalExpense)}
-                </p>
-                <p className="mt-1 text-sm text-slate-600">Total expense amount on ledger</p>
-              </div>
-              <GapRow
-                label="Discrepancy Amount"
-                amount={report.summary.revenueMinusPayments}
-                hint="Revenue below payments received on invoiced debit lines (e.g. payment fees). Overpayments are additional revenue and are not counted here."
-              />
-            </div>
           </section>
+
+          {showAcceptedUnderpayments && report.acceptedVarianceLines.length > 0 && (
+            <section
+              id="accepted-underpayment-variances"
+              className="scroll-mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Accepted Underpayment Variances
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Lines where a short payment was accepted. These amounts are excluded from
+                    outstanding revenue and discrepancy; they still reduce net profit on the
+                    P&amp;L.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setShowAcceptedUnderpayments(false)}
+                >
+                  Close
+                </Button>
+              </div>
+              <div className="mt-4">
+                <DataTable
+                  columns={[
+                    { key: "entryDate", label: "Date" },
+                    { key: "invoiceId", label: "Invoice" },
+                    { key: "clientName", label: "Client" },
+                    { key: "description", label: "Description" },
+                    { key: "poNumber", label: "PO" },
+                    { key: "invoiced", label: "Invoiced" },
+                    { key: "paymentAmount", label: "Payment Amount" },
+                    { key: "variance", label: "Underpayment" },
+                    { key: "notes", label: "Notes" },
+                  ]}
+                  rows={report.acceptedVarianceLines.map((line) => ({
+                    entryDate: formatDate(line.entryDate),
+                    invoiceId: line.invoiceId,
+                    clientName: line.clientName,
+                    description: (
+                      <span className="max-w-xs truncate block" title={line.description}>
+                        {line.description}
+                      </span>
+                    ),
+                    poNumber: line.poNumber,
+                    invoiced: formatCurrency(line.invoicedAmount),
+                    paymentAmount: formatCurrency(line.paymentAmount),
+                    variance: (
+                      <span className="font-medium text-amber-800">
+                        {formatCurrency(line.varianceAmount)}
+                      </span>
+                    ),
+                    notes: line.varianceNotes.trim() || "—",
+                  }))}
+                  emptyMessage="No accepted underpayment variances."
+                  rowKey={(_, index) =>
+                    report.acceptedVarianceLines[index]?.id ?? String(index)
+                  }
+                  mobileTitleKey="invoiceId"
+                />
+              </div>
+              <p className="mt-3 text-sm font-medium text-slate-800">
+                Total: {formatCurrency(report.summary.acceptedUnderpaymentVarianceTotal)}
+              </p>
+            </section>
+          )}
+
+          {showPaymentsVsRevenue && report.paymentsVsRevenueGapLines.length > 0 && (
+            <section
+              id="payments-vs-revenue-gap"
+              className="scroll-mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-900">
+                    Payments Received vs Revenue
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Ledger lines where Payments Received (settled invoiced amount) differs from
+                    Revenue (<code className="text-xs">payment_amount</code>). Overpayments and
+                    other posting gaps usually appear here.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setShowPaymentsVsRevenue(false)}
+                >
+                  Close
+                </Button>
+              </div>
+              <div className="mt-4">
+                <DataTable
+                  columns={[
+                    { key: "entryDate", label: "Date" },
+                    { key: "invoiceId", label: "Invoice" },
+                    { key: "clientName", label: "Client" },
+                    { key: "description", label: "Description" },
+                    { key: "poNumber", label: "PO" },
+                    { key: "invoiced", label: "Invoiced" },
+                    { key: "paymentsReceived", label: "Payments Received" },
+                    { key: "paymentAmount", label: "Payment Amount" },
+                    { key: "revenue", label: "Revenue" },
+                    { key: "difference", label: "Difference" },
+                  ]}
+                  rows={report.paymentsVsRevenueGapLines.map((line) => ({
+                    entryDate: formatDate(line.entryDate),
+                    invoiceId: line.invoiceId,
+                    clientName: line.clientName,
+                    description: (
+                      <span className="max-w-xs truncate block" title={line.description}>
+                        {line.description}
+                      </span>
+                    ),
+                    poNumber: line.poNumber,
+                    invoiced: formatCurrency(line.invoicedAmount),
+                    paymentsReceived: formatCurrency(line.paymentsReceived),
+                    paymentAmount: formatCurrency(line.paymentAmount),
+                    revenue: formatCurrency(line.revenueAmount),
+                    difference: (
+                      <span className="font-medium text-amber-800">
+                        {formatCurrency(line.difference)}
+                      </span>
+                    ),
+                  }))}
+                  emptyMessage="No payment vs revenue differences."
+                  rowKey={(_, index) =>
+                    report.paymentsVsRevenueGapLines[index]?.id ?? String(index)
+                  }
+                  mobileTitleKey="invoiceId"
+                />
+              </div>
+              <p className="mt-3 text-sm font-medium text-slate-800">
+                Line differences total:{" "}
+                {formatCurrency(
+                  report.paymentsVsRevenueGapLines.reduce(
+                    (sum, line) => sum + line.difference,
+                    0
+                  )
+                )}{" "}
+                (Revenue − Payments Received ={" "}
+                {formatCurrency(report.summary.revenueMinusPaymentsReceived)})
+              </p>
+            </section>
+          )}
 
           {report.invoicesMissingPaidBadge.length > 0 && (
             <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm sm:p-6">
@@ -455,15 +681,18 @@ export default function ReconciliationPage() {
             <ul className="mt-2 list-disc space-y-1 pl-5">
               <li>
                 <strong>Total Amount Invoiced</strong> — sum of line amount (customer price × qty
-                + tax + shipping + fee) on invoiced debit lines per invoice.
+                + tax + shipping + fee) on invoiced debit lines per invoice (balance-sheet lines
+                excluded).
               </li>
               <li>
-                <strong>Payments Received</strong> — invoiced amount collected per line (full
-                line amount minus outstanding); partial payments count.
+                <strong>Payments Received</strong> — current-year Revenue minus accepted
+                underpayment variances.
               </li>
               <li>
-                <strong>Revenue</strong> — sum of <code className="text-xs">payment_amount</code>{" "}
-                on invoiced ledger lines (P&amp;L credits).
+                <strong>Revenue</strong> — same as P&amp;L YTD: sum of{" "}
+                <code className="text-xs">payment_amount</code> on invoiced ledger lines for the
+                current year (balance-sheet lines excluded). Accepted underpayments are not
+                deducted here.
               </li>
               <li>
                 <strong>Invoiced − Payments</strong> — per line, invoiced amount minus
@@ -471,21 +700,27 @@ export default function ReconciliationPage() {
                 cash is still owed).
               </li>
               <li>
-                <strong>Outstanding Revenue</strong> — per line, invoiced amount minus
-                revenue when revenue is still below invoiced; zero when overpaid.
+                <strong>Outstanding Revenue</strong> — per line, expected client revenue
+                (invoiced minus payment fee, expense, and accepted underpayment variance) not yet in
+                payment_amount.
               </li>
               <li>
-                <strong>Discrepancy</strong> — per line, only when revenue is less than
-                payments received (e.g. payment fees). If revenue exceeds the invoiced
-                amount, the excess is additional revenue and is not a discrepancy.
+                <strong>Discrepancy</strong> — per line, only when payment_amount is below
+                that expected revenue for the settled portion. Payment fees, accepted
+                underpayment variances, expenses, and overpayments are not discrepancies.
+              </li>
+              <li>
+                <strong>Accepted Underpayment Variances</strong> — sum of accepted short
+                payments (invoiced − payment after expense). Excluded from outstanding
+                revenue and discrepancy; listed in the section above.
               </li>
               <li>
                 <strong>Outstanding Payments</strong> — Total Amount Invoiced minus Payments
                 Received (invoiced amount not yet collected).
               </li>
               <li>
-                <strong>Outstanding Revenue</strong> — Total Amount Invoiced minus Revenue
-                (invoiced amount not yet in payment_amount).
+                <strong>Outstanding Revenue</strong> — sum of per-line outstanding revenue
+                (fees are excluded because they are not revenue).
               </li>
               <li>
                 <strong>Pink Paid badge</strong> — every debit line has{" "}

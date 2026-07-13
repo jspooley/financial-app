@@ -21,7 +21,7 @@ export function ExpenseModal({ outstanding, onConfirm, onCancel }: ExpenseModalP
       return false;
     }
     if (amount > outstanding) {
-      setError("The expense amount must be less than the outstanding amount.");
+      setError("The expense amount cannot exceed the outstanding amount.");
       return false;
     }
     setError(null);

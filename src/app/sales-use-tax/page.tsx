@@ -15,9 +15,11 @@ import {
   formatDate,
   groupTaxDueByMonth,
   isSalesUseTaxPaid,
+  salesUseTaxStatementType,
 } from "@/lib/utils";
 
 type TaxView = "unpaid" | "paid";
+type StatementFilter = "" | "Bal Sheet - Personal" | "Income Statement";
 
 type TaxRowDraft = {
   selected: boolean;
@@ -68,6 +70,7 @@ function SalesUseTaxPaymentsPageContent() {
   const [monthFilter, setMonthFilter] = useState("");
   const [purchaserFilter, setPurchaserFilter] = useState<"" | "Jess" | "Molly">("");
   const [clientFilter, setClientFilter] = useState("");
+  const [statementFilter, setStatementFilter] = useState<StatementFilter>("");
   const [drafts, setDrafts] = useState<Record<string, TaxRowDraft>>({});
 
   const loadData = useCallback(async () => {
@@ -78,7 +81,7 @@ function SalesUseTaxPaymentsPageContent() {
       const { data, error: dbError } = await supabase
         .from("ledger")
         .select("*, clients(name)")
-        .neq("wholesale_retail", "retail")
+        .eq("wholesale_retail", "wholesale")
         .gt("tax_amount", 0)
         .order("entry_date", { ascending: false });
 
@@ -137,40 +140,103 @@ function SalesUseTaxPaymentsPageContent() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [entries]);
 
-  const filteredEntries = useMemo(() => {
-    return entries.filter((entry) => {
-      const paid = isSalesUseTaxPaid(entry);
-      if (view === "unpaid" ? paid : !paid) return false;
+  const matchesDimensionFilters = useCallback(
+    (entry: LedgerEntry) => {
       if (monthFilter && !entryDateKey(entry).startsWith(monthFilter)) return false;
       if (purchaserFilter && entry.purchaser !== purchaserFilter) return false;
       if (clientFilter && entry.client_id !== clientFilter) return false;
+      if (
+        statementFilter &&
+        salesUseTaxStatementType(entry) !== statementFilter
+      ) {
+        return false;
+      }
       return true;
-    });
-  }, [entries, view, monthFilter, purchaserFilter, clientFilter]);
-
-  const unpaidEntries = useMemo(
-    () => entries.filter((entry) => !isSalesUseTaxPaid(entry)),
-    [entries]
+    },
+    [monthFilter, purchaserFilter, clientFilter, statementFilter]
   );
+
+  const dimensionFilteredEntries = useMemo(
+    () => entries.filter(matchesDimensionFilters),
+    [entries, matchesDimensionFilters]
+  );
+
+  const filteredUnpaidEntries = useMemo(
+    () => dimensionFilteredEntries.filter((entry) => !isSalesUseTaxPaid(entry)),
+    [dimensionFilteredEntries]
+  );
+
+  const filteredPaidEntries = useMemo(
+    () => dimensionFilteredEntries.filter((entry) => isSalesUseTaxPaid(entry)),
+    [dimensionFilteredEntries]
+  );
+
+  const filteredEntries = useMemo(() => {
+    return view === "unpaid" ? filteredUnpaidEntries : filteredPaidEntries;
+  }, [view, filteredUnpaidEntries, filteredPaidEntries]);
+
+  const unpaidByStatement = useMemo(() => {
+    let incomeStatement = 0;
+    let balanceSheet = 0;
+    for (const entry of filteredUnpaidEntries) {
+      const tax = Number(entry.tax_amount) || 0;
+      if (salesUseTaxStatementType(entry) === "Bal Sheet - Personal") {
+        balanceSheet += tax;
+      } else {
+        incomeStatement += tax;
+      }
+    }
+    return { incomeStatement, balanceSheet };
+  }, [filteredUnpaidEntries]);
+
+  const paidByStatement = useMemo(() => {
+    let incomeStatement = 0;
+    let balanceSheet = 0;
+    for (const entry of filteredPaidEntries) {
+      const tax = Number(entry.tax_amount) || 0;
+      if (salesUseTaxStatementType(entry) === "Bal Sheet - Personal") {
+        balanceSheet += tax;
+      } else {
+        incomeStatement += tax;
+      }
+    }
+    return { incomeStatement, balanceSheet };
+  }, [filteredPaidEntries]);
 
   const taxDueByMonth = useMemo(
     () =>
       groupTaxDueByMonth(
-        unpaidEntries.filter((entry) => entryDateKey(entry).length >= 7)
+        filteredUnpaidEntries.filter((entry) => entryDateKey(entry).length >= 7)
       ),
-    [unpaidEntries]
+    [filteredUnpaidEntries]
   );
 
   const totalUnpaidTax = useMemo(
-    () => unpaidEntries.reduce((sum, entry) => sum + Number(entry.tax_amount), 0),
-    [unpaidEntries]
+    () =>
+      filteredUnpaidEntries.reduce(
+        (sum, entry) => sum + Number(entry.tax_amount),
+        0
+      ),
+    [filteredUnpaidEntries]
   );
 
-  const monthKey = currentMonthKey();
-  const currentMonthTax = taxDueByMonth.find((row) => row.monthKey === monthKey);
-  const currentMonthTaxDue = currentMonthTax?.amount ?? 0;
-  const currentMonthJessTaxDue = currentMonthTax?.jess ?? 0;
-  const currentMonthMollyTaxDue = currentMonthTax?.molly ?? 0;
+  const totalPaidTax = useMemo(
+    () =>
+      filteredPaidEntries.reduce(
+        (sum, entry) => sum + Number(entry.tax_amount),
+        0
+      ),
+    [filteredPaidEntries]
+  );
+
+  const summaryMonthKey = monthFilter || currentMonthKey();
+  const summaryMonthTax = taxDueByMonth.find(
+    (row) => row.monthKey === summaryMonthKey
+  );
+  const summaryMonthTaxDue = summaryMonthTax?.amount ?? 0;
+  const summaryMonthJessTaxDue = summaryMonthTax?.jess ?? 0;
+  const summaryMonthMollyTaxDue = summaryMonthTax?.molly ?? 0;
+  const summaryMonthLabel = monthLabel(summaryMonthKey);
 
   const selectedEntries = useMemo(
     () => filteredEntries.filter((entry) => drafts[entry.id]?.selected),
@@ -259,7 +325,7 @@ function SalesUseTaxPaymentsPageContent() {
     <AppShell>
       <PageHeader
         title="Sales & Use Tax"
-        description="Unpaid wholesale ledger tax due by the 20th of each month. Mark entries paid when remitted to the state."
+        description="All wholesale ledger tax lines, including Bal Sheet - Personal and Income Statement. Mark entries paid when remitted to the state."
       />
 
       <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
@@ -269,26 +335,33 @@ function SalesUseTaxPaymentsPageContent() {
               Sales and Use Tax Due by the 20th of each month
             </h2>
             <p className="text-sm text-slate-600">
-              Unpaid sales and use tax from ledger entries where Sales and Use Tax Paid is unchecked.
+              Unpaid tax for {summaryMonthLabel}, using the filters below (purchaser,
+              client, statement).
             </p>
           </div>
           <div className="flex flex-wrap gap-3 text-right sm:justify-end sm:gap-6">
             <div>
-              <p className="text-xs uppercase tracking-wide text-slate-500">Jess (this month)</p>
+              <p className="text-xs uppercase tracking-wide text-slate-500">
+                Jess ({summaryMonthLabel})
+              </p>
               <p className="text-xl font-semibold text-brand-800">
-                {formatCurrency(currentMonthJessTaxDue)}
+                {formatCurrency(summaryMonthJessTaxDue)}
               </p>
             </div>
             <div>
-              <p className="text-xs uppercase tracking-wide text-slate-500">Molly (this month)</p>
+              <p className="text-xs uppercase tracking-wide text-slate-500">
+                Molly ({summaryMonthLabel})
+              </p>
               <p className="text-xl font-semibold text-brand-800">
-                {formatCurrency(currentMonthMollyTaxDue)}
+                {formatCurrency(summaryMonthMollyTaxDue)}
               </p>
             </div>
             <div>
-              <p className="text-xs uppercase tracking-wide text-slate-500">Total (this month)</p>
+              <p className="text-xs uppercase tracking-wide text-slate-500">
+                Total ({summaryMonthLabel})
+              </p>
               <p className="text-xl font-semibold text-slate-900">
-                {formatCurrency(currentMonthTaxDue)}
+                {formatCurrency(summaryMonthTaxDue)}
               </p>
             </div>
           </div>
@@ -306,51 +379,7 @@ function SalesUseTaxPaymentsPageContent() {
         </div>
       )}
 
-      <section className="mb-6 grid gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-xs uppercase tracking-wide text-slate-500">Unpaid entries</p>
-          <p className="mt-1 text-2xl font-bold text-slate-900">{unpaidEntries.length}</p>
-        </div>
-        <div className="rounded-xl border border-brand-200 bg-brand-50 p-4">
-          <p className="text-xs uppercase tracking-wide text-slate-600">Total unpaid tax</p>
-          <p className="mt-1 text-2xl font-bold text-brand-800">
-            {formatCurrency(totalUnpaidTax)}
-          </p>
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-xs uppercase tracking-wide text-slate-500">Months with balance</p>
-          <p className="mt-1 text-2xl font-bold text-slate-900">{taxDueByMonth.length}</p>
-        </div>
-      </section>
-
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
-          <button
-            type="button"
-            onClick={() => setView("unpaid")}
-            className={`rounded-md px-4 py-2 text-sm font-medium transition ${
-              view === "unpaid"
-                ? "bg-brand-600 text-white"
-                : "text-slate-600 hover:bg-slate-50"
-            }`}
-          >
-            Unpaid
-          </button>
-          <button
-            type="button"
-            onClick={() => setView("paid")}
-            className={`rounded-md px-4 py-2 text-sm font-medium transition ${
-              view === "paid"
-                ? "bg-brand-600 text-white"
-                : "text-slate-600 hover:bg-slate-50"
-            }`}
-          >
-            Paid history
-          </button>
-        </div>
-      </div>
-
-      <div className="mb-4 grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-3">
+      <div className="mb-4 grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-4">
         <label className="block text-sm">
           <span className="mb-1 block font-medium text-slate-700">Month</span>
           <select
@@ -359,9 +388,9 @@ function SalesUseTaxPaymentsPageContent() {
             className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
           >
             <option value="">All months</option>
-            {monthOptions.map((monthKey) => (
-              <option key={monthKey} value={monthKey}>
-                {monthLabel(monthKey)}
+            {monthOptions.map((monthKeyOption) => (
+              <option key={monthKeyOption} value={monthKeyOption}>
+                {monthLabel(monthKeyOption)}
               </option>
             ))}
           </select>
@@ -395,6 +424,88 @@ function SalesUseTaxPaymentsPageContent() {
             ))}
           </select>
         </label>
+        <label className="block text-sm">
+          <span className="mb-1 block font-medium text-slate-700">Statement</span>
+          <select
+            value={statementFilter}
+            onChange={(event) =>
+              setStatementFilter(event.target.value as StatementFilter)
+            }
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="">All statements</option>
+            <option value="Income Statement">Income Statement</option>
+            <option value="Bal Sheet - Personal">Bal Sheet - Personal</option>
+          </select>
+        </label>
+      </div>
+
+      <section className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs uppercase tracking-wide text-slate-500">Unpaid entries</p>
+          <p className="mt-1 text-2xl font-bold text-slate-900">
+            {filteredUnpaidEntries.length}
+          </p>
+          <p className="mt-1 text-sm text-brand-800">
+            {formatCurrency(totalUnpaidTax)}
+          </p>
+          <p className="mt-2 text-xs text-slate-500">
+            Income Statement {formatCurrency(unpaidByStatement.incomeStatement)} · Bal
+            Sheet {formatCurrency(unpaidByStatement.balanceSheet)}
+          </p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs uppercase tracking-wide text-slate-500">Paid entries</p>
+          <p className="mt-1 text-2xl font-bold text-slate-900">
+            {filteredPaidEntries.length}
+          </p>
+          <p className="mt-1 text-sm text-slate-800">
+            {formatCurrency(totalPaidTax)}
+          </p>
+          <p className="mt-2 text-xs text-slate-500">
+            Income Statement {formatCurrency(paidByStatement.incomeStatement)} · Bal
+            Sheet {formatCurrency(paidByStatement.balanceSheet)}
+          </p>
+        </div>
+        <div className="rounded-xl border border-brand-200 bg-brand-50 p-4">
+          <p className="text-xs uppercase tracking-wide text-slate-600">
+            Filtered tax total
+          </p>
+          <p className="mt-1 text-2xl font-bold text-brand-800">
+            {formatCurrency(totalUnpaidTax + totalPaidTax)}
+          </p>
+          <p className="mt-2 text-xs text-slate-600">
+            {dimensionFilteredEntries.length}{" "}
+            {dimensionFilteredEntries.length === 1 ? "entry" : "entries"} match filters
+          </p>
+        </div>
+      </section>
+
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+          <button
+            type="button"
+            onClick={() => setView("unpaid")}
+            className={`rounded-md px-4 py-2 text-sm font-medium transition ${
+              view === "unpaid"
+                ? "bg-brand-600 text-white"
+                : "text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            Unpaid ({filteredUnpaidEntries.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("paid")}
+            className={`rounded-md px-4 py-2 text-sm font-medium transition ${
+              view === "paid"
+                ? "bg-brand-600 text-white"
+                : "text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            Paid ({filteredPaidEntries.length})
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -402,7 +513,7 @@ function SalesUseTaxPaymentsPageContent() {
       ) : filteredEntries.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
           {view === "unpaid"
-            ? "No unpaid sales and use tax on wholesale ledger entries."
+            ? "No unpaid sales and use tax match these filters."
             : "No paid tax entries match these filters."}
         </div>
       ) : (
@@ -441,6 +552,9 @@ function SalesUseTaxPaymentsPageContent() {
                       <p className="mt-1 font-medium text-brand-800">
                         Tax: {formatCurrency(Number(entry.tax_amount))}
                       </p>
+                      <p className="text-slate-600">
+                        Statement: {salesUseTaxStatementType(entry)}
+                      </p>
                       <p className="text-slate-600">Purchaser: {entry.purchaser ?? "—"}</p>
                     </div>
                   </label>
@@ -477,6 +591,7 @@ function SalesUseTaxPaymentsPageContent() {
                   <th className="px-3 py-3">Client</th>
                   <th className="px-3 py-3">Description</th>
                   <th className="px-3 py-3">PO</th>
+                  <th className="px-3 py-3">Statement</th>
                   <th className="px-3 py-3 text-right">Tax</th>
                   <th className="px-3 py-3">Purchaser</th>
                   <th className="px-3 py-3">Tax Paid</th>
@@ -486,6 +601,7 @@ function SalesUseTaxPaymentsPageContent() {
                 {filteredEntries.map((entry) => {
                   const draft = drafts[entry.id];
                   if (!draft) return null;
+                  const statementType = salesUseTaxStatementType(entry);
 
                   return (
                     <tr key={entry.id} className="border-t border-slate-100">
@@ -505,6 +621,17 @@ function SalesUseTaxPaymentsPageContent() {
                       <td className="px-3 py-3">{entry.clients?.name ?? "—"}</td>
                       <td className="px-3 py-3">{entry.description?.trim() || "—"}</td>
                       <td className="px-3 py-3">{entry.po_number ?? "—"}</td>
+                      <td className="px-3 py-3">
+                        <span
+                          className={
+                            statementType === "Bal Sheet - Personal"
+                              ? "text-slate-800"
+                              : "text-brand-800"
+                          }
+                        >
+                          {statementType}
+                        </span>
+                      </td>
                       <td className="px-3 py-3 text-right font-medium">
                         {formatCurrency(Number(entry.tax_amount))}
                       </td>

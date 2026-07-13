@@ -1,5 +1,5 @@
 import type { LedgerEntry } from "./types";
-import { formatCurrency, formatDate, getLedgerCustomerPrice, getLedgerInvoicedAmount, parseDateOnlyParts, roundMoney } from "./utils";
+import { formatCurrency, formatDate, getLedgerCustomerPrice, getLedgerInvoicedAmount, getLedgerInvoicedAmountExcludingPaymentFee, parseDateOnlyParts, roundMoney } from "./utils";
 
 /** Short US date for printed invoices (e.g. 4/22/2026). */
 export function formatInvoiceDisplayDate(value?: string | Date | null): string {
@@ -71,7 +71,8 @@ export type LedgerAmountEntry = {
   customer_price?: number | null;
   tax_amount?: number;
   shipping_receiving_amount?: number;
-  wholesale_retail?: "wholesale" | "retail";
+  wholesale_retail?: "wholesale" | "retail" | "service";
+  designer_cost?: number;
   credit_debit?: "credit" | "debit";
   invoiced?: boolean | null;
   invoice_id?: string | null;
@@ -80,9 +81,13 @@ export type LedgerAmountEntry = {
   payment_amount?: number;
   expense?: boolean | null;
   expense_amount?: number | null;
+  variance_accepted?: boolean | null;
+  variance_amount?: number | null;
+  balance_sheet?: boolean | null;
 };
 
-/** Line amount: customer price × qty + tax + shipping + fee (invoice and payment totals). */
+/** Line amount: customer price × qty + tax + shipping + fee (invoice and payment totals).
+ * Personal use (balance sheet) lines are tax amount only. */
 export function ledgerLineAmount(entry: LedgerAmountEntry) {
   return getLedgerInvoicedAmount({
     retail_price: entry.retail_price,
@@ -93,10 +98,19 @@ export function ledgerLineAmount(entry: LedgerAmountEntry) {
     shipping_receiving_amount: entry.shipping_receiving_amount ?? 0,
     wholesale_retail: entry.wholesale_retail ?? "retail",
     payment_fee: entry.payment_fee ?? 0,
+    balance_sheet: entry.balance_sheet,
+    designer_cost: entry.designer_cost,
   });
 }
 
-/** Cash applied to a line (payment amount + payment fee). */
+/** Cash applied to settle the invoice line (payment_amount only).
+ * payment_fee is tracked for expense/P&L but is not added again here — payment_amount
+ * is the amount applied to the invoiced total (which already includes fee when present). */
+export function getLedgerSettlementPaymentAmount(entry: LedgerAmountEntry) {
+  return roundMoney(Number(entry.payment_amount ?? 0));
+}
+
+/** Gross cash recorded on the line (payment amount + payment fee). */
 export function getLedgerTotalPaymentReceived(entry: LedgerAmountEntry) {
   return roundMoney(
     Number(entry.payment_amount ?? 0) + Number(entry.payment_fee ?? 0)
@@ -104,27 +118,26 @@ export function getLedgerTotalPaymentReceived(entry: LedgerAmountEntry) {
 }
 
 /**
- * Signed balance: cash received − line amount.
- * Expense moves balance toward zero.
+ * Signed balance:
+ * payment_amount − (invoiced amount − expense amount + accepted variance)
+ *
+ * Invoiced amount includes payment fee when present. payment_amount is the full
+ * amount applied to that total (do not add payment_fee again).
+ *
+ * Accepted variance is signed: positive = overpayment, negative = underpayment.
+ * Zero means settled; negative means still owed; positive means overpaid.
  */
 export function getLedgerOutstandingBalance(entry: LedgerAmountEntry) {
-  const owed = ledgerLineAmount(entry);
-  const paid = getLedgerTotalPaymentReceived(entry);
+  const invoiced = ledgerLineAmount(entry);
+  const paymentApplied = getLedgerSettlementPaymentAmount(entry);
   const expenseApplied = entry.expense
     ? roundMoney(Math.max(0, Number(entry.expense_amount ?? 0)))
     : 0;
+  const varianceApplied = getLedgerAcceptedVarianceAmount(entry);
 
-  let balance = roundMoney(paid - owed);
-
-  if (expenseApplied > 0) {
-    if (balance < 0) {
-      balance = roundMoney(Math.min(0, balance + expenseApplied));
-    } else if (balance > 0) {
-      balance = roundMoney(Math.max(0, balance - expenseApplied));
-    }
-  }
-
-  return balance;
+  return roundMoney(
+    paymentApplied - (invoiced - expenseApplied + varianceApplied)
+  );
 }
 
 /** Underpayment still owed (positive), or zero when balanced/overpaid. */
@@ -138,9 +151,43 @@ export function getLineAmountStillOwed(entry: LedgerAmountEntry) {
   return getLedgerUnderpaymentAmount(entry);
 }
 
-/** Paid when cumulative payment (plus expense) meets or exceeds invoiced amount. */
+/**
+ * Signed variance before acceptance:
+ * payment_amount − (invoiced − expense)
+ * Positive = overpayment; negative = underpayment.
+ *
+ * Invoiced includes payment fee; payment_amount is compared directly (fee is not
+ * added on the payment side).
+ */
+export function getLedgerVarianceBeforeAcceptance(entry: LedgerAmountEntry) {
+  const withoutVariance = {
+    ...entry,
+    variance_accepted: false,
+    variance_amount: 0,
+  };
+  const invoiced = ledgerLineAmount(withoutVariance);
+  const paymentApplied = getLedgerSettlementPaymentAmount(withoutVariance);
+  const expenseApplied = withoutVariance.expense
+    ? roundMoney(Math.max(0, Number(withoutVariance.expense_amount ?? 0)))
+    : 0;
+  return roundMoney(paymentApplied - (invoiced - expenseApplied));
+}
+
+/** Accepted variance in current sign convention (derived from payment vs invoiced). */
+export function getLedgerAcceptedVarianceAmount(entry: LedgerAmountEntry) {
+  if (!entry.variance_accepted) return 0;
+  return getLedgerVarianceBeforeAcceptance(entry);
+}
+
+/** @deprecated Use getLedgerVarianceBeforeAcceptance */
+export function getLedgerShortfallBeforeAcceptance(entry: LedgerAmountEntry) {
+  const variance = getLedgerVarianceBeforeAcceptance(entry);
+  return variance < 0 ? roundMoney(-variance) : 0;
+}
+
+/** Paid only when outstanding balance is exactly zero. */
 export function isLedgerLineFullyPaid(entry: LedgerAmountEntry) {
-  return getLedgerOutstandingBalance(entry) >= 0;
+  return getLedgerOutstandingBalance(entry) === 0;
 }
 
 /** DB paid flag derived from balance math (set on Payments save and ledger edits). */
@@ -152,11 +199,14 @@ export function deriveLedgerPaidFlag(entry: {
   customer_price?: number | null;
   tax_amount?: number | null;
   shipping_receiving_amount?: number | null;
-  wholesale_retail?: "wholesale" | "retail";
+  wholesale_retail?: "wholesale" | "retail" | "service";
+  designer_cost?: number | null;
   payment_fee?: number | null;
   payment_amount?: number | null;
   expense?: boolean | null;
   expense_amount?: number | null;
+  variance_accepted?: boolean | null;
+  variance_amount?: number | null;
 }): boolean {
   if (entry.credit_debit !== "debit") return false;
   return isLedgerLineFullyPaid({
@@ -167,10 +217,13 @@ export function deriveLedgerPaidFlag(entry: {
     tax_amount: entry.tax_amount ?? 0,
     shipping_receiving_amount: entry.shipping_receiving_amount ?? 0,
     wholesale_retail: entry.wholesale_retail ?? "retail",
+    designer_cost: Number(entry.designer_cost ?? 0),
     payment_fee: Number(entry.payment_fee ?? 0),
     payment_amount: Number(entry.payment_amount ?? 0),
     expense: entry.expense,
     expense_amount: entry.expense_amount,
+    variance_accepted: entry.variance_accepted,
+    variance_amount: entry.variance_amount,
   });
 }
 
@@ -180,7 +233,12 @@ export function isInvoicedDebitLine(entry: LedgerAmountEntry): boolean {
 }
 
 function sumLineAmounts(entries: LedgerAmountEntry[]) {
-  return roundMoney(entries.reduce((sum, entry) => sum + ledgerLineAmount(entry), 0));
+  return roundMoney(
+    entries.reduce(
+      (sum, entry) => sum + getLedgerInvoicedAmountExcludingPaymentFee(entry),
+      0
+    )
+  );
 }
 
 /** Invoice History total — sum of line amounts on invoiced debits per invoice. */
@@ -199,13 +257,23 @@ export function sumInvoiceHistoryTotal(
   );
 }
 
-/** Portion of invoiced line amount counted as paid (full line minus still owed). */
+/** Cash portion of an invoiced line counted as received (excludes still owed, expense, and accepted underpayment variance). */
 export function ledgerLineAmountSettled(entry: LedgerAmountEntry): number {
   if (!isInvoicedDebitLine(entry)) return 0;
-  return roundMoney(ledgerLineAmount(entry) - getLedgerUnderpaymentAmount(entry));
+  const invoiced = ledgerLineAmount(entry);
+  const stillOwed = getLedgerUnderpaymentAmount(entry);
+  const expenseApplied = entry.expense
+    ? roundMoney(Math.max(0, Number(entry.expense_amount ?? 0)))
+    : 0;
+  const acceptedVariance = getLedgerAcceptedVarianceAmount(entry);
+  const varianceUnderpayment =
+    acceptedVariance < 0 ? roundMoney(-acceptedVariance) : 0;
+  return roundMoney(
+    Math.max(0, invoiced - stillOwed - expenseApplied - varianceUnderpayment)
+  );
 }
 
-/** Payments History total — invoiced amount collected; excludes only what's still outstanding. */
+/** Payments History total — cash collected on invoiced lines (not variance/expense write-offs). */
 export function sumPaymentsHistoryTotal(entries: LedgerAmountEntry[]): number {
   return roundMoney(
     entries
@@ -261,7 +329,10 @@ export function summarizeToBeInvoiced(entries: LedgerAmountEntry[]) {
   return {
     count: lines.length,
     amount: roundMoney(
-      lines.reduce((sum, entry) => sum + ledgerLineAmount(entry), 0)
+      lines.reduce(
+        (sum, entry) => sum + getLedgerInvoicedAmountExcludingPaymentFee(entry),
+        0
+      )
     ),
   };
 }
@@ -439,7 +510,10 @@ export function summarizePaymentsByInvoiceId(
       const invoicedTotal = roundMoney(
         lines
           .filter(isInvoicedDebitLine)
-          .reduce((sum, entry) => sum + ledgerLineAmount(entry), 0)
+          .reduce(
+            (sum, entry) => sum + getLedgerInvoicedAmountExcludingPaymentFee(entry),
+            0
+          )
       );
       const paidTotal = roundMoney(
         projected
@@ -464,7 +538,7 @@ export function summarizePaymentsByInvoiceId(
 }
 
 export function invoiceLineTotal(entry: InvoiceLineItem): number {
-  return ledgerLineAmount(entry);
+  return getLedgerInvoicedAmountExcludingPaymentFee(entry);
 }
 
 export interface InvoiceLineBreakdown {
@@ -477,19 +551,30 @@ export interface InvoiceLineBreakdown {
 }
 
 export function getInvoiceLineBreakdown(entry: InvoiceLineItem): InvoiceLineBreakdown {
-  const shipping = Number(entry.shipping_receiving_amount) || 0;
-  const merchandise = getLedgerCustomerPrice(entry);
   const tax =
     entry.wholesale_retail === "wholesale" ? Number(entry.tax_amount) || 0 : 0;
-  const paymentFee = Number(entry.payment_fee ?? 0);
+
+  if (entry.balance_sheet) {
+    return {
+      merchandise: 0,
+      tax,
+      shipping: 0,
+      paymentFee: 0,
+      total: roundMoney(tax),
+      taxLabel: entry.wholesale_retail === "wholesale" ? formatCurrency(tax) : "N/A",
+    };
+  }
+
+  const shipping = Number(entry.shipping_receiving_amount) || 0;
+  const merchandise = getLedgerCustomerPrice(entry);
 
   return {
     merchandise,
     tax,
     shipping,
-    paymentFee,
-    total: roundMoney(merchandise + tax + shipping + paymentFee),
-    taxLabel: entry.wholesale_retail === "retail" ? "N/A" : formatCurrency(tax),
+    paymentFee: 0,
+    total: roundMoney(merchandise + tax + shipping),
+    taxLabel: entry.wholesale_retail === "wholesale" ? formatCurrency(tax) : "N/A",
   };
 }
 

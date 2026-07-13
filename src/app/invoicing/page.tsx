@@ -14,7 +14,7 @@ import { SelectField, selectFieldClass } from "@/components/ui/FormFields";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { InvoiceLineItem } from "@/lib/invoice-utils";
-import { getLedgerLinesForInvoice, isInvoiceFullyPaid, isInvoicedDebitLine, isLedgerLineUninvoiced, ledgerLineAmount, normalizeInvoiceId, sumInvoiceHistoryTotal, summarizeToBeInvoiced } from "@/lib/invoice-utils";
+import { getLedgerLinesForInvoice, invoiceLineTotal, isInvoiceFullyPaid, isInvoicedDebitLine, isLedgerLineUninvoiced, normalizeInvoiceId, sumInvoiceHistoryTotal, summarizeToBeInvoiced } from "@/lib/invoice-utils";
 import type { Client, Invoice, LedgerEntry } from "@/lib/types";
 import { formatCurrency, formatDate, roundMoney } from "@/lib/utils";
 
@@ -135,7 +135,7 @@ export default function InvoicingPage() {
         isInvoicedDebitLine
       );
       amounts[invoiceId] = roundMoney(
-        lines.reduce((sum, entry) => sum + ledgerLineAmount(entry), 0)
+        lines.reduce((sum, entry) => sum + invoiceLineTotal(entry), 0)
       );
     }
     return amounts;
@@ -465,7 +465,7 @@ export default function InvoicingPage() {
                           "—",
                         po: entry.po_number ?? "—",
                         description: entry.description?.trim() || "—",
-                        invoicedAmount: formatCurrency(ledgerLineAmount(entry)),
+                        invoicedAmount: formatCurrency(invoiceLineTotal(entry)),
                       }))}
                       emptyMessage={
                         selectedClientId

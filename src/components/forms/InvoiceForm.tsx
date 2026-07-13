@@ -19,7 +19,7 @@ import {
   type InvoiceLineItem,
 } from "@/lib/invoice-utils";
 import type { Client, Invoice, LedgerEntry } from "@/lib/types";
-import { formatCurrency, formatDate, getLedgerInvoicedAmount, roundMoney } from "@/lib/utils";
+import { formatCurrency, formatDate, getLedgerInvoicedAmountExcludingPaymentFee, roundMoney } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 import { CheckboxField, InputField, SelectField, TextareaField } from "@/components/ui/FormFields";
 import { InvoiceDetailView } from "@/components/invoicing/InvoiceDetailView";
@@ -102,7 +102,7 @@ export function InvoiceForm({
         invoiceId,
         lines,
         amount: roundMoney(
-          lines.reduce((sum, line) => sum + getLedgerInvoicedAmount(line), 0)
+          lines.reduce((sum, line) => sum + getLedgerInvoicedAmountExcludingPaymentFee(line), 0)
         ),
         invoiceDate: invoiceHeaders[invoiceId] ?? null,
       }))
@@ -629,7 +629,7 @@ export function InvoiceForm({
                         labelPosition="inline"
                         disabled={invoiceFullyPaid}
                         readOnly={invoiceFullyPaid}
-                        label={`${formatDate(line.entry_date)} — ${line.description?.trim() || "Item"} — ${formatCurrency(getLedgerInvoicedAmount(line))}`}
+                        label={`${formatDate(line.entry_date)} — ${line.description?.trim() || "Item"} — ${formatCurrency(getLedgerInvoicedAmountExcludingPaymentFee(line))}`}
                         checked={includedLineIds.has(line.id)}
                         onChange={() => toggleLine(line.id)}
                       />
