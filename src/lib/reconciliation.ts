@@ -608,7 +608,10 @@ export function buildReconciliationReport(
   );
 
   const tradeAccountOwnerMismatches: TradeAccountOwnerMismatchRow[] = ledgerEntries
-    .filter((entry) => Boolean(entry.trade_partner_id))
+    .filter(
+      (entry) =>
+        Boolean(entry.trade_partner_id) && Number(entry.tax_amount ?? 0) > 0
+    )
     .map((entry) => {
       const partner = tradePartnerById.get(entry.trade_partner_id!);
       if (!partner) return null;

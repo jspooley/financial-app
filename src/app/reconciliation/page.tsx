@@ -769,8 +769,9 @@ export default function ReconciliationPage() {
                 Trade Account Owner vs Purchaser
               </h2>
               <p className="mt-1 text-sm text-slate-600">
-                Ledger lines where the purchaser does not match the trade partner&apos;s
-                account owner ({report.tradeAccountOwnerMismatches.length} mismatch
+                Ledger lines with tax due where the purchaser does not match the trade
+                partner&apos;s account owner (
+                {report.tradeAccountOwnerMismatches.length} mismatch
                 {report.tradeAccountOwnerMismatches.length === 1 ? "" : "es"}). Partners
                 without an account owner are not listed.
               </p>
@@ -910,9 +911,9 @@ export default function ReconciliationPage() {
                 revenue and discrepancy; listed in the section above.
               </li>
               <li>
-                <strong>Trade Account Owner vs Purchaser</strong> — ledger lines whose
-                purchaser is not the same as the linked trade partner&apos;s account owner
-                (Molly or Jess).
+                <strong>Trade Account Owner vs Purchaser</strong> — ledger lines with tax
+                due whose purchaser is not the same as the linked trade partner&apos;s
+                account owner (Molly or Jess).
               </li>
               <li>
                 <strong>Outstanding Payments</strong> — Total Amount Invoiced minus Payments
