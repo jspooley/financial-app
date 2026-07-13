@@ -7,7 +7,13 @@ import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/client";
-import { normalizeLedgerRow, syncAllLedgerPaidFlags, type LedgerDbRow } from "@/lib/ledger-db";
+import {
+  fetchAllLedgerRows,
+  normalizeLedgerRow,
+  syncAllLedgerPaidFlags,
+  syncLedgerPaidFlagsForEntries,
+  type LedgerDbRow,
+} from "@/lib/ledger-db";
 import { buildReconciliationReport } from "@/lib/reconciliation";
 import type { Client, Invoice, LedgerEntry, TradePartner } from "@/lib/types";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -71,7 +77,7 @@ export default function ReconciliationPage() {
     const [
       { data: invoiceData },
       { data: clientData },
-      { data: ledgerData },
+      ledgerResult,
       { data: tradeData },
     ] = await Promise.all([
       supabase
@@ -79,16 +85,19 @@ export default function ReconciliationPage() {
         .select("*, clients(name)")
         .order("created_at", { ascending: false }),
       supabase.from("clients").select("*").order("name", { ascending: true }),
-      supabase.from("ledger").select("*, clients(name)"),
+      fetchAllLedgerRows(supabase, "*, clients(name)"),
       supabase
         .from("trade_partners")
         .select("id, company_name, account_owner")
         .order("company_name", { ascending: true }),
     ]);
+    if (ledgerResult.error) {
+      console.error("Failed to load ledger for reconciliation:", ledgerResult.error);
+    }
     setInvoices((invoiceData ?? []) as Invoice[]);
     setClients(clientData ?? []);
     setLedgerEntries(
-      (ledgerData ?? []).map((row) =>
+      ledgerResult.data.map((row) =>
         normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
       )
     );
@@ -150,15 +159,27 @@ export default function ReconciliationPage() {
     setSyncing(true);
     setSyncMessage(null);
     const supabase = createClient();
-    const { updated, error } = await syncAllLedgerPaidFlags(supabase);
-    setSyncing(false);
-    if (error) {
-      setSyncMessage(`Sync failed: ${error}`);
+    // First update the rows this report is showing (same balance math as the table).
+    const fromReport = await syncLedgerPaidFlagsForEntries(supabase, ledgerEntries);
+    if (fromReport.error) {
+      setSyncing(false);
+      setSyncMessage(`Sync failed: ${fromReport.error}`);
       return;
     }
+    // Then walk the full ledger table (paginated) in case anything was not loaded.
+    const fromDb = await syncAllLedgerPaidFlags(supabase);
+    setSyncing(false);
+    if (fromDb.error) {
+      setSyncMessage(`Sync failed: ${fromDb.error}`);
+      return;
+    }
+    const updated = fromReport.updated + fromDb.updated;
+    const mismatched = Math.max(fromReport.mismatched, fromDb.mismatched);
     setSyncMessage(
       updated === 0
-        ? "All paid flags already match balance."
+        ? mismatched === 0
+          ? "All paid flags already match balance."
+          : "Found mismatches but could not update any rows (check permissions)."
         : `Updated paid flag on ${updated} line${updated === 1 ? "" : "s"}.`
     );
     await loadData();

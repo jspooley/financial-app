@@ -231,40 +231,138 @@ export function ledgerFormToDb(values: {
   };
 }
 
-type LedgerPaidSyncClient = {
+type LedgerFetchClient = {
   from: (table: string) => {
-    select: (columns: string) => PromiseLike<{
-      data: Array<Record<string, unknown>> | null;
-      error: { message: string } | null;
-    }>;
-    update: (payload: { paid: boolean }) => {
-      eq: (
+    select: (columns: string) => {
+      order: (
         column: string,
-        value: string
-      ) => PromiseLike<{ error: { message: string } | null }>;
+        options?: { ascending?: boolean }
+      ) => {
+        range: (
+          from: number,
+          to: number
+        ) => PromiseLike<{
+          data: Array<Record<string, unknown>> | null;
+          error: { message: string } | null;
+        }>;
+      };
     };
   };
 };
 
+type LedgerPaidSyncClient = {
+  from: (table: string) => {
+    select: (columns: string) => {
+      order: (
+        column: string,
+        options?: { ascending?: boolean }
+      ) => {
+        range: (
+          from: number,
+          to: number
+        ) => PromiseLike<{
+          data: Array<Record<string, unknown>> | null;
+          error: { message: string } | null;
+        }>;
+      };
+    };
+    update: (payload: { paid: boolean }) => {
+      eq: (
+        column: string,
+        value: string
+      ) => {
+        select: (columns: string) => PromiseLike<{
+          data: Array<Record<string, unknown>> | null;
+          error: { message: string } | null;
+        }>;
+      };
+    };
+  };
+};
+
+const LEDGER_PAGE_SIZE = 1000;
+
+/** Fetch every ledger row (Supabase caps each request at ~1000 without pagination). */
+export async function fetchAllLedgerRows(
+  supabase: LedgerFetchClient,
+  columns = "*"
+): Promise<{ data: Array<Record<string, unknown>>; error: string | null }> {
+  const all: Array<Record<string, unknown>> = [];
+  let from = 0;
+
+  for (;;) {
+    const to = from + LEDGER_PAGE_SIZE - 1;
+    const { data, error } = await supabase
+      .from("ledger")
+      .select(columns)
+      .order("id", { ascending: true })
+      .range(from, to);
+    if (error) return { data: all, error: error.message };
+
+    const rows = data ?? [];
+    all.push(...rows);
+    if (rows.length < LEDGER_PAGE_SIZE) break;
+    from += LEDGER_PAGE_SIZE;
+  }
+
+  return { data: all, error: null };
+}
+
+async function persistLedgerPaidFlag(
+  supabase: LedgerPaidSyncClient,
+  id: string,
+  paid: boolean
+): Promise<{ ok: boolean; error: string | null }> {
+  const { data, error } = await supabase
+    .from("ledger")
+    .update({ paid })
+    .eq("id", id)
+    .select("id");
+  if (error) return { ok: false, error: error.message };
+  if (!data?.length) {
+    return {
+      ok: false,
+      error:
+        "Could not update paid flags (no rows changed). Check that you are signed in and allowed to edit ledger.",
+    };
+  }
+  return { ok: true, error: null };
+}
+
+/**
+ * Persist paid flags from balance math for the given ledger entries
+ * (typically the same rows the reconciliation report is showing).
+ */
+export async function syncLedgerPaidFlagsForEntries(
+  supabase: LedgerPaidSyncClient,
+  entries: Iterable<
+    Pick<LedgerEntry, "id" | "credit_debit" | "paid"> &
+      Parameters<typeof deriveLedgerPaidFlag>[0]
+  >
+): Promise<{ updated: number; mismatched: number; error: string | null }> {
+  let updated = 0;
+  let mismatched = 0;
+
+  for (const entry of entries) {
+    if (entry.credit_debit !== "debit") continue;
+    const paid = deriveLedgerPaidFlag(entry);
+    if (paid === Boolean(entry.paid)) continue;
+    mismatched += 1;
+    const result = await persistLedgerPaidFlag(supabase, entry.id, paid);
+    if (!result.ok) return { updated, mismatched, error: result.error };
+    updated += 1;
+  }
+
+  return { updated, mismatched, error: null };
+}
+
 /** Recompute and persist paid flags from balance math for all debit lines. */
 export async function syncAllLedgerPaidFlags(
   supabase: LedgerPaidSyncClient
-): Promise<{ updated: number; error: string | null }> {
-  const { data, error } = await supabase.from("ledger").select("*");
-  if (error) return { updated: 0, error: error.message };
+): Promise<{ updated: number; mismatched: number; error: string | null }> {
+  const { data, error } = await fetchAllLedgerRows(supabase, "*");
+  if (error) return { updated: 0, mismatched: 0, error };
 
-  let updated = 0;
-  for (const row of data ?? []) {
-    const entry = normalizeLedgerRow(row);
-    if (entry.credit_debit !== "debit") continue;
-    const paid = deriveLedgerPaidFlag(entry);
-    if (paid === entry.paid) continue;
-    const { error: updateError } = await supabase
-      .from("ledger")
-      .update({ paid })
-      .eq("id", entry.id);
-    if (updateError) return { updated, error: updateError.message };
-    updated += 1;
-  }
-  return { updated, error: null };
+  const entries = data.map((row) => normalizeLedgerRow(row));
+  return syncLedgerPaidFlagsForEntries(supabase, entries);
 }

@@ -612,26 +612,26 @@ export function LedgerForm({
       ),
     };
 
-    const updatePayload = initial
-      ? {
-          ...payload,
-          paid: deriveLedgerPaidFlag({
-            ...initial,
-            ...payload,
-            variance_accepted: initial.variance_accepted,
-            variance_amount: initial.variance_amount,
-          }),
-        }
-      : payload;
+    const paid = deriveLedgerPaidFlag({
+      ...(initial ?? {}),
+      ...payload,
+      variance_accepted: initial?.variance_accepted,
+      variance_amount: initial?.variance_amount,
+      payment_amount: initial?.payment_amount ?? 0,
+      payment_fee: initial?.payment_fee ?? 0,
+      expense: initial?.expense,
+      expense_amount: initial?.expense_amount,
+    });
+    const savePayload = { ...payload, paid };
 
     const { data, error: dbError } = initial
       ? await supabase
           .from("ledger")
-          .update(updatePayload)
+          .update(savePayload)
           .eq("id", initial.id)
           .select("id, po_number")
           .single()
-      : await supabase.from("ledger").insert(payload).select("id, po_number").single();
+      : await supabase.from("ledger").insert(savePayload).select("id, po_number").single();
 
     if (dbError) {
       setSaving(false);

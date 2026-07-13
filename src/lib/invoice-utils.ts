@@ -185,21 +185,21 @@ export function getLedgerShortfallBeforeAcceptance(entry: LedgerAmountEntry) {
   return variance < 0 ? roundMoney(-variance) : 0;
 }
 
-/** Paid only when outstanding balance is exactly zero. */
+/** Paid when nothing is still owed (balance settled or overpaid). */
 export function isLedgerLineFullyPaid(entry: LedgerAmountEntry) {
-  return getLedgerOutstandingBalance(entry) === 0;
+  return getLedgerUnderpaymentAmount(entry) < 0.005;
 }
 
 /** DB paid flag derived from balance math (set on Payments save and ledger edits). */
 export function deriveLedgerPaidFlag(entry: {
   credit_debit?: string | null;
-  retail_price?: number;
-  quantity?: number;
-  discount_percent?: number;
+  retail_price?: number | null;
+  quantity?: number | null;
+  discount_percent?: number | null;
   customer_price?: number | null;
   tax_amount?: number | null;
   shipping_receiving_amount?: number | null;
-  wholesale_retail?: "wholesale" | "retail" | "service";
+  wholesale_retail?: string | null;
   designer_cost?: number | null;
   payment_fee?: number | null;
   payment_amount?: number | null;
@@ -207,16 +207,22 @@ export function deriveLedgerPaidFlag(entry: {
   expense_amount?: number | null;
   variance_accepted?: boolean | null;
   variance_amount?: number | null;
+  balance_sheet?: boolean | null;
 }): boolean {
   if (entry.credit_debit !== "debit") return false;
+  const wholesaleRetail =
+    entry.wholesale_retail === "wholesale" ||
+    entry.wholesale_retail === "service"
+      ? entry.wholesale_retail
+      : "retail";
   return isLedgerLineFullyPaid({
     retail_price: Number(entry.retail_price ?? 0),
     quantity: Number(entry.quantity ?? 1),
-    discount_percent: entry.discount_percent ?? 0,
+    discount_percent: Number(entry.discount_percent ?? 0),
     customer_price: entry.customer_price,
-    tax_amount: entry.tax_amount ?? 0,
-    shipping_receiving_amount: entry.shipping_receiving_amount ?? 0,
-    wholesale_retail: entry.wholesale_retail ?? "retail",
+    tax_amount: Number(entry.tax_amount ?? 0),
+    shipping_receiving_amount: Number(entry.shipping_receiving_amount ?? 0),
+    wholesale_retail: wholesaleRetail,
     designer_cost: Number(entry.designer_cost ?? 0),
     payment_fee: Number(entry.payment_fee ?? 0),
     payment_amount: Number(entry.payment_amount ?? 0),
@@ -224,6 +230,7 @@ export function deriveLedgerPaidFlag(entry: {
     expense_amount: entry.expense_amount,
     variance_accepted: entry.variance_accepted,
     variance_amount: entry.variance_amount,
+    balance_sheet: entry.balance_sheet,
   });
 }
 
