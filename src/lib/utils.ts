@@ -138,17 +138,18 @@ export function getLedgerCustomerPrice(entry: {
 export function getLedgerInvoicedAmount(entry: {
   retail_price: number;
   quantity: number;
-  discount_percent: number;
+  discount_percent?: number;
   customer_price?: number | null;
-  tax_amount: number;
-  shipping_receiving_amount: number;
-  wholesale_retail: "wholesale" | "retail" | "service";
+  tax_amount?: number;
+  shipping_receiving_amount?: number;
+  wholesale_retail?: "wholesale" | "retail" | "service";
   payment_fee?: number;
   balance_sheet?: boolean | null;
   designer_cost?: number;
 }) {
+  const wholesaleRetail = entry.wholesale_retail ?? "retail";
   const tax =
-    entry.wholesale_retail === "wholesale" ? Number(entry.tax_amount) || 0 : 0;
+    wholesaleRetail === "wholesale" ? Number(entry.tax_amount) || 0 : 0;
 
   if (entry.balance_sheet) {
     return roundMoney(tax);
@@ -157,7 +158,17 @@ export function getLedgerInvoicedAmount(entry: {
   const shipping = Number(entry.shipping_receiving_amount) || 0;
   const fee = Number(entry.payment_fee ?? 0);
   return roundMoney(
-    getLedgerCustomerPrice(entry) + tax + shipping + fee
+    getLedgerCustomerPrice({
+      retail_price: entry.retail_price,
+      quantity: entry.quantity,
+      discount_percent: entry.discount_percent ?? 0,
+      customer_price: entry.customer_price,
+      wholesale_retail: wholesaleRetail,
+      designer_cost: entry.designer_cost,
+    }) +
+      tax +
+      shipping +
+      fee
   );
 }
 
