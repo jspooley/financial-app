@@ -13,13 +13,19 @@ import {
   currentMonthKey,
   formatCurrency,
   formatDate,
+  getLedgerCustomerPrice,
   groupTaxDueByMonth,
   isSalesUseTaxPaid,
   salesUseTaxStatementType,
 } from "@/lib/utils";
 
-type TaxView = "unpaid" | "paid";
+type TaxView = "unpaid" | "paid" | "both";
 type StatementFilter = "" | "Bal Sheet - Personal" | "Income Statement";
+
+function taxViewFromSearchParam(value: string | null): TaxView {
+  if (value === "paid" || value === "both") return value;
+  return "unpaid";
+}
 
 type TaxRowDraft = {
   editing: boolean;
@@ -58,9 +64,10 @@ export default function SalesUseTaxPaymentsPage() {
 
 function SalesUseTaxPaymentsPageContent() {
   const searchParams = useSearchParams();
-  const initialView = searchParams.get("view") === "paid" ? "paid" : "unpaid";
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
-  const [view, setView] = useState<TaxView>(initialView);
+  const [view, setView] = useState<TaxView>(() =>
+    taxViewFromSearchParam(searchParams.get("view"))
+  );
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -170,8 +177,10 @@ function SalesUseTaxPaymentsPageContent() {
   );
 
   const filteredEntries = useMemo(() => {
-    return view === "unpaid" ? filteredUnpaidEntries : filteredPaidEntries;
-  }, [view, filteredUnpaidEntries, filteredPaidEntries]);
+    if (view === "unpaid") return filteredUnpaidEntries;
+    if (view === "paid") return filteredPaidEntries;
+    return dimensionFilteredEntries;
+  }, [view, filteredUnpaidEntries, filteredPaidEntries, dimensionFilteredEntries]);
 
   const unpaidByStatement = useMemo(() => {
     let incomeStatement = 0;
@@ -245,6 +254,24 @@ function SalesUseTaxPaymentsPageContent() {
     () =>
       editingEntries.reduce((sum, entry) => sum + Number(entry.tax_amount), 0),
     [editingEntries]
+  );
+
+  const filteredCustomerPriceTotal = useMemo(
+    () =>
+      filteredEntries.reduce(
+        (sum, entry) => sum + getLedgerCustomerPrice(entry),
+        0
+      ),
+    [filteredEntries]
+  );
+
+  const filteredTaxTotal = useMemo(
+    () =>
+      filteredEntries.reduce(
+        (sum, entry) => sum + Number(entry.tax_amount),
+        0
+      ),
+    [filteredEntries]
   );
 
   function updateDraft(entryId: string, patch: Partial<TaxRowDraft>) {
@@ -488,6 +515,17 @@ function SalesUseTaxPaymentsPageContent() {
           >
             Paid ({filteredPaidEntries.length})
           </button>
+          <button
+            type="button"
+            onClick={() => setView("both")}
+            className={`rounded-md px-4 py-2 text-sm font-medium transition ${
+              view === "both"
+                ? "bg-brand-600 text-white"
+                : "text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            Both ({dimensionFilteredEntries.length})
+          </button>
         </div>
       </div>
 
@@ -497,7 +535,9 @@ function SalesUseTaxPaymentsPageContent() {
         <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
           {view === "unpaid"
             ? "No unpaid sales and use tax match these filters."
-            : "No paid tax entries match these filters."}
+            : view === "paid"
+              ? "No paid tax entries match these filters."
+              : "No sales and use tax entries match these filters."}
         </div>
       ) : (
         <>
@@ -545,6 +585,10 @@ function SalesUseTaxPaymentsPageContent() {
                         {formatDate(entry.entry_date)} · {entry.po_number ?? "—"}
                       </p>
                       <p className="mt-1 text-slate-700">{entry.description?.trim() || "—"}</p>
+                      <p className="mt-1 text-slate-700">
+                        Customer price × qty:{" "}
+                        {formatCurrency(getLedgerCustomerPrice(entry))}
+                      </p>
                       <p className="mt-1 font-medium text-brand-800">
                         Tax: {formatCurrency(Number(entry.tax_amount))}
                       </p>
@@ -588,6 +632,7 @@ function SalesUseTaxPaymentsPageContent() {
                   <th className="px-3 py-3">Description</th>
                   <th className="px-3 py-3">PO</th>
                   <th className="px-3 py-3">Statement</th>
+                  <th className="px-3 py-3 text-right">Customer Price × Qty</th>
                   <th className="px-3 py-3 text-right">Tax</th>
                   <th className="px-3 py-3">Purchaser</th>
                   <th className="px-3 py-3">Tax Paid</th>
@@ -640,6 +685,9 @@ function SalesUseTaxPaymentsPageContent() {
                           {statementType}
                         </span>
                       </td>
+                      <td className="px-3 py-3 text-right">
+                        {formatCurrency(getLedgerCustomerPrice(entry))}
+                      </td>
                       <td className="px-3 py-3 text-right font-medium">
                         {formatCurrency(Number(entry.tax_amount))}
                       </td>
@@ -670,13 +718,31 @@ function SalesUseTaxPaymentsPageContent() {
           </div>
 
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div>
-              <p className="text-xs uppercase tracking-wide text-slate-500">
-                Editing tax total
-              </p>
-              <p className="text-xl font-semibold text-brand-800">
-                {formatCurrency(editingTaxTotal)}
-              </p>
+            <div className="flex flex-wrap gap-6">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  Customer Price × Qty
+                </p>
+                <p className="text-xl font-semibold text-slate-900">
+                  {formatCurrency(filteredCustomerPriceTotal)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  Tax total
+                </p>
+                <p className="text-xl font-semibold text-slate-900">
+                  {formatCurrency(filteredTaxTotal)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  Editing tax total
+                </p>
+                <p className="text-xl font-semibold text-brand-800">
+                  {formatCurrency(editingTaxTotal)}
+                </p>
+              </div>
             </div>
             <Button type="button" loading={saving} onClick={submitUpdates}>
               Save
