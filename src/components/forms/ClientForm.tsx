@@ -16,7 +16,9 @@ import { normalizePoNumber } from "@/lib/invoice-utils";
 import type { Client } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { CheckboxField, editableControlClass, InputField } from "@/components/ui/FormFields";
-import { roundMoney } from "@/lib/utils";
+import { normalizeSandUTaxRate, roundMoney, sandUTaxRateToPercentInput } from "@/lib/utils";
+
+const VA_SALES_TAX_LOOKUP_URL = "https://www.sales-taxes.com/va#google_vignette";
 
 const schema = z.object({
   name: z.string().min(1, "Client name is required"),
@@ -24,10 +26,28 @@ const schema = z.object({
   address: z.string().optional(),
   phone: z.string().optional(),
   email: z.string().email("Invalid email").optional().or(z.literal("")),
+  city_or_county: z.string().optional(),
+  sand_u_tax: z.preprocess(
+    (val) => {
+      if (val === "" || val === null || val === undefined) return undefined;
+      const n = typeof val === "number" ? val : Number(val);
+      return Number.isFinite(n) ? n : undefined;
+    },
+    z
+      .number({
+        required_error: "S&U Tax is required",
+        invalid_type_error: "Enter a valid S&U Tax percent",
+      })
+      .min(0, "S&U Tax must be 0 or greater")
+      .refine((value) => Number.isFinite(normalizeSandUTaxRate(value)), {
+        message: "Enter a valid S&U Tax percent",
+      })
+  ),
   personal_use: z.boolean(),
 });
 
-type FormValues = z.infer<typeof schema>;
+type FormInput = z.input<typeof schema>;
+type FormValues = z.output<typeof schema>;
 
 type PoBudgetRow = {
   id: string;
@@ -64,7 +84,7 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
     control,
     setValue,
     formState: { errors, isSubmitting },
-  } = useForm<FormValues>({
+  } = useForm<FormInput, unknown, FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
       name: initial?.name ?? "",
@@ -72,6 +92,11 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
       address: initial?.address ?? "",
       phone: initial?.phone ?? "",
       email: initial?.email ?? "",
+      city_or_county: initial?.city_or_county ?? "",
+      sand_u_tax:
+        initial != null
+          ? sandUTaxRateToPercentInput(Number(initial.sand_u_tax ?? 0))
+          : ("" as unknown as number),
       personal_use: initial?.personal_use ?? false,
     },
   });
@@ -273,6 +298,8 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
       address: values.address || null,
       phone: values.phone || null,
       email: values.email || null,
+      city_or_county: values.city_or_county?.trim() || null,
+      sand_u_tax: normalizeSandUTaxRate(values.sand_u_tax),
       personal_use: values.personal_use,
     };
 
@@ -531,6 +558,35 @@ export function ClientForm({ initial, onSuccess, onCancel }: ClientFormProps) {
         )}
         <InputField label="Phone" {...register("phone")} />
         <InputField label="Email" error={errors.email?.message} {...register("email")} />
+        <InputField
+          label="City or County"
+          hint="Used to look up the local Virginia sales tax rate."
+          error={errors.city_or_county?.message}
+          {...register("city_or_county")}
+        />
+        <div className="space-y-1.5">
+          <InputField
+            label="S&U Tax (%)"
+            type="number"
+            step="0.0001"
+            min="0"
+            required
+            hint="Enter as a percent. Prefer 6 for 6%. Entering 0.06 also works — both save as 6%."
+            error={errors.sand_u_tax?.message}
+            {...register("sand_u_tax")}
+          />
+          <p className="text-xs text-slate-600">
+            <a
+              href={VA_SALES_TAX_LOOKUP_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-brand-700 underline hover:text-brand-800"
+            >
+              https://www.sales-taxes.com/va#google_vignette
+            </a>
+            <span className="ml-1">— look up tax here</span>
+          </p>
+        </div>
         <InputField label="Address" className="sm:col-span-2" {...register("address")} />
         <CheckboxField
           label="Personal Use"

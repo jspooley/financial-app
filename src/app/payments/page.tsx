@@ -39,6 +39,14 @@ import {
   toDateInputValue,
   todayDateInputValue,
 } from "@/lib/utils";
+import {
+  buildPaymentCompanionPayload,
+  designerCostDebitAmount,
+  isInvoiceGoodsLine,
+  mergePaymentCompanionsOntoEntries,
+  COA_COGS_CATEGORY,
+} from "@/lib/payment-companions";
+import { syncCostCompanions } from "@/lib/cost-companions";
 
 type PaymentView = "outstanding" | "history";
 
@@ -144,7 +152,11 @@ function varianceAmountForDisplay(entry: LedgerEntry, draft: PaymentRowDraft) {
 }
 
 function clientLabel(entry: LedgerEntry, clientNames: Map<string, string>) {
-  return entry.clients?.name ?? clientNames.get(entry.client_id) ?? "Unknown client";
+  return (
+    entry.clients?.name ??
+    (entry.client_id ? clientNames.get(entry.client_id) : undefined) ??
+    "Unknown client"
+  );
 }
 
 function entryMatchesPaymentFilters(
@@ -286,6 +298,7 @@ export default function PaymentsPage() {
           .from("ledger")
           .select("*, clients(name)")
           .or("invoiced.eq.true,invoice_id.not.is.null")
+          .is("source_ledger_id", null)
           .order("entry_date", { ascending: false }),
         supabase.from("clients").select("id, name").order("name", { ascending: true }),
         supabase.from("invoicing").select("id, client_id, invoice_id"),
@@ -311,8 +324,38 @@ export default function PaymentsPage() {
       return;
     }
 
-    const allInvoiced = (data ?? []).map((row) =>
-      normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
+    const invoiceLines = (data ?? [])
+      .map((row) =>
+        normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
+      )
+      .filter(isInvoiceGoodsLine);
+
+    const invoiceLineIds = invoiceLines.map((entry) => entry.id);
+    let companions: LedgerEntry[] = [];
+    if (invoiceLineIds.length > 0) {
+      const { data: companionData, error: companionError } = await supabase
+        .from("ledger")
+        .select("*, clients(name)")
+        .in("source_ledger_id", invoiceLineIds);
+      if (companionError) {
+        const setup = parsePaymentsDbSetupError(companionError.message);
+        if (setup.needsDbSetup) setNeedsDbSetup(true);
+        setError(
+          companionError.message.includes("source_ledger_id")
+            ? "Payment companion column missing. Run migration 056_ledger_payment_companions.sql in Supabase."
+            : companionError.message
+        );
+        setLoading(false);
+        return;
+      }
+      companions = (companionData ?? []).map((row) =>
+        normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
+      );
+    }
+
+    const allInvoiced = mergePaymentCompanionsOntoEntries(
+      invoiceLines,
+      companions
     );
     const allInvoicedDebits = allInvoiced.filter(
       (entry) =>
@@ -800,11 +843,37 @@ export default function PaymentsPage() {
     const supabase = createClient();
 
     for (const entry of editingEntries) {
+      const companionId = entry.payment_companion_id;
+      if (companionId) {
+        const { error: deleteError } = await supabase
+          .from("ledger")
+          .delete()
+          .eq("id", companionId);
+        if (deleteError) {
+          setSaving(false);
+          setError(deleteError.message);
+          return;
+        }
+      } else {
+        const { error: companionClearError } = await supabase
+          .from("ledger")
+          .delete()
+          .eq("source_ledger_id", entry.id)
+          .eq("companion_kind", "payment");
+        if (companionClearError) {
+          setSaving(false);
+          setError(companionClearError.message);
+          return;
+        }
+      }
+
       const { error: updateError } = await supabase
         .from("ledger")
         .update({
           paid: false,
           date_paid: null,
+          paid_to: null,
+          payment_type: null,
           payment_amount: 0,
           payment_fee: 0,
           expense: false,
@@ -871,19 +940,19 @@ export default function PaymentsPage() {
         .from("ledger")
         .update({
           paid: fullyPaid,
-          date_paid:
-            paymentAmount > 0 || acceptVariance
-              ? draft.date_paid || null
-              : null,
-          paid_to: draft.paid_to,
-          payment_type: draft.payment_type,
-          payment_amount: paymentAmount,
-          payment_fee: projected.payment_fee,
+          // Payment cash lives on the Sales Income companion row.
+          date_paid: null,
+          paid_to: null,
+          payment_type: null,
+          payment_amount: 0,
+          payment_fee: 0,
           expense: false,
           expense_amount: 0,
           variance_accepted: acceptVariance,
           variance_amount: acceptVariance ? varianceBefore : 0,
           variance_notes: varianceNotes,
+          coa_category: COA_COGS_CATEGORY,
+          debit_amount: designerCostDebitAmount(entry),
         })
         .eq("id", entry.id);
 
@@ -894,6 +963,97 @@ export default function PaymentsPage() {
         if (setup.needsExpenseSetup) setNeedsExpenseSetup(true);
         if (setup.needsVarianceSetup) setneedsVarianceSetup(true);
         setError(updateError.message);
+        return false;
+      }
+
+      // Personal-use tax is funded by a manual 300 Owner's Contribution on
+      // Cashflow — do not auto-create a Sales Income payment companion.
+      if (entry.balance_sheet) {
+        const { error: companionClearError } = await supabase
+          .from("ledger")
+          .delete()
+          .eq("source_ledger_id", entry.id)
+          .eq("companion_kind", "payment");
+        if (companionClearError) {
+          setSaving(false);
+          setError(companionClearError.message);
+          return false;
+        }
+      } else {
+        const companionPayload = buildPaymentCompanionPayload(entry, {
+          date_paid: draft.date_paid || null,
+          paid_to: draft.paid_to,
+          payment_type: draft.payment_type,
+          payment_amount: paymentAmount,
+          payment_fee: projected.payment_fee,
+        });
+
+        if (paymentAmount > 0 || acceptVariance) {
+          if (entry.payment_companion_id) {
+            const { error: companionError } = await supabase
+              .from("ledger")
+              .update(companionPayload)
+              .eq("id", entry.payment_companion_id);
+            if (companionError) {
+              setSaving(false);
+              setError(companionError.message);
+              return false;
+            }
+          } else {
+            const { data: existingCompanion } = await supabase
+              .from("ledger")
+              .select("id")
+              .eq("source_ledger_id", entry.id)
+              .eq("companion_kind", "payment")
+              .maybeSingle();
+            if (existingCompanion?.id) {
+              const { error: companionError } = await supabase
+                .from("ledger")
+                .update(companionPayload)
+                .eq("id", existingCompanion.id);
+              if (companionError) {
+                setSaving(false);
+                setError(companionError.message);
+                return false;
+              }
+            } else if (paymentAmount > 0) {
+              const { error: companionError } = await supabase
+                .from("ledger")
+                .insert(companionPayload);
+              if (companionError) {
+                setSaving(false);
+                setError(companionError.message);
+                return false;
+              }
+            }
+          }
+        } else if (entry.payment_companion_id) {
+          const { error: companionError } = await supabase
+            .from("ledger")
+            .delete()
+            .eq("id", entry.payment_companion_id);
+          if (companionError) {
+            setSaving(false);
+            setError(companionError.message);
+            return false;
+          }
+        } else {
+          await supabase
+            .from("ledger")
+            .delete()
+            .eq("source_ledger_id", entry.id)
+            .eq("companion_kind", "payment");
+        }
+      }
+
+      const feeSyncError = await syncCostCompanions(supabase, entry, {
+        paymentFee:
+          entry.balance_sheet || paymentAmount <= 0 ? 0 : projected.payment_fee,
+        entryDateByKind: { fee: draft.date_paid || null },
+      });
+      if (feeSyncError) {
+        setSaving(false);
+        setError(feeSyncError);
         return false;
       }
     }
@@ -1200,8 +1360,7 @@ export default function PaymentsPage() {
           {filteredEntries.map((entry) => {
             const draft = drafts[entry.id];
             if (!draft) return null;
-            const clientName =
-              entry.clients?.name ?? clientNames.get(entry.client_id) ?? "—";
+            const clientName = clientLabel(entry, clientNames);
 
             return (
               <article
@@ -1404,7 +1563,7 @@ export default function PaymentsPage() {
                       </div>
                     </td>
                     <td className="px-3 py-3">
-                      {entry.clients?.name ?? clientNames.get(entry.client_id) ?? "—"}
+                      {clientLabel(entry, clientNames)}
                     </td>
                     <td className="px-3 py-3">{formatDate(entry.entry_date)}</td>
                     <td className="px-3 py-3">{entry.invoice_id ?? "—"}</td>
@@ -1754,7 +1913,7 @@ export default function PaymentsPage() {
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="font-medium text-slate-900">
-                          {entry.clients?.name ?? clientNames.get(entry.client_id) ?? "—"}
+                          {clientLabel(entry, clientNames)}
                         </p>
                         <p className="text-slate-500">
                           {formatDate(entry.date_paid)} · {entry.invoice_id ?? "—"}
@@ -1928,7 +2087,7 @@ export default function PaymentsPage() {
                           </div>
                         </td>
                         <td className="px-3 py-3">
-                          {entry.clients?.name ?? clientNames.get(entry.client_id) ?? "—"}
+                          {clientLabel(entry, clientNames)}
                         </td>
                         <td className="px-3 py-3">
                           {draft.editing ? (

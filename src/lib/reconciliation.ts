@@ -158,7 +158,11 @@ function clientNameFor(
   entry: LedgerEntry,
   clientNames: Map<string, string>
 ) {
-  return entry.clients?.name ?? clientNames.get(entry.client_id) ?? "Unknown client";
+  return (
+    entry.clients?.name ??
+    (entry.client_id ? clientNames.get(entry.client_id) : undefined) ??
+    "Unknown client"
+  );
 }
 
 function acceptedVarianceUnderpayment(entry: LedgerEntry): number {
@@ -519,7 +523,17 @@ export function buildReconciliationReport(
     paymentsVsRevenueGapLines.reduce((sum, row) => sum + row.difference, 0)
   );
 
-  const invoicedPaymentFeesTotal = roundMoney(invoiceHistoryTotal - revenueTotal);
+  // Summed directly rather than as (invoiced − revenue): revenue now also excludes
+  // S&U tax collected for the state, which is not a payment fee.
+  const invoicedPaymentFeesTotal = roundMoney(
+    ytdEntries
+      .filter(
+        (entry) =>
+          !entry.balance_sheet &&
+          isLedgerLineInvoicedForRevenue(entry, invoicedPoKeys)
+      )
+      .reduce((sum, entry) => sum + paymentFeeAmount(entry), 0)
+  );
 
   const summary: ReconciliationSummary = {
     invoiceHistoryTotal,

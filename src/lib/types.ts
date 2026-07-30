@@ -11,6 +11,46 @@ export const PAYMENT_TYPE_OPTIONS: PaymentType[] = [
   "Other",
 ];
 
+export const CASHFLOW_DEPARTMENTS = [
+  "Interior Design",
+  "Internal",
+  "Paint",
+] as const;
+
+export type CashflowDepartment = (typeof CASHFLOW_DEPARTMENTS)[number];
+
+export const CASHFLOW_EXPENSE_TYPES = [
+  "admin",
+  "travel",
+  "meals",
+  "advertising",
+  "office expense",
+  "supplies",
+  "tax & License",
+  "fees",
+  "subscriptions",
+  "COGS",
+  "Issuing Debt",
+  "Repaying Debt",
+  "Accounts Receivable",
+] as const;
+
+export type CashflowExpenseType = (typeof CASHFLOW_EXPENSE_TYPES)[number];
+
+export const CASHFLOW_ACCOUNTS = [
+  "Checking - Jess",
+  "Checking - Molly",
+  "Credit Card - Jess",
+  "Credit Card - Molly",
+] as const;
+
+export type CashflowAccount = (typeof CASHFLOW_ACCOUNTS)[number];
+
+/** Companion rows split off a parent ledger line so each cost carries its own CoA. */
+export const COMPANION_KINDS = ["payment", "tax", "shipping", "fee"] as const;
+
+export type CompanionKind = (typeof COMPANION_KINDS)[number];
+
 /** Columns sent to Supabase ledger table (matches your live database). */
 export type LedgerInsert = {
   entry_date: string;
@@ -24,9 +64,17 @@ export type LedgerInsert = {
   shipping_receiving_amount: number;
   retail_price: number;
   tax_amount: number;
-  client_id: string;
-  po_number: string;
+  client_id: string | null;
+  po_number: string | null;
   purchaser: Purchaser;
+  department?: CashflowDepartment | null;
+  expense_type?: CashflowExpenseType | null;
+  account?: CashflowAccount | null;
+  coa_category?: string | null;
+  source_ledger_id?: string | null;
+  companion_kind?: CompanionKind | null;
+  debit_amount?: number | null;
+  credit_amount?: number | null;
   invoiced?: boolean;
   invoice_id?: string | null;
   paid?: boolean;
@@ -99,6 +147,8 @@ export interface Client {
   phone: string | null;
   email: string | null;
   budget: number;
+  sand_u_tax: number;
+  city_or_county: string | null;
   personal_use?: boolean;
   created_at: string;
   updated_at: string;
@@ -168,6 +218,27 @@ export function isAppointmentsBucket(
 export const TRADE_ACCOUNT_OWNERS = ["Molly", "Jess"] as const;
 
 export type TradeAccountOwner = (typeof TRADE_ACCOUNT_OWNERS)[number];
+
+export interface CashflowEntry {
+  id: string;
+  entry_date: string;
+  department: CashflowDepartment;
+  expense_type: CashflowExpenseType;
+  description: string | null;
+  debit_amount: number;
+  credit_amount: number;
+  account: CashflowAccount;
+  designer: Purchaser;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChartOfAccount {
+  id: string;
+  category: string;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface TradePartner {
   id: string;
@@ -246,9 +317,19 @@ export interface LedgerEntry {
   invoiced: boolean;
   invoice_id: string | null;
   sales_and_use_tax_paid: boolean;
-  client_id: string;
+  client_id: string | null;
   po_number: string | null;
   purchaser: Purchaser;
+  department: CashflowDepartment;
+  expense_type: CashflowExpenseType | null;
+  account: CashflowAccount | null;
+  coa_category: string | null;
+  source_ledger_id: string | null;
+  companion_kind: CompanionKind | null;
+  /** Present when Payments UI merged a Sales Income companion onto this invoice line. */
+  payment_companion_id?: string | null;
+  debit_amount: number;
+  credit_amount: number;
   paid: boolean;
   date_paid: string | null;
   paid_to: Purchaser | null;
@@ -293,6 +374,24 @@ export interface Database {
           id?: string;
         };
         Update: Partial<Database["public"]["Tables"]["trade_partners"]["Insert"]>;
+        Relationships: [];
+      };
+      cashflow: {
+        Row: CashflowEntry;
+        Insert: Omit<CashflowEntry, "id" | "created_at" | "updated_at"> & {
+          id?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["cashflow"]["Insert"]>;
+        Relationships: [];
+      };
+      chart_of_accounts: {
+        Row: ChartOfAccount;
+        Insert: Omit<ChartOfAccount, "id" | "created_at" | "updated_at"> & {
+          id?: string;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["chart_of_accounts"]["Insert"]
+        >;
         Relationships: [];
       };
       budget_items: {

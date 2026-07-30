@@ -182,7 +182,7 @@ export function mergePoNumberOptions(
 }
 
 export function poNumbersFromLedgerEntries(
-  entries: Array<{ client_id?: string; po_number?: string | null }>,
+  entries: Array<{ client_id?: string | null; po_number?: string | null }>,
   clientId: string | null | undefined
 ): Array<string | null | undefined> {
   if (!clientId) return [];

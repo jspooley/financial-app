@@ -1,6 +1,9 @@
 import type { LedgerEntry } from "./types";
 import { getLedgerVarianceBeforeAcceptance } from "./invoice-utils";
+import { isCostCompanionRow } from "./cost-companions";
+import { isOperatingExpenseCoa, isOperatingExpenseEntry } from "./coa";
 import {
+  isLedgerLineInvoicedForRevenue,
   ledgerLineCogs,
   ledgerLineRevenue,
   roundMoney,
@@ -32,6 +35,12 @@ type LedgerPlEntry = Pick<
   | "variance_notes"
   | "description"
   | "balance_sheet"
+  | "companion_kind"
+  | "debit_amount"
+  | "credit_amount"
+  | "coa_category"
+  | "expense_type"
+  | "source_ledger_id"
 > & {
   clients?: { name: string } | null;
 };
@@ -65,6 +74,21 @@ function entriesForPlTotals(entries: LedgerPlEntry[]): LedgerPlEntry[] {
   return entries.filter((entry) => !isPlBalanceSheetEntry(entry));
 }
 
+/**
+ * S&U tax billed to the client on an invoiced wholesale line. It is collected on
+ * behalf of the state, so it is a liability rather than revenue — the invoiced
+ * total still includes it, but P&L revenue must not.
+ */
+export function salesUseTaxCollected(
+  entry: LedgerPlEntry,
+  invoicedPoKeys?: Set<string>
+): number {
+  if (isPlBalanceSheetEntry(entry)) return 0;
+  if ((entry.wholesale_retail ?? "retail") !== "wholesale") return 0;
+  if (!isLedgerLineInvoicedForRevenue(entry, invoicedPoKeys)) return 0;
+  return roundMoney(Number(entry.tax_amount ?? 0));
+}
+
 /** Ledger lines that contribute expense amount to P&L (excludes balance sheet). */
 export function filterPlExpenseEntries<T extends LedgerPlEntry>(entries: T[]): T[] {
   return entries.filter(
@@ -79,14 +103,29 @@ export function filterPlVarianceEntries<T extends LedgerPlEntry>(entries: T[]): 
   );
 }
 
-/** Expenses = expense amount + shipping, payment fees, and tax per ledger line. */
+/**
+ * Expenses come from three places:
+ *  - cost companion rows (shipping / payment fees → 203), which carry the
+ *    amount in debit_amount;
+ *  - operating rows entered on Cashflow with a 200-series CoA (including the
+ *    monthly S&U tax remittance under 214), net of any credit/refund;
+ *  - the write-off expense amount on an invoice line.
+ * The parent's shipping_receiving_amount / payment_fee are never added here —
+ * those dollars already live on the companions (migration 061).
+ */
 export function sumPlExpenseAmount(entry: LedgerPlEntry): number {
-  return roundMoney(
-    Number(entry.expense_amount ?? 0) +
-      Number(entry.shipping_receiving_amount ?? 0) +
-      Number(entry.payment_fee ?? 0) +
-      Number(entry.tax_amount ?? 0)
-  );
+  if (isCostCompanionRow(entry)) {
+    return roundMoney(Number(entry.debit_amount ?? 0));
+  }
+  if (
+    isOperatingExpenseEntry(entry) &&
+    isOperatingExpenseCoa(entry.coa_category)
+  ) {
+    return roundMoney(
+      Number(entry.debit_amount ?? 0) - Number(entry.credit_amount ?? 0)
+    );
+  }
+  return roundMoney(Number(entry.expense_amount ?? 0));
 }
 
 /** Accepted underpayment variance (magnitude) that reduces net profit. */
@@ -118,7 +157,7 @@ export function ledgerLineGrossProfit(
 ): number {
   if (isPlBalanceSheetEntry(entry)) return 0;
   return roundMoney(
-    ledgerLineRevenue(entry, invoicedPoKeys) - ledgerLineCogs(entry, invoicedPoKeys)
+    plLineRevenue(entry, invoicedPoKeys) - ledgerLineCogs(entry, invoicedPoKeys)
   );
 }
 
@@ -129,10 +168,21 @@ export function ledgerLineNetProfit(
 ): number {
   if (isPlBalanceSheetEntry(entry)) return 0;
   return roundMoney(
-    ledgerLineRevenue(entry, invoicedPoKeys) -
+    plLineRevenue(entry, invoicedPoKeys) -
       (ledgerLineCogs(entry, invoicedPoKeys) +
         sumPlExpenseAmount(entry) +
         sumPlAcceptedVariance(entry))
+  );
+}
+
+/** Line revenue net of S&U tax collected for the state. */
+export function plLineRevenue(
+  entry: LedgerPlEntry,
+  invoicedPoKeys?: Set<string>
+): number {
+  return roundMoney(
+    ledgerLineRevenue(entry, invoicedPoKeys) -
+      salesUseTaxCollected(entry, invoicedPoKeys)
   );
 }
 
@@ -154,7 +204,14 @@ export function computePlTotals(
 ): PlTotals {
   const plEntries = entriesForPlTotals(entries);
   const balances = sumLedgerCreditsAndDebits(plEntries, { invoicedPoKeys });
-  const revenue = roundMoney(balances.credits);
+  // Tax billed to clients is owed to the state, not earned — see salesUseTaxCollected.
+  const salesTaxCollected = roundMoney(
+    plEntries.reduce(
+      (sum, entry) => sum + salesUseTaxCollected(entry, invoicedPoKeys),
+      0
+    )
+  );
+  const revenue = roundMoney(balances.credits - salesTaxCollected);
   const cogs = roundMoney(balances.debits);
   const grossProfit = roundMoney(revenue - cogs);
   const expenseAmount = sumPlExpenses(plEntries);

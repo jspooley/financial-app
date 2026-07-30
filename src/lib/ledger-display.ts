@@ -45,6 +45,7 @@ export function ledgerDetailFields(
     },
     { label: "Payment Fee", value: formatCurrency(Number(entry.payment_fee ?? 0)) },
     { label: "Invoiced Amount", value: formatCurrency(getLedgerInvoicedAmount(entry)) },
+    { label: "CoA Category", value: entry.coa_category?.trim() || "—" },
     {
       label: "Outstanding Balance",
       value:
@@ -157,6 +158,7 @@ export function mapLedgerTableRow(
     shipping: formatCurrency(Number(entry.shipping_receiving_amount ?? 0)),
     paymentFee: formatCurrency(Number(entry.payment_fee ?? 0)),
     invoicedAmount: formatCurrency(getLedgerInvoicedAmount(entry)),
+    coaCategory: entry.coa_category?.trim() || "—",
     outstandingBalance:
       entry.credit_debit === "debit"
         ? formatCurrency(getLedgerOutstandingBalance(entry))
@@ -301,6 +303,7 @@ export const ledgerDebitColumns = [
   { key: "shipping", label: "Shipping" },
   { key: "paymentFee", label: "Pmt Fee", className: "w-24 max-w-24 whitespace-nowrap px-2" },
   { key: "invoicedAmount", label: "Invoiced Amount" },
+  { key: "coaCategory", label: "CoA Category" },
   { key: "outstandingBalance", label: "Outstanding Balance" },
   { key: "invoiced", label: "Invoiced" },
   { key: "invoiceId", label: "Invoice ID" },
@@ -396,6 +399,7 @@ export const ledgerDetailColumns = [
   { key: "shipping", label: "Shipping" },
   { key: "paymentFee", label: "Pmt Fee", className: "w-24 max-w-24 whitespace-nowrap px-2" },
   { key: "invoicedAmount", label: "Invoiced Amount" },
+  { key: "coaCategory", label: "CoA Category" },
   { key: "outstandingBalance", label: "Outstanding Balance" },
   { key: "invoiced", label: "Invoiced" },
   { key: "invoiceId", label: "Invoice ID" },

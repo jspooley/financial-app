@@ -8,7 +8,8 @@ import type {
   WholesaleRetail,
 } from "./types";
 import { deriveLedgerPaidFlag } from "./invoice-utils";
-import { calculateTaxFromCustomerPrice, calculateCustomerPrice, calculateRetailPriceFromMarkup, normalizeQuantity, roundMoney } from "./utils";
+import { calculateTaxFromCustomerPrice, calculateCustomerPrice, calculateRetailPriceFromMarkup, getLedgerTotalDesignerCost, normalizeQuantity, roundMoney } from "./utils";
+import { COA_COGS_CATEGORY } from "./payment-companions";
 
 export type { LedgerDbRow, LedgerInsert };
 
@@ -129,10 +130,20 @@ export function normalizeLedgerRow(
     sales_and_use_tax_paid: Boolean(
       r.sand_u_tax_paid ?? r.sales_and_use_tax_paid ?? false
     ),
-    client_id: r.client_id,
+    client_id: (r.client_id as string | null) ?? null,
     po_number: (r.po_number as string | null)?.trim() || null,
     invoice_id: ((r.invoice_id as string | null) ?? "").trim() || null,
     purchaser: r.purchaser,
+    department: (r.department as LedgerEntry["department"] | null) ?? "Interior Design",
+    expense_type: (r.expense_type as LedgerEntry["expense_type"]) ?? null,
+    account: (r.account as LedgerEntry["account"]) ?? null,
+    coa_category: ((r.coa_category as string | null) ?? "").trim() || null,
+    source_ledger_id: (r.source_ledger_id as string | null) ?? null,
+    companion_kind:
+      (r.companion_kind as LedgerEntry["companion_kind"]) ??
+      (r.source_ledger_id ? "payment" : null),
+    debit_amount: Number(r.debit_amount ?? 0),
+    credit_amount: Number(r.credit_amount ?? 0),
     paid: Boolean(r.paid ?? false),
     date_paid: (r.date_paid as string | null) ?? null,
     paid_to: (r.paid_to as Purchaser | null) ?? null,
@@ -193,23 +204,39 @@ export function ledgerFormToDb(values: {
   shipping_receiving_amount: number;
   retail_price: number;
   tax_amount: number;
-  client_id: string;
+  /** Client S&U tax rate as a decimal (e.g. 0.06). Used for wholesale tax. */
+  sand_u_tax?: number;
+  client_id: string | null;
   po_number: string;
   purchaser: Purchaser;
+  department?: "Interior Design" | "Internal" | "Paint";
+  coa_category?: string | null;
+  /** Personal use: bought with personal funds, so no business cash moves. */
+  balance_sheet?: boolean;
 }): LedgerInsert & { customer_price: number } {
   const quantity = normalizeQuantity(Number(values.quantity) || 1);
   const designerCost = Number(values.designer_cost) || 0;
   const discountPercent = Number(values.discount_percent) || 0;
   const isService = values.wholesale_retail === "service";
+  const noTradeRetail =
+    values.wholesale_retail === "retail" &&
+    !(values.trade_partner_id ?? "").trim();
   const retailPrice = isService
     ? calculateRetailPriceFromMarkup(designerCost, discountPercent)
     : Number(values.retail_price) || 0;
-  const merchandise = isService
-    ? roundMoney(retailPrice * quantity)
-    : calculateCustomerPrice(retailPrice, quantity, discountPercent);
+  const merchandise =
+    isService || noTradeRetail
+      ? roundMoney(retailPrice * quantity)
+      : calculateCustomerPrice(retailPrice, quantity, discountPercent);
+  const taxRate = Number(values.sand_u_tax ?? 0) || 0;
   const tax =
     values.wholesale_retail === "wholesale"
-      ? calculateTaxFromCustomerPrice(retailPrice, quantity, discountPercent)
+      ? calculateTaxFromCustomerPrice(
+          retailPrice,
+          quantity,
+          discountPercent,
+          taxRate
+        )
       : 0;
 
   return {
@@ -228,6 +255,22 @@ export function ledgerFormToDb(values: {
     client_id: values.client_id,
     po_number: values.po_number.trim(),
     purchaser: values.purchaser,
+    department: values.department ?? "Interior Design",
+      coa_category:
+        designerCost > 0
+          ? COA_COGS_CATEGORY
+          : (values.coa_category ?? "").trim() || null,
+      // Tax / shipping / fees live on their own companion rows (migration 061).
+      // Personal use purchases are funded personally, so the register shows no
+      // debit — only the owner contribution covering the tax owed.
+      debit_amount:
+        designerCost > 0 && !values.balance_sheet
+          ? getLedgerTotalDesignerCost({
+              designer_cost: designerCost,
+              quantity,
+            })
+          : 0,
+      credit_amount: 0,
   };
 }
 

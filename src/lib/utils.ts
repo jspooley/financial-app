@@ -23,6 +23,28 @@ export function formatPercent(value: number) {
   }).format(value / 100);
 }
 
+/**
+ * Normalize S&U tax input to a decimal rate (e.g. 0.0600).
+ * Accepts percent points (6 or 6.5) or decimal rates (0.06 or 0.065).
+ * Values greater than 1 are treated as percent points.
+ */
+export function normalizeSandUTaxRate(input: number) {
+  if (!Number.isFinite(input) || input < 0) return NaN;
+  const rate = input > 1 ? input / 100 : input;
+  return Math.round(rate * 10000) / 10000;
+}
+
+/** Convert a stored decimal tax rate to percent points for form display (0.06 → 6). */
+export function sandUTaxRateToPercentInput(rate: number) {
+  if (!Number.isFinite(rate)) return 0;
+  return Math.round(rate * 100 * 10000) / 10000;
+}
+
+/** Format a stored decimal tax rate for display (0.06 → "6.00%"). */
+export function formatSandUTaxPercent(rate: number) {
+  return `${sandUTaxRateToPercentInput(Number(rate) || 0).toFixed(2)}%`;
+}
+
 export function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
@@ -66,25 +88,29 @@ export function calculateAutoPaymentFee(
   }
 }
 
-/** Sales/use tax: customer price × qty × 0.06 (after discount). */
+/** Sales/use tax: customer price × qty × client sand_u_tax rate (after discount). */
 export function calculateTaxFromCustomerPrice(
   retailPrice: number,
   quantity: number,
-  discountPercent: number
+  discountPercent: number,
+  taxRate: number
 ) {
+  const rate = Number(taxRate) || 0;
   return roundMoney(
-    calculateCustomerPrice(retailPrice, quantity, discountPercent) * 0.06
+    calculateCustomerPrice(retailPrice, quantity, discountPercent) * rate
   );
 }
 
 /** Discounted retail subtotal: retail price × (1 − discount %) × qty.
- * Service lines: designer cost × (1 + markup %) × qty (discount_percent is markup). */
+ * Service lines: designer cost × (1 + markup %) × qty (discount_percent is markup).
+ * Retail with no trade partner: discount_percent is markup; customer pays full retail × qty. */
 export function getLedgerMerchandiseAmount(entry: {
   retail_price: number;
   quantity: number;
   discount_percent: number;
   designer_cost?: number;
   wholesale_retail?: "wholesale" | "retail" | "service";
+  trade_partner_id?: string | null;
 }) {
   const qty = normalizeQuantity(entry.quantity);
   if (entry.wholesale_retail === "service") {
@@ -94,6 +120,13 @@ export function getLedgerMerchandiseAmount(entry: {
         calculateRetailPriceFromMarkup(designer, entry.discount_percent) * qty
       );
     }
+    return roundMoney(Number(entry.retail_price) * qty);
+  }
+  // No-trade-partner retail: markup is stored in discount_percent; do not markdown.
+  if (
+    entry.wholesale_retail === "retail" &&
+    !(entry.trade_partner_id ?? "").trim()
+  ) {
     return roundMoney(Number(entry.retail_price) * qty);
   }
   const retailSubtotal = Number(entry.retail_price) * qty;
@@ -110,8 +143,15 @@ export function getLedgerCustomerPrice(entry: {
   customer_price?: number | null;
   designer_cost?: number;
   wholesale_retail?: "wholesale" | "retail" | "service";
+  trade_partner_id?: string | null;
 }) {
   if (entry.wholesale_retail === "service") {
+    return getLedgerMerchandiseAmount(entry);
+  }
+  if (
+    entry.wholesale_retail === "retail" &&
+    !(entry.trade_partner_id ?? "").trim()
+  ) {
     return getLedgerMerchandiseAmount(entry);
   }
   const discountPercent = Number(entry.discount_percent) || 0;
@@ -120,6 +160,8 @@ export function getLedgerCustomerPrice(entry: {
       retail_price: entry.retail_price,
       quantity: entry.quantity,
       discount_percent: discountPercent,
+      wholesale_retail: entry.wholesale_retail,
+      trade_partner_id: entry.trade_partner_id,
     });
   }
   const stored = roundMoney(Number(entry.customer_price ?? 0));
@@ -130,6 +172,8 @@ export function getLedgerCustomerPrice(entry: {
     retail_price: entry.retail_price,
     quantity: entry.quantity,
     discount_percent: 0,
+    wholesale_retail: entry.wholesale_retail,
+    trade_partner_id: entry.trade_partner_id,
   });
 }
 
@@ -146,6 +190,7 @@ export function getLedgerInvoicedAmount(entry: {
   payment_fee?: number;
   balance_sheet?: boolean | null;
   designer_cost?: number;
+  trade_partner_id?: string | null;
 }) {
   const wholesaleRetail = entry.wholesale_retail ?? "retail";
   const tax =
@@ -165,6 +210,7 @@ export function getLedgerInvoicedAmount(entry: {
       customer_price: entry.customer_price,
       wholesale_retail: wholesaleRetail,
       designer_cost: entry.designer_cost,
+      trade_partner_id: entry.trade_partner_id,
     }) +
       tax +
       shipping +
@@ -199,6 +245,20 @@ export function getLedgerTotalDesignerCost(entry: {
   return roundMoney(Number(entry.designer_cost) * (Number(entry.quantity) || 1));
 }
 
+/** (Designer cost × qty) + tax. */
+export function getLedgerDesignerCostWithExtras(entry: {
+  designer_cost?: number | null;
+  quantity?: number | null;
+  tax_amount?: number | null;
+}) {
+  return roundMoney(
+    getLedgerTotalDesignerCost({
+      designer_cost: Number(entry.designer_cost ?? 0),
+      quantity: Number(entry.quantity ?? 1),
+    }) + Number(entry.tax_amount ?? 0)
+  );
+}
+
 /** Unit retail price × quantity (before discount). */
 export function getLedgerRetailSubtotal(entry: {
   retail_price: number;
@@ -209,7 +269,7 @@ export function getLedgerRetailSubtotal(entry: {
 }
 
 type LedgerBalanceEntry = {
-  client_id?: string;
+  client_id?: string | null;
   po_number?: string | null;
   designer_cost: number;
   retail_price: number;
@@ -325,6 +385,16 @@ export function calculateTradeDiscountPercentFromPricing(
   const retail = Number(retailPrice);
   if (retail <= 0) return 0;
   return roundMoney(((retail - Number(designerCost)) / retail) * 100);
+}
+
+/** Markup % from cost to retail: ((retail − designer) ÷ designer) × 100 */
+export function calculateMarkupPercentFromPricing(
+  retailPrice: number,
+  designerCost: number
+) {
+  const designer = Number(designerCost);
+  if (designer <= 0) return 0;
+  return roundMoney(((Number(retailPrice) - designer) / designer) * 100);
 }
 
 export function tradePartnerDiscountPercent(

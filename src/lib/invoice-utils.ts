@@ -73,6 +73,7 @@ export type LedgerAmountEntry = {
   shipping_receiving_amount?: number;
   wholesale_retail?: "wholesale" | "retail" | "service";
   designer_cost?: number;
+  trade_partner_id?: string | null;
   credit_debit?: "credit" | "debit";
   invoiced?: boolean | null;
   invoice_id?: string | null;
@@ -100,6 +101,7 @@ export function ledgerLineAmount(entry: LedgerAmountEntry) {
     payment_fee: entry.payment_fee ?? 0,
     balance_sheet: entry.balance_sheet,
     designer_cost: entry.designer_cost,
+    trade_partner_id: entry.trade_partner_id,
   });
 }
 
@@ -373,7 +375,7 @@ export function ledgerJobKey(
 
 function isLineInvoicedForJob(
   entry: {
-    client_id?: string;
+    client_id?: string | null;
     po_number?: string | null;
     invoiced?: boolean | null;
     invoice_id?: string | null;
@@ -390,7 +392,7 @@ function isLineInvoicedForJob(
 export function summarizeJobsByStatus(
   entries: Array<
     LedgerAmountEntry & {
-      client_id?: string;
+      client_id?: string | null;
       po_number?: string | null;
     }
   >,

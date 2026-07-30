@@ -9,11 +9,13 @@ import { Button } from "./ui/Button";
 const navItems = [
   { href: "/", label: "Maison Joy Business Overview", shortLabel: "Overview", icon: "⌂" },
   { href: "/appointments", label: "Appointments", shortLabel: "Appts", icon: "📅" },
+  { href: "/budget-tool", label: "Budget Tool", shortLabel: "Budget Tool", icon: "📊" },
   { href: "/clients", label: "Clients", shortLabel: "Clients", icon: "👤" },
   { href: "/ledger", label: "Ledger", shortLabel: "Ledger", icon: "₿" },
   { href: "/invoicing", label: "Invoicing", shortLabel: "Invoice", icon: "📄" },
   { href: "/payments", label: "Payments", shortLabel: "Pay", icon: "💵" },
-  { href: "/budget-tool", label: "Budget Tool", shortLabel: "Budget Tool", icon: "📊" },
+  { href: "/cashflow", label: "Cashflow", shortLabel: "Cashflow", icon: "💸" },
+  { href: "/chart-of-accounts", label: "Chart of Accounts", shortLabel: "Accounts", icon: "📒" },
 ];
 
 const tradePartnersHref = "/trade-partners";
@@ -191,7 +193,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white md:hidden">
-        <ul className="grid grid-cols-6">
+        <ul className="grid grid-cols-4">
           {navItems.map((item) => {
             const active = pathname === item.href;
             return (

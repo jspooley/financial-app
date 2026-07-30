@@ -10,7 +10,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
 import { createClient } from "@/lib/supabase/client";
 import type { Client } from "@/lib/types";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatSandUTaxPercent } from "@/lib/utils";
 
 function ClientsPageContent() {
   const searchParams = useSearchParams();
@@ -39,6 +39,7 @@ function ClientsPageContent() {
         (data ?? []).map((row) => ({
           ...row,
           budget: Number(row.budget ?? 0),
+          sand_u_tax: Number(row.sand_u_tax ?? 0),
           client_po_numbers: (row.client_po_numbers ?? []).map(
             (po: { id: string; po_number: string; budget?: number }) => ({
               ...po,
@@ -69,6 +70,7 @@ function ClientsPageContent() {
         (fallback ?? []).map((row) => ({
           ...row,
           budget: Number(row.budget ?? 0),
+          sand_u_tax: Number(row.sand_u_tax ?? 0),
         }))
       );
       setNeedsPoMigration(true);
@@ -93,6 +95,7 @@ function ClientsPageContent() {
         (fallback ?? []).map((row) => ({
           ...row,
           budget: 0,
+          sand_u_tax: Number(row.sand_u_tax ?? 0),
           client_po_numbers: (row.client_po_numbers ?? []).map(
             (po: { id: string; po_number: string }) => ({
               ...po,
@@ -217,6 +220,8 @@ function ClientsPageContent() {
           columns={[
             { key: "actions", label: "Actions" },
             { key: "name", label: "Name" },
+            { key: "cityOrCounty", label: "City / County" },
+            { key: "sandUTax", label: "S&U Tax" },
             { key: "personalUse", label: "Personal Use" },
             { key: "poBudget", label: "PO / Budget" },
             { key: "email", label: "Email" },
@@ -233,6 +238,8 @@ function ClientsPageContent() {
               />
             ),
             name: client.name,
+            cityOrCounty: client.city_or_county?.trim() || "—",
+            sandUTax: formatSandUTaxPercent(Number(client.sand_u_tax ?? 0)),
             personalUse: client.personal_use ? "Yes" : "No",
             poBudget:
               (client.client_po_numbers ?? []).length === 0 ? (

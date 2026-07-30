@@ -28,8 +28,13 @@ interface BudgetClientActionsProps {
   rooms: string[];
   plan: BudgetPlanSnapshot;
   plannerState: BudgetPlannerState;
+  selectedClientId: string;
+  selectedPoId: string;
+  onSelectedClientIdChange: (clientId: string) => void;
+  onSelectedPoIdChange: (poId: string) => void;
   onClientsUpdated: () => void;
   onLoadPlan: (state: BudgetPlannerState) => void;
+  onSaved?: () => void;
 }
 
 export function BudgetClientActions({
@@ -39,12 +44,15 @@ export function BudgetClientActions({
   rooms,
   plan,
   plannerState,
+  selectedClientId,
+  selectedPoId,
+  onSelectedClientIdChange,
+  onSelectedPoIdChange,
   onClientsUpdated,
   onLoadPlan,
+  onSaved,
 }: BudgetClientActionsProps) {
   const pdfRef = useRef<HTMLDivElement>(null);
-  const [selectedClientId, setSelectedClientId] = useState("");
-  const [selectedPoId, setSelectedPoId] = useState("");
   const [saving, setSaving] = useState(false);
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -61,8 +69,8 @@ export function BudgetClientActions({
   const savedPlan = selectedPo ? parseClientBudgetPlanSaved(selectedPo.budget_plan) : null;
 
   function handleClientChange(clientId: string) {
-    setSelectedClientId(clientId);
-    setSelectedPoId("");
+    onSelectedClientIdChange(clientId);
+    onSelectedPoIdChange("");
     setError(null);
     setSuccess(null);
   }
@@ -108,6 +116,7 @@ export function BudgetClientActions({
         pdfElement: pdfRef.current,
       });
       onClientsUpdated();
+      onSaved?.();
       setSuccess(
         result.pdfWarning ??
           `Saved budget (${formatCurrency(budgetAmount)}) for ${selectedClient?.name ?? "client"} · PO ${selectedPo?.po_number ?? ""}.`
@@ -263,7 +272,7 @@ export function BudgetClientActions({
             value={selectedPoId}
             disabled={!selectedClientId || clientPos.length === 0}
             onChange={(event) => {
-              setSelectedPoId(event.target.value);
+              onSelectedPoIdChange(event.target.value);
               setError(null);
               setSuccess(null);
             }}

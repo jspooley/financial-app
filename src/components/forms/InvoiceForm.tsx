@@ -7,6 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
 import { collectClientPoOptions } from "@/lib/client-po-db";
+import { isInvoiceGoodsLine } from "@/lib/coa";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 import {
   formatInvoiceId,
@@ -128,6 +129,7 @@ export function InvoiceForm({
           .from("ledger")
           .select("*")
           .eq("client_id", clientId)
+          .is("source_ledger_id", null)
           .limit(10000),
         supabase
           .from("invoicing")
@@ -189,7 +191,9 @@ export function InvoiceForm({
         .upsert(toSync, { onConflict: "client_id,po_number", ignoreDuplicates: true });
     }
 
-    const allLines = (ledgerData ?? []).map((row) => normalizeLedgerRow(row));
+    const allLines = (ledgerData ?? [])
+      .map((row) => normalizeLedgerRow(row))
+      .filter(isInvoiceGoodsLine);
     setUninvoicedLines(allLines.filter((line) => isLedgerLineUninvoiced(line)));
     setInvoicedLines(
       allLines.filter((line) => !isLedgerLineUninvoiced(line)) as InvoiceLineItem[]
@@ -246,6 +250,8 @@ export function InvoiceForm({
       .from("ledger")
       .select("*")
       .eq("invoice_id", initial.invoice_id)
+      // Companions share the parent's invoice ID; only goods lines are invoiceable.
+      .is("source_ledger_id", null)
       .then(({ data }) => {
         if (cancelled) return;
         setCurrentInvoiceLines(
@@ -324,6 +330,17 @@ export function InvoiceForm({
       return { ok: false as const, error: ledgerError };
     }
 
+    // Payment / tax / shipping / fee companions carry the parent's invoice ID so
+    // Cashflow can group them. They are not in lineIds, so update them here.
+    const { error: companionError } = await supabase
+      .from("ledger")
+      .update({ invoice_id: invoiceId })
+      .in("source_ledger_id", lineIds);
+
+    if (companionError) {
+      return { ok: false as const, error: companionError };
+    }
+
     const { data: linked, error: verifyError } = await supabase
       .from("ledger")
       .select("id")
@@ -359,6 +376,15 @@ export function InvoiceForm({
       return { ok: false as const, error: ledgerError };
     }
 
+    const { error: companionError } = await supabase
+      .from("ledger")
+      .update({ invoice_id: null })
+      .in("source_ledger_id", lineIds);
+
+    if (companionError) {
+      return { ok: false as const, error: companionError };
+    }
+
     return { ok: true as const };
   }
 
@@ -366,7 +392,11 @@ export function InvoiceForm({
     const supabase = createClient();
     const [{ data: invoiceRow }, { data: lines }] = await Promise.all([
       supabase.from("invoicing").select("*, clients(name)").eq("invoice_id", invoiceId).single(),
-      supabase.from("ledger").select("*").eq("invoice_id", invoiceId),
+      supabase
+        .from("ledger")
+        .select("*")
+        .eq("invoice_id", invoiceId)
+        .is("source_ledger_id", null),
     ]);
 
     if (!invoiceRow) {

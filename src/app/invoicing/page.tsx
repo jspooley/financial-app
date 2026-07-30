@@ -12,6 +12,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
 import { SelectField, selectFieldClass } from "@/components/ui/FormFields";
 import { createClient } from "@/lib/supabase/client";
+import { isInvoiceGoodsLine } from "@/lib/coa";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { InvoiceLineItem } from "@/lib/invoice-utils";
 import { getLedgerLinesForInvoice, invoiceLineTotal, isInvoiceFullyPaid, isInvoicedDebitLine, isLedgerLineUninvoiced, normalizeInvoiceId, sumInvoiceHistoryTotal, summarizeToBeInvoiced } from "@/lib/invoice-utils";
@@ -51,7 +52,10 @@ export default function InvoicingPage() {
           .select("*, clients(name, address)")
           .order("created_at", { ascending: false }),
         supabase.from("clients").select("*").order("name", { ascending: true }),
-        supabase.from("ledger").select("*, clients(name)"),
+        supabase
+          .from("ledger")
+          .select("*, clients(name)")
+          .is("source_ledger_id", null),
       ]);
     setInvoices(
       ((invoiceData ?? []) as Invoice[]).map((invoice) => ({
@@ -60,9 +64,11 @@ export default function InvoicingPage() {
       }))
     );
     setClients(clientData ?? []);
-    const normalizedLedger = (ledgerData ?? []).map((row) =>
-      normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
-    );
+    const normalizedLedger = (ledgerData ?? [])
+      .map((row) =>
+        normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
+      )
+      .filter(isInvoiceGoodsLine);
     setLedgerEntries(normalizedLedger);
     setLoading(false);
   }, []);
@@ -183,7 +189,8 @@ export default function InvoicingPage() {
     const { data: lines } = await supabase
       .from("ledger")
       .select("*")
-      .eq("invoice_id", invoice.invoice_id);
+      .eq("invoice_id", invoice.invoice_id)
+      .is("source_ledger_id", null);
 
     setViewInvoice({
       invoice,
@@ -202,7 +209,8 @@ export default function InvoicingPage() {
     const { data: lines } = await supabase
       .from("ledger")
       .select("*")
-      .eq("invoice_id", invoice.invoice_id);
+      .eq("invoice_id", invoice.invoice_id)
+      .is("source_ledger_id", null);
 
     setDeleteConfirm({
       invoice,

@@ -44,30 +44,72 @@ const schema = z
 
 type FormValues = z.infer<typeof schema>;
 
+export type BudgetItemFormDefaults = Pick<
+  BudgetItem,
+  | "room"
+  | "item_description"
+  | "include_in_budget"
+  | "quantity"
+  | "low_amount"
+  | "medium_amount"
+  | "high_amount"
+>;
+
 interface BudgetItemFormProps {
+  /** When set, form updates this row. Cleared after Duplicate. */
   initial?: BudgetItem | null;
+  /** Prefill for create / duplicate (ignored when `initial` is set until Duplicate). */
+  defaults?: BudgetItemFormDefaults | null;
   customRooms?: string[];
   onSuccess: () => void;
   onCancel: () => void;
 }
 
-function roomChoiceFromItem(item: BudgetItem) {
-  if ((BUDGET_ROOM_OPTIONS as readonly string[]).includes(item.room)) {
-    return item.room;
+function roomChoiceFromRoom(room: string) {
+  if ((BUDGET_ROOM_OPTIONS as readonly string[]).includes(room)) {
+    return room;
   }
   return ADD_ROOM_VALUE;
 }
 
+function valuesFromSource(source: BudgetItemFormDefaults | BudgetItem | null | undefined) {
+  if (!source) {
+    return {
+      room_choice: "",
+      custom_room: "",
+      item_description: "",
+      include_in_budget: false,
+      quantity: 0,
+      low_amount: 0,
+      medium_amount: 0,
+      high_amount: 0,
+    };
+  }
+
+  const roomChoice = roomChoiceFromRoom(source.room);
+  return {
+    room_choice: roomChoice,
+    custom_room: roomChoice === ADD_ROOM_VALUE ? source.room : "",
+    item_description: source.item_description,
+    include_in_budget: source.include_in_budget,
+    quantity: source.quantity,
+    low_amount: source.low_amount,
+    medium_amount: source.medium_amount,
+    high_amount: source.high_amount,
+  };
+}
+
 export function BudgetItemForm({
   initial,
+  defaults = null,
   customRooms = [],
   onSuccess,
   onCancel,
 }: BudgetItemFormProps) {
   const [error, setError] = useState<string | null>(null);
-  const initialRoomChoice = initial ? roomChoiceFromItem(initial) : "";
-  const initialCustomRoom =
-    initial && initialRoomChoice === ADD_ROOM_VALUE ? initial.room : "";
+  const [isDuplicateCreate, setIsDuplicateCreate] = useState(false);
+  const isEdit = Boolean(initial) && !isDuplicateCreate;
+  const prefillSource = initial ?? defaults;
 
   const roomOptions = useMemo(() => {
     const extras = customRooms.filter(
@@ -85,22 +127,21 @@ export function BudgetItemForm({
     register,
     handleSubmit,
     watch,
+    getValues,
+    reset,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: {
-      room_choice: initialRoomChoice,
-      custom_room: initialCustomRoom,
-      item_description: initial?.item_description ?? "",
-      include_in_budget: initial?.include_in_budget ?? false,
-      quantity: initial?.quantity ?? 0,
-      low_amount: initial?.low_amount ?? 0,
-      medium_amount: initial?.medium_amount ?? 0,
-      high_amount: initial?.high_amount ?? 0,
-    },
+    defaultValues: valuesFromSource(prefillSource),
   });
 
   const roomChoice = watch("room_choice");
+
+  function handleDuplicate() {
+    setError(null);
+    setIsDuplicateCreate(true);
+    reset(getValues());
+  }
 
   async function onSubmit(values: FormValues) {
     setError(null);
@@ -120,8 +161,8 @@ export function BudgetItemForm({
       high_amount: values.high_amount,
     };
 
-    const { error: dbError } = initial
-      ? await supabase.from("budget_items").update(payload).eq("id", initial.id)
+    const { error: dbError } = isEdit
+      ? await supabase.from("budget_items").update(payload).eq("id", initial!.id)
       : await supabase.from("budget_items").insert(payload);
 
     if (dbError) {
@@ -132,14 +173,26 @@ export function BudgetItemForm({
     onSuccess();
   }
 
+  const title = isEdit
+    ? "Edit Budget Item"
+    : isDuplicateCreate || defaults
+      ? "Duplicate Budget Item"
+      : "New Budget Item";
+
   return (
     <form
       onSubmit={handleSubmit(onSubmit)}
       className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
     >
-      <h2 className="text-lg font-semibold text-slate-900">
-        {initial ? "Edit Budget Item" : "New Budget Item"}
-      </h2>
+      <div>
+        <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
+        {(isDuplicateCreate || (!isEdit && defaults)) && (
+          <p className="mt-1 text-sm text-slate-600">
+            Low, medium, and high amounts are carried over. Change the room or
+            other fields, then create the new item.
+          </p>
+        )}
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <SelectField
@@ -217,8 +270,13 @@ export function BudgetItemForm({
 
       <div className="flex flex-wrap gap-2">
         <Button type="submit" loading={isSubmitting}>
-          {initial ? "Save Changes" : "Create Item"}
+          {isEdit ? "Save Changes" : "Create Item"}
         </Button>
+        {initial && !isDuplicateCreate && (
+          <Button type="button" variant="secondary" onClick={handleDuplicate}>
+            Duplicate
+          </Button>
+        )}
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancel
         </Button>

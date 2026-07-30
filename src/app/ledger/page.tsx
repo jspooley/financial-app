@@ -10,6 +10,7 @@ import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
 import { isLedgerLineUninvoiced, normalizePoNumber } from "@/lib/invoice-utils";
+import { isInvoiceGoodsLine } from "@/lib/coa";
 import {
   budgetForClientPo,
   collectClientPoOptions,
@@ -20,7 +21,7 @@ import { ledgerDetailFields, ledgerDetailColumns, ledgerDebitColumns, ledgerDebi
 import { computePlTotals } from "@/lib/pl-report";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
-import type { Client, ClientPoNumber, LedgerEntry, TradePartner } from "@/lib/types";
+import type { ChartOfAccount, Client, ClientPoNumber, LedgerEntry, TradePartner } from "@/lib/types";
 import {
   formatCurrency,
   getLedgerCustomerPrice,
@@ -33,11 +34,13 @@ const GOODS_AND_SERVICES_LABEL = "Goods and Services";
 
 function GoodsAndServicesSectionHeader({
   entryCount,
+  entriesTotal,
   budgetLabel,
   onDownloadCsv,
   downloadDisabled,
 }: {
   entryCount: number;
+  entriesTotal: number;
   budgetLabel?: ReactNode;
   onDownloadCsv: () => void;
   downloadDisabled: boolean;
@@ -47,6 +50,9 @@ function GoodsAndServicesSectionHeader({
       <div className="min-w-0">
         <h2 className="text-lg font-semibold text-slate-900">
           {GOODS_AND_SERVICES_LABEL} ({entryCount})
+          <span className="ml-2 font-semibold text-brand-800">
+            · {formatCurrency(entriesTotal)}
+          </span>
           {budgetLabel}
         </h2>
         <p className="mt-1 text-sm text-slate-500">
@@ -96,6 +102,7 @@ function LedgerPageContent() {
   const [invoicedPoKeys, setInvoicedPoKeys] = useState<Set<string>>(new Set());
   const [clients, setClients] = useState<Client[]>([]);
   const [tradePartners, setTradePartners] = useState<TradePartner[]>([]);
+  const [chartOfAccounts, setChartOfAccounts] = useState<ChartOfAccount[]>([]);
   const [clientPoNumbers, setClientPoNumbers] = useState<ClientPoNumber[]>([]);
   const [defaultPurchaser, setDefaultPurchaser] = useState<"Jess" | "Molly" | null>(
     null
@@ -116,6 +123,7 @@ function LedgerPageContent() {
       { data: ledgerData, error: ledgerError },
       { data: clientData, error: clientError },
       { data: tradeData, error: tradeError },
+      { data: chartData, error: chartError },
       { data: clientPoData, error: clientPoError },
       { data: invoiceHeaders },
       { data: userData },
@@ -123,9 +131,11 @@ function LedgerPageContent() {
       supabase
         .from("ledger")
         .select("*, clients(name), trade_partners(company_name)")
+        .is("source_ledger_id", null)
         .order("entry_date", { ascending: false }),
       supabase.from("clients").select("*").order("name", { ascending: true }),
       supabase.from("trade_partners").select("*").order("company_name", { ascending: true }),
+      supabase.from("chart_of_accounts").select("*").order("category", { ascending: true }),
       supabase.from("client_po_numbers").select("*").order("po_number", { ascending: true }),
       supabase.from("invoicing").select("client_id, po_number"),
       supabase.auth.getUser(),
@@ -137,13 +147,16 @@ function LedgerPageContent() {
       setEntries([]);
     } else {
       setEntries(
-        (ledgerData ?? []).map((row) =>
-          normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
-        )
+        (ledgerData ?? [])
+          .map((row) =>
+            normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
+          )
+          .filter(isInvoiceGoodsLine)
       );
     }
     setClients(clientData ?? []);
     setTradePartners(tradeData ?? []);
+    setChartOfAccounts(chartData ?? []);
     setClientPoNumbers(clientPoData ?? []);
     setInvoicedPoKeys(
       new Set(
@@ -158,6 +171,13 @@ function LedgerPageContent() {
         (current) =>
           current ??
           "PO numbers table not found. Run migration 024_client_po_numbers.sql in Supabase."
+      );
+    }
+    if (chartError) {
+      setLoadError(
+        (current) =>
+          current ??
+          "Chart of accounts table not found. Run migration 054_chart_of_accounts.sql in Supabase."
       );
     }
     setDefaultPurchaser(purchaserFromEmail(userData.user?.email));
@@ -287,6 +307,15 @@ function LedgerPageContent() {
     [debitEntries, invoicedPoKeys]
   );
 
+  const goodsAndServicesTotal = useMemo(
+    () =>
+      debitEntries.reduce(
+        (sum, entry) => sum + getLedgerInvoicedAmount(entry),
+        0
+      ),
+    [debitEntries]
+  );
+
   const handleDownloadGoodsAndServicesCsv = useCallback(() => {
     downloadGoodsAndServicesLedgerCsv(debitEntries, invoicedPoKeys);
   }, [debitEntries, invoicedPoKeys]);
@@ -388,6 +417,7 @@ function LedgerPageContent() {
             key={editing?.id ?? "new"}
             clients={clients}
             tradePartners={tradePartners}
+            chartOfAccounts={chartOfAccounts}
             clientPoNumbers={clientPoNumbers}
             ledgerEntries={entries}
             defaultPurchaser={defaultPurchaser}
@@ -517,6 +547,7 @@ function LedgerPageContent() {
                 {group.title === GOODS_AND_SERVICES_LABEL ? (
                   <GoodsAndServicesSectionHeader
                     entryCount={group.rows.length}
+                    entriesTotal={goodsAndServicesTotal}
                     budgetLabel={debitsBudgetLabel()}
                     onDownloadCsv={handleDownloadGoodsAndServicesCsv}
                     downloadDisabled={debitEntries.length === 0}
@@ -595,6 +626,7 @@ function LedgerPageContent() {
             <section>
               <GoodsAndServicesSectionHeader
                 entryCount={debitEntries.length}
+                entriesTotal={goodsAndServicesTotal}
                 budgetLabel={debitsBudgetLabel()}
                 onDownloadCsv={handleDownloadGoodsAndServicesCsv}
                 downloadDisabled={debitEntries.length === 0}
