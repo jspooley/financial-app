@@ -15,6 +15,10 @@ import {
 } from "@/lib/pl-report";
 import { createClient } from "@/lib/supabase/server";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
+import {
+  isPaymentCompanionRow,
+  mergePaymentCompanionsOntoEntries,
+} from "@/lib/payment-companions";
 import { formatCurrency, formatPercent, grossProfitGoalFromTradePartners } from "@/lib/utils";
 import type { TradePartner } from "@/lib/types";
 
@@ -222,8 +226,14 @@ export default async function PlReportPage() {
   const allLedgerEntries = ((ledgerTotals ?? []) as Array<Record<string, unknown>>).map(
     (row) => normalizeLedgerRow(row)
   );
+  const paymentCompanions = allLedgerEntries.filter(isPaymentCompanionRow);
+  // Overlay companion payment fields so accepted-variance math sees real cash applied.
+  const ledgerForPl = mergePaymentCompanionsOntoEntries(
+    allLedgerEntries,
+    paymentCompanions
+  );
 
-  const ytdEntries = filterLedgerEntriesForYear(allLedgerEntries, reportYear);
+  const ytdEntries = filterLedgerEntriesForYear(ledgerForPl, reportYear);
   const ytdTotals = computePlTotals(ytdEntries, invoicedPoKeys);
   const expenseEntries = filterPlExpenseEntries(ytdEntries).sort((a, b) =>
     b.entry_date.localeCompare(a.entry_date)
@@ -240,7 +250,7 @@ export default async function PlReportPage() {
     tax_amount: Number(entry.tax_amount ?? 0),
     expenseTotal: sumPlExpenseAmount(entry),
   }));
-  const monthlyRows = buildPlMonthlyRows(allLedgerEntries, {
+  const monthlyRows = buildPlMonthlyRows(ledgerForPl, {
     year: reportYear,
     throughMonth,
     invoicedPoKeys,

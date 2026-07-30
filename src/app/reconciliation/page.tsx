@@ -14,6 +14,10 @@ import {
   syncLedgerPaidFlagsForEntries,
   type LedgerDbRow,
 } from "@/lib/ledger-db";
+import {
+  isPaymentCompanionRow,
+  mergePaymentCompanionsOntoEntries,
+} from "@/lib/payment-companions";
 import { buildReconciliationReport } from "@/lib/reconciliation";
 import type { Client, Invoice, LedgerEntry, TradePartner } from "@/lib/types";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -96,10 +100,12 @@ export default function ReconciliationPage() {
     }
     setInvoices((invoiceData ?? []) as Invoice[]);
     setClients(clientData ?? []);
+    const normalized = ledgerResult.data.map((row) =>
+      normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
+    );
+    const paymentCompanions = normalized.filter(isPaymentCompanionRow);
     setLedgerEntries(
-      ledgerResult.data.map((row) =>
-        normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
-      )
+      mergePaymentCompanionsOntoEntries(normalized, paymentCompanions)
     );
     setTradePartners(
       (tradeData ?? []) as Pick<TradePartner, "id" | "company_name" | "account_owner">[]

@@ -131,6 +131,13 @@ export function sumPlExpenseAmount(entry: LedgerPlEntry): number {
 /** Accepted underpayment variance (magnitude) that reduces net profit. */
 export function sumPlAcceptedVariance(entry: LedgerPlEntry): number {
   if (!entry.variance_accepted) return 0;
+  // Prefer the signed amount recorded at acceptance. Live recompute needs the
+  // parent's payment fields; after companions those live on a separate row and
+  // a bare parent looks fully unpaid.
+  const stored = Number(entry.variance_amount ?? 0);
+  if (stored !== 0) {
+    return stored < 0 ? roundMoney(-stored) : 0;
+  }
   const live = getLedgerVarianceBeforeAcceptance({
     retail_price: entry.retail_price,
     quantity: entry.quantity,

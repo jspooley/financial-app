@@ -167,6 +167,10 @@ function clientNameFor(
 
 function acceptedVarianceUnderpayment(entry: LedgerEntry): number {
   if (!entry.variance_accepted) return 0;
+  const stored = Number(entry.variance_amount ?? 0);
+  if (stored !== 0) {
+    return stored < 0 ? roundMoney(-stored) : 0;
+  }
   const amount = getLedgerAcceptedVarianceAmount(entry);
   return amount < 0 ? roundMoney(-amount) : 0;
 }
