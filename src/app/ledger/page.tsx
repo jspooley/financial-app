@@ -366,7 +366,7 @@ function LedgerPageContent() {
   return (
     <AppShell>
       <PageHeader
-        title="Client Transactions"
+        title="Goods & Services"
         description="Record client purchases and receivables with PO and trade partner links."
         action={
           !showForm && (

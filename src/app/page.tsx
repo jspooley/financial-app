@@ -9,6 +9,10 @@ import {
   summarizeToBeInvoiced,
 } from "@/lib/invoice-utils";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
+import {
+  isPaymentCompanionRow,
+  mergePaymentCompanionsOntoEntries,
+} from "@/lib/payment-companions";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -68,8 +72,14 @@ export default async function DashboardPage() {
     )
   );
 
-  const allLedgerEntries = ((ledgerTotals ?? []) as Array<Record<string, unknown>>).map((row) =>
+  const ledgerRows = ((ledgerTotals ?? []) as Array<Record<string, unknown>>).map((row) =>
     normalizeLedgerRow(row)
+  );
+
+  // Payments live on companion rows, so overlay them before any paid/unpaid math.
+  const allLedgerEntries = mergePaymentCompanionsOntoEntries(
+    ledgerRows.filter((entry) => !entry.source_ledger_id),
+    ledgerRows.filter((entry) => isPaymentCompanionRow(entry))
   );
 
   const toBeInvoiced = summarizeToBeInvoiced(allLedgerEntries);

@@ -13,8 +13,8 @@ const navItems = [
   { href: "/clients", label: "Clients", shortLabel: "Clients", icon: "👤" },
   {
     href: "/ledger",
-    label: "Client Transactions",
-    shortLabel: "Transactions",
+    label: "Goods & Services",
+    shortLabel: "Goods & Services",
     icon: "₿",
   },
   { href: "/invoicing", label: "Invoicing", shortLabel: "Invoice", icon: "📄" },
