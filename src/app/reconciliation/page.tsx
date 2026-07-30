@@ -208,6 +208,18 @@ export default function ReconciliationPage() {
     [invoices, ledgerEntries, clientNames, tradePartners]
   );
 
+  const missingCoaEntries = useMemo(
+    () =>
+      ledgerEntries
+        .filter((entry) => !(entry.coa_category ?? "").trim())
+        .sort((a, b) => {
+          const byDate = b.entry_date.localeCompare(a.entry_date);
+          if (byDate !== 0) return byDate;
+          return (a.description ?? "").localeCompare(b.description ?? "");
+        }),
+    [ledgerEntries]
+  );
+
   const problemLineRows = report.problemLines.map((line) => ({
     entryDate: formatDate(line.entryDate),
     invoiceId: line.invoiceId,
@@ -522,6 +534,81 @@ export default function ReconciliationPage() {
                 />
               </div>
             </div>
+          </section>
+
+          <section
+            className={`rounded-xl border p-4 shadow-sm sm:p-6 ${
+              missingCoaEntries.length > 0
+                ? "border-amber-200 bg-amber-50"
+                : "border-emerald-200 bg-emerald-50"
+            }`}
+          >
+            <h2
+              className={`text-lg font-semibold ${
+                missingCoaEntries.length > 0
+                  ? "text-amber-950"
+                  : "text-emerald-950"
+              }`}
+            >
+              Entries Missing a CoA Value
+            </h2>
+            <p
+              className={`mt-1 text-sm ${
+                missingCoaEntries.length > 0
+                  ? "text-amber-900/80"
+                  : "text-emerald-900/80"
+              }`}
+            >
+              {missingCoaEntries.length === 0
+                ? "Every ledger entry has a Chart of Accounts category."
+                : `${missingCoaEntries.length} ledger ${
+                    missingCoaEntries.length === 1 ? "entry is" : "entries are"
+                  } missing a Chart of Accounts category.`}
+            </p>
+            {missingCoaEntries.length > 0 && (
+              <div className="mt-4">
+                <DataTable
+                  stickyHeader
+                  mobileTitleKey="description"
+                  columns={[
+                    { key: "date", label: "Date" },
+                    { key: "type", label: "Entry Type" },
+                    { key: "client", label: "Client" },
+                    { key: "description", label: "Description" },
+                    { key: "invoice", label: "Invoice" },
+                    { key: "po", label: "PO" },
+                    { key: "purchaser", label: "Jess / Molly" },
+                    { key: "account", label: "Account" },
+                    { key: "debit", label: "Debit" },
+                    { key: "credit", label: "Credit" },
+                  ]}
+                  rows={missingCoaEntries.map((entry) => ({
+                    date: formatDate(entry.entry_date),
+                    type: entry.companion_kind
+                      ? `${entry.companion_kind} companion`
+                      : entry.client_id
+                        ? "Client transaction"
+                        : "Cashflow",
+                    client:
+                      entry.clients?.name ??
+                      (entry.client_id
+                        ? clientNames.get(entry.client_id) ?? "Unknown client"
+                        : "—"),
+                    description: entry.description?.trim() || "—",
+                    invoice: entry.invoice_id?.trim() || "—",
+                    po: entry.po_number?.trim() || "—",
+                    purchaser: entry.purchaser ?? "—",
+                    account: entry.account ?? "—",
+                    debit: formatCurrency(Number(entry.debit_amount ?? 0)),
+                    credit: formatCurrency(Number(entry.credit_amount ?? 0)),
+                  }))}
+                  rowKey={(_, index) =>
+                    missingCoaEntries[index]?.id ?? String(index)
+                  }
+                  emptyMessage="Every ledger entry has a CoA category."
+                />
+              </div>
+            )}
           </section>
 
           {showAcceptedUnderpayments && report.acceptedVarianceLines.length > 0 && (

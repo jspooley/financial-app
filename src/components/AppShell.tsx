@@ -11,14 +11,18 @@ const navItems = [
   { href: "/appointments", label: "Appointments", shortLabel: "Appts", icon: "📅" },
   { href: "/budget-tool", label: "Budget Tool", shortLabel: "Budget Tool", icon: "📊" },
   { href: "/clients", label: "Clients", shortLabel: "Clients", icon: "👤" },
-  { href: "/ledger", label: "Ledger", shortLabel: "Ledger", icon: "₿" },
+  {
+    href: "/ledger",
+    label: "Client Transactions",
+    shortLabel: "Transactions",
+    icon: "₿",
+  },
   { href: "/invoicing", label: "Invoicing", shortLabel: "Invoice", icon: "📄" },
   { href: "/payments", label: "Payments", shortLabel: "Pay", icon: "💵" },
-  { href: "/cashflow", label: "Cashflow", shortLabel: "Cashflow", icon: "💸" },
-  { href: "/chart-of-accounts", label: "Chart of Accounts", shortLabel: "Accounts", icon: "📒" },
 ];
 
 const tradePartnersHref = "/trade-partners";
+const chartOfAccountsHref = "/chart-of-accounts";
 
 function navLinkClass(active: boolean) {
   return `flex min-h-9 items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium transition ${
@@ -43,7 +47,7 @@ function TradeAccountBox({
     <div className="space-y-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
       <div className="px-1.5 py-1">
         <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-          Trade Accounts
+          Accounts
         </p>
         <p className="text-xs font-medium text-slate-900">{tradeAccountCountLabel(count)}</p>
       </div>
@@ -55,13 +59,23 @@ function TradeAccountBox({
         <span aria-hidden>🤝</span>
         Trade Accts
       </Link>
+      <Link
+        href={chartOfAccountsHref}
+        className={navLinkClass(pathname === chartOfAccountsHref)}
+        title="Chart of Accounts"
+      >
+        <span aria-hidden>📒</span>
+        Chart of Accts
+      </Link>
     </div>
   );
 }
 
+const cashflowHref = "/cashflow";
 const reconciliationHref = "/reconciliation";
 const salesUseTaxHref = "/sales-use-tax";
 const plReportHref = "/pl-report";
+const scheduleCHref = "/schedule-c";
 
 function ReportsBox({ pathname }: { pathname: string }) {
   return (
@@ -72,12 +86,28 @@ function ReportsBox({ pathname }: { pathname: string }) {
         </p>
       </div>
       <Link
+        href={cashflowHref}
+        className={navLinkClass(pathname === cashflowHref)}
+        title="Cashflow"
+      >
+        <span aria-hidden>💸</span>
+        Cashflow
+      </Link>
+      <Link
+        href={salesUseTaxHref}
+        className={navLinkClass(pathname === salesUseTaxHref)}
+        title="Sales & Use Tax"
+      >
+        <span aria-hidden>🧾</span>
+        Sales &amp; Use Tax
+      </Link>
+      <Link
         href={plReportHref}
         className={navLinkClass(pathname === plReportHref)}
         title="P&L Report"
       >
         <span aria-hidden>📈</span>
-        P&amp;L
+        P&amp;L Report
       </Link>
       <Link
         href={reconciliationHref}
@@ -88,12 +118,12 @@ function ReportsBox({ pathname }: { pathname: string }) {
         Reconciliation
       </Link>
       <Link
-        href={salesUseTaxHref}
-        className={navLinkClass(pathname === salesUseTaxHref)}
-        title="Sales & Use Tax"
+        href={scheduleCHref}
+        className={navLinkClass(pathname === scheduleCHref)}
+        title="Schedule C Report"
       >
-        <span aria-hidden>🧾</span>
-        Sales &amp; Use Tax
+        <span aria-hidden>🗂️</span>
+        Schedule C
       </Link>
     </div>
   );
