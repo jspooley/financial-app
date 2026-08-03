@@ -941,9 +941,13 @@ export default function CashflowPage() {
       const accountMatched = result.filter((entry) =>
         entryMatchesAccountFilter(entry, accountFilter)
       );
-      result = withInvoiceMates(accountMatched, result).filter(
-        (entry) => !isExcludedPersonalUseCashflowRow(entry, parentById)
-      );
+      // When grouping is on, pull in invoice mates from other accounts so the
+      // rollup can show the full invoice. When off, keep selected accounts only.
+      result = (
+        grouped
+          ? withInvoiceMates(accountMatched, result)
+          : accountMatched
+      ).filter((entry) => !isExcludedPersonalUseCashflowRow(entry, parentById));
     }
     if (!showAllCoaCategories) {
       const selected = new Set(coaCategoryFilter);
@@ -951,9 +955,18 @@ export default function CashflowPage() {
         (entry) =>
           entry.coa_category != null && selected.has(entry.coa_category)
       );
-      result = withInvoiceMates(coaMatched, result).filter(
-        (entry) => !isExcludedPersonalUseCashflowRow(entry, parentById)
-      );
+      result = (
+        grouped
+          ? withInvoiceMates(coaMatched, result)
+          : coaMatched
+      ).filter((entry) => !isExcludedPersonalUseCashflowRow(entry, parentById));
+      // CoA mate expansion can reintroduce other accounts; re-apply account
+      // filter when grouping is off.
+      if (grouped === false && !showAllAccounts) {
+        result = result.filter((entry) =>
+          entryMatchesAccountFilter(entry, accountFilter)
+        );
+      }
     }
 
     // Cluster invoice mates (and payment→goods parent links) by the latest date
@@ -1054,6 +1067,7 @@ export default function CashflowPage() {
     invoiceFilter,
     coaCategoryFilter,
     showAllCoaCategories,
+    grouped,
     sortBy,
   ]);
 
@@ -1215,6 +1229,10 @@ export default function CashflowPage() {
               closeForms();
               loadEntries();
             }}
+            onDeleted={() => {
+              closeForms();
+              loadEntries();
+            }}
           />
         )
       ) : loading ? (
@@ -1372,45 +1390,55 @@ export default function CashflowPage() {
                   <option value="description">Description</option>
                 </select>
               </label>
-              <div className="text-sm">
-                <span className="mb-1 block font-medium text-slate-900">
-                  Grouping
+            </div>
+
+            <div className="border-t border-slate-100 pt-4 text-sm">
+              <span className="mb-1 block font-medium text-slate-900">
+                Grouping
+              </span>
+              <label className="flex items-start gap-2 text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={grouped}
+                  onChange={(event) => setGrouped(event.target.checked)}
+                  className="mt-0.5 size-4 shrink-0 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                />
+                <span className="min-w-0">
+                  <span className="font-medium">Group related rows</span>
+                  <span className="font-normal text-slate-600">
+                    {" "}
+                    — includes all charges on an invoice from all designers and
+                    accounts. When unchecked, only rows for the selected Account
+                    filter are shown.
+                  </span>
                 </span>
-                <label className="inline-flex items-center gap-2 text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={grouped}
-                    onChange={(event) => setGrouped(event.target.checked)}
-                    className="size-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-                  />
-                  Group related rows
-                </label>
-                {grouped && groupKeys.length > 0 && (
-                  <div className="mt-1.5 flex gap-3 text-xs">
-                    <button
-                      type="button"
-                      onClick={() => setExpandedGroups(new Set(groupKeys))}
-                      className="font-medium text-brand-700 hover:underline"
-                    >
-                      Expand all
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setExpandedGroups(new Set())}
-                      className="font-medium text-brand-700 hover:underline"
-                    >
-                      Collapse all
-                    </button>
-                  </div>
-                )}
-              </div>
+              </label>
+              {grouped && groupKeys.length > 0 && (
+                <div className="mt-1.5 flex gap-3 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedGroups(new Set(groupKeys))}
+                    className="font-medium text-brand-700 hover:underline"
+                  >
+                    Expand all
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedGroups(new Set())}
+                    className="font-medium text-brand-700 hover:underline"
+                  >
+                    Collapse all
+                  </button>
+                </div>
+              )}
             </div>
 
             {hasActiveListFilters && (
               <p className="border-t border-slate-100 pt-3 text-xs text-slate-500">
                 Checking and credit card balances above use the current filters
-                (selected accounts only — invoice mates on other accounts are not
-                included in those totals). Showing {displayItems.length} rows (
+                (selected accounts only). With Grouping on, the list can include
+                invoice mates from other accounts; with Grouping off, only the
+                selected accounts appear. Showing {displayItems.length} rows (
                 {visibleEntries.length}{" "}
                 source {visibleEntries.length === 1 ? "entry" : "entries"}
                 {grouped && groupKeys.length > 0
