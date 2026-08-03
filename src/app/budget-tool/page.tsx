@@ -202,8 +202,12 @@ export default function BudgetToolPage() {
   const listScrollYRef = useRef(0);
   const restoreListScrollRef = useRef(false);
 
+  const hasLoadedItemsRef = useRef(false);
+
   const loadItems = useCallback(async () => {
-    setLoading(true);
+    // Soft-refresh after the first load so Quoting Tool does not unmount and
+    // wipe in-progress inclusions (e.g. after Manage Items edits).
+    if (!hasLoadedItemsRef.current) setLoading(true);
     setLoadError(null);
     setNeedsDbSetup(false);
     const supabase = createClient();
@@ -231,6 +235,7 @@ export default function BudgetToolPage() {
         }))
       );
     }
+    hasLoadedItemsRef.current = true;
     setLoading(false);
   }, []);
 
@@ -333,6 +338,8 @@ export default function BudgetToolPage() {
 
   const handlePlannerStateChange = useCallback((state: BudgetPlannerState) => {
     setPlannerState(state);
+    // Keep remount seed current without bumping loadPlanToken.
+    setLoadedPlanState(state);
     if (ignorePlannerDirtyRef.current) {
       ignorePlannerDirtyRef.current = false;
       return;
@@ -590,6 +597,7 @@ export default function BudgetToolPage() {
               onSaved={handlePlannerSaved}
             />
             <BudgetPlanner
+              key={loadPlanToken}
               items={items}
               onPlanChange={handlePlanChange}
               onPlannerStateChange={handlePlannerStateChange}

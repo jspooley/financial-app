@@ -73,9 +73,7 @@ function AppointmentsPageContent() {
 
   const visibleAppointments = useMemo(() => {
     if (filter === "pending") {
-      return appointments.filter(
-        (row) => !row.job_won && !row.job_lost && isAppointmentsBucket(row)
-      );
+      return appointments.filter(isAppointmentsBucket);
     }
     if (filter === "won") {
       return appointments.filter((row) => row.job_won);

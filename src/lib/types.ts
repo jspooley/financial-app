@@ -208,11 +208,15 @@ export function isPendingProposalSent(
   );
 }
 
-/** Main appointments bucket — excludes rows already in the proposal-sent pipeline. */
+/** Main appointments bucket — open appointments only (not proposal pipeline, won, or lost). */
 export function isAppointmentsBucket(
-  appointment: Pick<Appointment, "proposal_sent">
+  appointment: Pick<Appointment, "proposal_sent" | "job_won" | "job_lost">
 ): boolean {
-  return !appointment.proposal_sent;
+  return (
+    !appointment.proposal_sent &&
+    !appointment.job_won &&
+    !appointment.job_lost
+  );
 }
 
 export const TRADE_ACCOUNT_OWNERS = ["Molly", "Jess"] as const;

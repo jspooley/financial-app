@@ -37,14 +37,30 @@ export function BudgetPlanner({
     return sortBudgetRooms([...grouped.keys()], BUDGET_ROOM_OPTIONS);
   }, [items]);
 
-  const [includedRooms, setIncludedRooms] = useState<Record<string, boolean>>({});
-  const [expandedRooms, setExpandedRooms] = useState<Record<string, boolean>>({});
-  const [includedItems, setIncludedItems] = useState<Record<string, boolean>>({});
-  const [quantities, setQuantities] = useState<Record<string, number>>({});
-  const [sliderPercents, setSliderPercents] = useState<Record<string, number>>({});
-  const [unitAmounts, setUnitAmounts] = useState<Record<string, number>>({});
+  // Seed from loaded plan on mount (parent remounts via key={loadPlanToken}).
+  const seed =
+    loadPlanToken > 0 && loadedPlanState ? loadedPlanState : null;
+
+  const [includedRooms, setIncludedRooms] = useState<Record<string, boolean>>(
+    () => seed?.includedRooms ?? {}
+  );
+  const [expandedRooms, setExpandedRooms] = useState<Record<string, boolean>>(
+    {}
+  );
+  const [includedItems, setIncludedItems] = useState<Record<string, boolean>>(
+    () => seed?.includedItems ?? {}
+  );
+  const [quantities, setQuantities] = useState<Record<string, number>>(
+    () => seed?.quantities ?? {}
+  );
+  const [sliderPercents, setSliderPercents] = useState<Record<string, number>>(
+    () => seed?.sliderPercents ?? {}
+  );
+  const [unitAmounts, setUnitAmounts] = useState<Record<string, number>>(
+    () => seed?.unitAmounts ?? {}
+  );
   const [amountDrafts, setAmountDrafts] = useState<Record<string, string>>({});
-  const [notes, setNotes] = useState("");
+  const [notes, setNotes] = useState(() => seed?.notes ?? "");
 
   useEffect(() => {
     if (!loadedPlanState || loadPlanToken === 0) return;
@@ -56,61 +72,78 @@ export function BudgetPlanner({
     setUnitAmounts(loadedPlanState.unitAmounts);
     setNotes(loadedPlanState.notes ?? "");
     setAmountDrafts({});
-  }, [loadedPlanState, loadPlanToken]);
+  }, [loadPlanToken]); // eslint-disable-line react-hooks/exhaustive-deps -- apply only on explicit load
 
   useEffect(() => {
     setIncludedRooms((current) => {
+      let changed = false;
       const next = { ...current };
       for (const room of rooms) {
-        if (next[room] === undefined) next[room] = true;
+        if (next[room] === undefined) {
+          next[room] = true;
+          changed = true;
+        }
       }
-      return next;
+      return changed ? next : current;
     });
   }, [rooms]);
 
   useEffect(() => {
     setExpandedRooms((current) => {
+      let changed = false;
       const next = { ...current };
       for (const room of rooms) {
-        if (next[room] === undefined) next[room] = false;
+        if (next[room] === undefined) {
+          next[room] = false;
+          changed = true;
+        }
       }
-      return next;
+      return changed ? next : current;
     });
   }, [rooms]);
 
   useEffect(() => {
     setIncludedItems((current) => {
+      let changed = false;
       const next = { ...current };
       for (const item of items) {
-        if (next[item.id] === undefined) next[item.id] = false;
+        if (next[item.id] === undefined) {
+          next[item.id] = false;
+          changed = true;
+        }
       }
-      return next;
+      return changed ? next : current;
     });
   }, [items]);
 
   useEffect(() => {
     setQuantities((current) => {
+      let changed = false;
       const next = { ...current };
       for (const item of items) {
         if (next[item.id] === undefined) {
           next[item.id] = normalizeBudgetQuantity(item.quantity);
+          changed = true;
         }
       }
-      return next;
+      return changed ? next : current;
     });
   }, [items]);
 
   useEffect(() => {
     setSliderPercents((current) => {
+      let changed = false;
       const next = { ...current };
       for (const item of items) {
         if (next[item.id] === undefined) {
           next[item.id] = BUDGET_SLIDER_DEFAULT_PERCENT;
+          changed = true;
         }
       }
-      return next;
+      return changed ? next : current;
     });
     setUnitAmounts((current) => {
+      let changed = false;
       const next = { ...current };
       for (const item of items) {
         if (next[item.id] === undefined) {
@@ -120,9 +153,10 @@ export function BudgetPlanner({
             item.high_amount,
             BUDGET_SLIDER_DEFAULT_PERCENT
           );
+          changed = true;
         }
       }
-      return next;
+      return changed ? next : current;
     });
   }, [items]);
 

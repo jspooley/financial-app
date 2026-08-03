@@ -112,6 +112,7 @@ export function BudgetClientActions({
         clientId: selectedClientId,
         poId: selectedPoId,
         plannerState,
+        plan,
         grandTotal: budgetAmount,
         pdfElement: pdfRef.current,
       });

@@ -67,6 +67,11 @@ export function mergePaymentCompanionsOntoEntries(
       payment_type: companion.payment_type,
       payment_amount: companion.payment_amount,
       payment_fee: companion.payment_fee,
+      // Keep parent paid/variance; companion cash makes balance math match Payments.
+      paid:
+        entry.paid ||
+        roundMoney(Number(companion.payment_amount) || 0) > 0 ||
+        entry.variance_accepted,
       payment_companion_id: companion.id,
     };
   });

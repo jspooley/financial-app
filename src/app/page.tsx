@@ -52,7 +52,12 @@ export default async function DashboardPage() {
     { data: invoiceHeaders },
   ] = await Promise.all([
     supabase.from("clients").select("*", { count: "exact", head: true }),
-    supabase.from("appointments").select("*", { count: "exact", head: true }).eq("proposal_sent", false),
+    supabase
+      .from("appointments")
+      .select("*", { count: "exact", head: true })
+      .eq("proposal_sent", false)
+      .eq("job_won", false)
+      .eq("job_lost", false),
     supabase.from("appointments").select("*", { count: "exact", head: true }).eq("job_won", true),
     supabase.from("appointments").select("*", { count: "exact", head: true }).eq("job_lost", true),
     supabase
@@ -110,14 +115,14 @@ export default async function DashboardPage() {
     {
       label: "Open Jobs",
       value: jobSummary.openJobs,
-      hint: "Ongoing jobs or unpaid invoices",
-      href: "/ledger",
+      hint: "Unpaid invoices or unbilled work",
+      href: "/ledger?jobs=open",
     },
     {
       label: "Closed Jobs",
       value: jobSummary.closedJobs,
-      hint: "All invoices paid",
-      href: "/ledger",
+      hint: "Invoices paid in full",
+      href: "/ledger?jobs=closed",
     },
   ];
 

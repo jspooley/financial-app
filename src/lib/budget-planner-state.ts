@@ -1,7 +1,9 @@
 import {
   BUDGET_SLIDER_DEFAULT_PERCENT,
+  amountToSliderPercent,
   normalizeBudgetQuantity,
   sliderPercentToAmount,
+  type BudgetPlanSnapshot,
 } from "@/lib/budget-utils";
 import type { BudgetItem } from "@/lib/types";
 
@@ -21,6 +23,8 @@ export interface ClientBudgetPlanSaved extends BudgetPlannerState {
   version: typeof CLIENT_BUDGET_PLAN_VERSION;
   grandTotal: number;
   savedAt: string;
+  /** Authoritative line items at save time; used to restore selections if IDs drift. */
+  snapshot?: BudgetPlanSnapshot;
 }
 
 export function defaultBudgetPlannerState(
@@ -59,6 +63,91 @@ export function defaultBudgetPlannerState(
   };
 }
 
+/**
+ * Prefer the visible plan snapshot when saving so notes edits cannot persist
+ * without the line items currently shown in the PDF/plan.
+ */
+export function alignPlannerStateWithPlan(
+  plan: BudgetPlanSnapshot,
+  plannerState: BudgetPlannerState
+): BudgetPlannerState {
+  const includedRooms = { ...plannerState.includedRooms };
+  const includedItems = { ...plannerState.includedItems };
+  const quantities = { ...plannerState.quantities };
+  const unitAmounts = { ...plannerState.unitAmounts };
+  const sliderPercents = { ...plannerState.sliderPercents };
+
+  for (const room of plan.rooms) {
+    includedRooms[room.room] = true;
+    for (const line of room.lines) {
+      includedItems[line.itemId] = true;
+      quantities[line.itemId] = line.quantity;
+      unitAmounts[line.itemId] = line.unitAmount;
+    }
+  }
+
+  return {
+    includedRooms,
+    includedItems,
+    quantities,
+    sliderPercents,
+    unitAmounts,
+    notes: plan.notes || plannerState.notes,
+  };
+}
+
+function applySnapshotToState(
+  state: BudgetPlannerState,
+  snapshot: BudgetPlanSnapshot | undefined,
+  items: BudgetItem[]
+): BudgetPlannerState {
+  if (!snapshot?.rooms?.length) return state;
+
+  const includedRooms = { ...state.includedRooms };
+  const includedItems = { ...state.includedItems };
+  const quantities = { ...state.quantities };
+  const unitAmounts = { ...state.unitAmounts };
+  const sliderPercents = { ...state.sliderPercents };
+
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const byRoomDescription = new Map(
+    items.map((item) => [`${item.room}::${item.item_description}`, item])
+  );
+
+  for (const room of snapshot.rooms) {
+    includedRooms[room.room] = true;
+    for (const line of room.lines) {
+      const match =
+        byId.get(line.itemId) ??
+        byRoomDescription.get(`${room.room}::${line.description}`);
+      if (!match) continue;
+
+      includedItems[match.id] = true;
+      quantities[match.id] = normalizeBudgetQuantity(line.quantity);
+      unitAmounts[match.id] = line.unitAmount;
+      sliderPercents[match.id] = amountToSliderPercent(
+        match.low_amount,
+        match.medium_amount,
+        match.high_amount,
+        line.unitAmount
+      );
+    }
+  }
+
+  return {
+    ...state,
+    includedRooms,
+    includedItems,
+    quantities,
+    unitAmounts,
+    sliderPercents,
+    notes:
+      typeof snapshot.notes === "string" && snapshot.notes
+        ? snapshot.notes
+        : state.notes,
+  };
+}
+
 export function mergeLoadedBudgetPlan(
   saved: ClientBudgetPlanSaved,
   items: BudgetItem[],
@@ -81,7 +170,7 @@ export function mergeLoadedBudgetPlan(
     );
   }
 
-  return {
+  const merged: BudgetPlannerState = {
     includedRooms: {
       ...defaults.includedRooms,
       ...saved.includedRooms,
@@ -101,11 +190,14 @@ export function mergeLoadedBudgetPlan(
     unitAmounts,
     notes: typeof saved.notes === "string" ? saved.notes : "",
   };
+
+  return applySnapshotToState(merged, saved.snapshot, items);
 }
 
 export function buildClientBudgetPlanSaved(
   state: BudgetPlannerState,
-  grandTotal: number
+  grandTotal: number,
+  snapshot?: BudgetPlanSnapshot
 ): ClientBudgetPlanSaved {
   return {
     version: CLIENT_BUDGET_PLAN_VERSION,
@@ -117,6 +209,59 @@ export function buildClientBudgetPlanSaved(
     notes: state.notes,
     grandTotal,
     savedAt: new Date().toISOString(),
+    ...(snapshot ? { snapshot } : {}),
+  };
+}
+
+function parseSnapshot(value: unknown): BudgetPlanSnapshot | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.rooms) || typeof record.grandTotal !== "number") {
+    return undefined;
+  }
+
+  const rooms = [];
+  for (const roomValue of record.rooms) {
+    if (!roomValue || typeof roomValue !== "object") continue;
+    const room = roomValue as Record<string, unknown>;
+    if (typeof room.room !== "string" || !Array.isArray(room.lines)) continue;
+
+    const lines = [];
+    for (const lineValue of room.lines) {
+      if (!lineValue || typeof lineValue !== "object") continue;
+      const line = lineValue as Record<string, unknown>;
+      if (
+        typeof line.itemId !== "string" ||
+        typeof line.description !== "string" ||
+        typeof line.quantity !== "number" ||
+        typeof line.unitAmount !== "number" ||
+        typeof line.lineTotal !== "number"
+      ) {
+        continue;
+      }
+      lines.push({
+        itemId: line.itemId,
+        description: line.description,
+        quantity: line.quantity,
+        unitAmount: line.unitAmount,
+        lineTotal: line.lineTotal,
+      });
+    }
+
+    if (lines.length === 0) continue;
+    rooms.push({
+      room: room.room,
+      total: typeof room.total === "number" ? room.total : 0,
+      lines,
+    });
+  }
+
+  if (rooms.length === 0) return undefined;
+
+  return {
+    rooms,
+    grandTotal: record.grandTotal,
+    notes: typeof record.notes === "string" ? record.notes : "",
   };
 }
 
@@ -161,6 +306,7 @@ export function parseClientBudgetPlanSaved(
   };
 
   const unitAmountsRaw = objectRecord("unitAmounts");
+  const snapshot = parseSnapshot(record.snapshot);
 
   return {
     version: CLIENT_BUDGET_PLAN_VERSION,
@@ -172,5 +318,6 @@ export function parseClientBudgetPlanSaved(
     notes: typeof record.notes === "string" ? record.notes : "",
     grandTotal: record.grandTotal,
     savedAt: record.savedAt,
+    ...(snapshot ? { snapshot } : {}),
   };
 }

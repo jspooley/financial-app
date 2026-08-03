@@ -9,8 +9,12 @@ import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
-import { isToBeInvoicedLine, normalizePoNumber } from "@/lib/invoice-utils";
+import { isToBeInvoicedLine, jobKeysByStatus, ledgerJobKey, normalizePoNumber } from "@/lib/invoice-utils";
 import { isInvoiceGoodsLine } from "@/lib/coa";
+import {
+  isPaymentCompanionRow,
+  mergePaymentCompanionsOntoEntries,
+} from "@/lib/payment-companions";
 import {
   budgetForClientPo,
   collectClientPoOptions,
@@ -98,6 +102,11 @@ export default function LedgerPage() {
 function LedgerPageContent() {
   const searchParams = useSearchParams();
   const uninvoicedOnly = searchParams.get("uninvoiced") === "1";
+  const jobsFilterParam = searchParams.get("jobs");
+  const jobsFilter =
+    jobsFilterParam === "open" || jobsFilterParam === "closed"
+      ? jobsFilterParam
+      : null;
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [invoicedPoKeys, setInvoicedPoKeys] = useState<Set<string>>(new Set());
   const [clients, setClients] = useState<Client[]>([]);
@@ -120,6 +129,7 @@ function LedgerPageContent() {
     const supabase = createClient();
     const [
       { data: ledgerData, error: ledgerError },
+      { data: paymentCompanions },
       { data: clientData, error: clientError },
       { data: tradeData, error: tradeError },
       { data: clientPoData, error: clientPoError },
@@ -131,6 +141,10 @@ function LedgerPageContent() {
         .select("*, clients(name), trade_partners(company_name)")
         .is("source_ledger_id", null)
         .order("entry_date", { ascending: false }),
+      supabase
+        .from("ledger")
+        .select("*")
+        .not("source_ledger_id", "is", null),
       supabase.from("clients").select("*").order("name", { ascending: true }),
       supabase.from("trade_partners").select("*").order("company_name", { ascending: true }),
       supabase.from("client_po_numbers").select("*").order("po_number", { ascending: true }),
@@ -143,12 +157,18 @@ function LedgerPageContent() {
       setLoadError(error.message);
       setEntries([]);
     } else {
+      const parents = (ledgerData ?? []).map((row) =>
+        normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
+      );
+      const companions = (paymentCompanions ?? [])
+        .map((row) =>
+          normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
+        )
+        .filter(isPaymentCompanionRow);
       setEntries(
-        (ledgerData ?? [])
-          .map((row) =>
-            normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
-          )
-          .filter(isInvoiceGoodsLine)
+        mergePaymentCompanionsOntoEntries(parents, companions).filter(
+          isInvoiceGoodsLine
+        )
       );
     }
     setClients(clientData ?? []);
@@ -280,13 +300,32 @@ function LedgerPageContent() {
     }
   }, [filterClientId, filterPo, filterInvoiceId, poFilterOptions, invoiceIdFilterOptions]);
 
+  const jobKeys = useMemo(
+    () => jobKeysByStatus(entries, { invoicedPoKeys }),
+    [entries, invoicedPoKeys]
+  );
+
   const visibleEntries = useMemo(() => {
     let result = uninvoicedOnly ? entries.filter(isToBeInvoicedLine) : entries;
+    if (jobsFilter) {
+      const keys = jobsFilter === "open" ? jobKeys.open : jobKeys.closed;
+      result = result.filter((entry) => {
+        const key = ledgerJobKey(entry.client_id, entry.po_number);
+        return key != null && keys.has(key);
+      });
+    }
     if (hasActiveFilters) {
       result = result.filter((entry) => entryMatchesLedgerFilters(entry, ledgerFilters));
     }
     return result;
-  }, [entries, uninvoicedOnly, hasActiveFilters, ledgerFilters]);
+  }, [
+    entries,
+    uninvoicedOnly,
+    jobsFilter,
+    jobKeys,
+    hasActiveFilters,
+    ledgerFilters,
+  ]);
 
   const debitEntries = visibleEntries.filter((entry) => entry.credit_debit === "debit");
   const creditEntries = visibleEntries.filter((entry) => entry.credit_debit === "credit");
@@ -387,6 +426,21 @@ function LedgerPageContent() {
         </div>
       )}
 
+      {jobsFilter && !showForm && !loading && (
+        <div className="mb-4 rounded-lg border border-brand-200 bg-brand-50 p-3 text-sm text-slate-800">
+          Showing {jobsFilter === "open" ? "open" : "closed"} jobs (
+          {jobsFilter === "open" ? jobKeys.open.size : jobKeys.closed.size}{" "}
+          {(jobsFilter === "open" ? jobKeys.open.size : jobKeys.closed.size) === 1
+            ? "job"
+            : "jobs"}
+          , {visibleEntries.length}{" "}
+          {visibleEntries.length === 1 ? "line" : "lines"}).{" "}
+          <Link href="/ledger" className="font-medium text-brand-700 hover:underline">
+            Show all ledger entries
+          </Link>
+        </div>
+      )}
+
       {showForm ? (
         clients.length === 0 ? (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900">
@@ -426,6 +480,15 @@ function LedgerPageContent() {
       ) : uninvoicedOnly && visibleEntries.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
           <p>No outstanding items to be invoiced.</p>
+          <Link href="/ledger" className="mt-3 inline-block font-medium text-brand-700 hover:underline">
+            Show all ledger entries
+          </Link>
+        </div>
+      ) : jobsFilter && visibleEntries.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
+          <p>
+            No {jobsFilter === "open" ? "open" : "closed"} jobs to show.
+          </p>
           <Link href="/ledger" className="mt-3 inline-block font-medium text-brand-700 hover:underline">
             Show all ledger entries
           </Link>

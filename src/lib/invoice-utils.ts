@@ -397,37 +397,61 @@ function isLineInvoicedForJob(
   return key ? invoicedPoKeys.has(key) : false;
 }
 
-/** Jobs are grouped by client + PO. Open = any debit line not both invoiced and paid. */
-export function summarizeJobsByStatus(
-  entries: Array<
-    LedgerAmountEntry & {
-      client_id?: string | null;
-      po_number?: string | null;
-    }
-  >,
+/** Jobs are grouped by client + PO.
+ * Open = any billable work still unpaid or not yet invoiced.
+ * Closed = every invoiced line is paid, and no uninvoiced billable amount remains.
+ */
+export type JobStatusEntry = LedgerAmountEntry & {
+  client_id?: string | null;
+  po_number?: string | null;
+  paid?: boolean | null;
+  balance_sheet?: boolean | null;
+};
+
+export function jobKeysByStatus(
+  entries: JobStatusEntry[],
   options?: { invoicedPoKeys?: Set<string> }
-) {
+): { open: Set<string>; closed: Set<string> } {
   const jobHasOpenLine = new Map<string, boolean>();
 
   for (const entry of entries) {
     if (entry.credit_debit !== "debit") continue;
+    // Personal-use S&U lines are not client jobs for open/closed cards.
+    if (entry.balance_sheet) continue;
     const key = ledgerJobKey(entry.client_id, entry.po_number);
     if (!key) continue;
 
-    const complete =
-      isLineInvoicedForJob(entry, options?.invoicedPoKeys) &&
-      isLedgerLineFullyPaid(entry);
-    jobHasOpenLine.set(key, (jobHasOpenLine.get(key) ?? false) || !complete);
+    const invoiced = isLineInvoicedForJob(entry, options?.invoicedPoKeys);
+    let keepsOpen: boolean;
+    if (invoiced) {
+      // Prefer balance math; fall back to DB paid flag (payment cash may live on a
+      // companion row until merged — parent payment_amount is often 0).
+      keepsOpen = !(
+        isLedgerLineFullyPaid(entry) || Boolean(entry.paid)
+      );
+    } else {
+      // Uninvoiced $0 lines (e.g. labor) must not keep a fully paid job open.
+      const toBill = getLedgerInvoicedAmountExcludingPaymentFee(entry);
+      keepsOpen = toBill >= 0.005;
+    }
+    jobHasOpenLine.set(key, (jobHasOpenLine.get(key) ?? false) || keepsOpen);
   }
 
-  let openJobs = 0;
-  let closedJobs = 0;
-  for (const [, hasOpen] of jobHasOpenLine) {
-    if (hasOpen) openJobs += 1;
-    else closedJobs += 1;
+  const open = new Set<string>();
+  const closed = new Set<string>();
+  for (const [key, hasOpen] of jobHasOpenLine) {
+    if (hasOpen) open.add(key);
+    else closed.add(key);
   }
+  return { open, closed };
+}
 
-  return { openJobs, closedJobs };
+export function summarizeJobsByStatus(
+  entries: JobStatusEntry[],
+  options?: { invoicedPoKeys?: Set<string> }
+) {
+  const { open, closed } = jobKeysByStatus(entries, options);
+  return { openJobs: open.size, closedJobs: closed.size };
 }
 
 export const INVOICE_DB_SETUP_SQL = `ALTER TABLE ledger
