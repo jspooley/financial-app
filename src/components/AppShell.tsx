@@ -76,6 +76,7 @@ const reconciliationHref = "/reconciliation";
 const salesUseTaxHref = "/sales-use-tax";
 const plReportHref = "/pl-report";
 const scheduleCHref = "/schedule-c";
+const documentationHref = "/documentation";
 
 function ReportsBox({ pathname }: { pathname: string }) {
   return (
@@ -124,6 +125,26 @@ function ReportsBox({ pathname }: { pathname: string }) {
       >
         <span aria-hidden>🗂️</span>
         Schedule C
+      </Link>
+    </div>
+  );
+}
+
+function DocumentationBox({ pathname }: { pathname: string }) {
+  return (
+    <div className="space-y-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
+      <div className="px-1.5 py-1">
+        <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+          Docs
+        </p>
+      </div>
+      <Link
+        href={documentationHref}
+        className={navLinkClass(pathname === documentationHref)}
+        title="Documentation"
+      >
+        <span aria-hidden>📝</span>
+        Documentation
       </Link>
     </div>
   );
@@ -209,6 +230,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="mt-3">
             <ReportsBox pathname={pathname} />
           </div>
+          <div className="mt-3">
+            <DocumentationBox pathname={pathname} />
+          </div>
         </nav>
 
         <main className="min-w-0 flex-1 overflow-x-hidden">
@@ -217,6 +241,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <TradeAccountBox count={tradeAccountCount} pathname={pathname} />
             <div className="mt-3">
               <ReportsBox pathname={pathname} />
+            </div>
+            <div className="mt-3">
+              <DocumentationBox pathname={pathname} />
             </div>
           </div>
         </main>
