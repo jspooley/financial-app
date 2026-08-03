@@ -27,7 +27,7 @@ import { formatCurrency } from "@/lib/utils";
 type BudgetView = "items" | "planner";
 type ItemsSortBy = "room" | "item";
 
-const EMPTY_PLAN: BudgetPlanSnapshot = { rooms: [], grandTotal: 0 };
+const EMPTY_PLAN: BudgetPlanSnapshot = { rooms: [], grandTotal: 0, notes: "" };
 const PLANNER_DRAFT_STORAGE_KEY = "budget-planner-draft-v2";
 const ITEMS_SORT_STORAGE_KEY = "budget-items-sort-v1";
 const PLANNER_DRAFT_VERSION = 2;
@@ -106,8 +106,17 @@ function isPlannerState(value: unknown): value is BudgetPlannerState {
     !!record.quantities &&
     typeof record.quantities === "object" &&
     !!record.sliderPercents &&
-    typeof record.sliderPercents === "object"
+    typeof record.sliderPercents === "object" &&
+    (record.unitAmounts === undefined || typeof record.unitAmounts === "object")
   );
+}
+
+function normalizePlannerState(state: BudgetPlannerState): BudgetPlannerState {
+  return {
+    ...state,
+    unitAmounts: state.unitAmounts ?? {},
+    notes: state.notes ?? "",
+  };
 }
 
 function readPlannerDraft(): PlannerDraft | null {
@@ -130,7 +139,7 @@ function readPlannerDraft(): PlannerDraft | null {
       version: PLANNER_DRAFT_VERSION,
       clientId: parsed.clientId,
       poId: parsed.poId,
-      plannerState: parsed.plannerState,
+      plannerState: normalizePlannerState(parsed.plannerState),
     };
   } catch {
     return null;
@@ -176,6 +185,8 @@ export default function BudgetToolPage() {
     includedItems: {},
     quantities: {},
     sliderPercents: {},
+    unitAmounts: {},
+    notes: "",
   });
   const [loadedPlanState, setLoadedPlanState] = useState<BudgetPlannerState | null>(null);
   const [loadPlanToken, setLoadPlanToken] = useState(0);
@@ -333,7 +344,7 @@ export default function BudgetToolPage() {
     ignorePlannerDirtyRef.current = true;
     setPlannerDirty(false);
     clearPlannerDraft();
-    setLoadedPlanState(state);
+    setLoadedPlanState(normalizePlannerState(state));
     setLoadPlanToken((token) => token + 1);
   }, []);
 
@@ -469,7 +480,7 @@ export default function BudgetToolPage() {
   return (
     <AppShell>
       <PageHeader
-        title="Budget Tool"
+        title="Quoting Tool"
         description="Manage room budget items and explore save-to-splurge scenarios."
       />
 
@@ -480,7 +491,7 @@ export default function BudgetToolPage() {
             className={viewButtonClass(view === "planner")}
             onClick={showPlannerView}
           >
-            Budget Tool
+            Quoting Tool
           </button>
           <button
             type="button"

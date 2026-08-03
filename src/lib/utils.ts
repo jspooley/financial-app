@@ -102,8 +102,8 @@ export function calculateTaxFromCustomerPrice(
 }
 
 /** Discounted retail subtotal: retail price × (1 − discount %) × qty.
- * Service lines: designer cost × (1 + markup %) × qty (discount_percent is markup).
- * Retail with no trade partner: discount_percent is markup; customer pays full retail × qty. */
+ * Retail with no trade partner: discount_percent is markup; customer pays full retail × qty.
+ * Service lines use the same discount-off-retail math as wholesale (0% = full retail). */
 export function getLedgerMerchandiseAmount(entry: {
   retail_price: number;
   quantity: number;
@@ -113,15 +113,6 @@ export function getLedgerMerchandiseAmount(entry: {
   trade_partner_id?: string | null;
 }) {
   const qty = normalizeQuantity(entry.quantity);
-  if (entry.wholesale_retail === "service") {
-    const designer = Number(entry.designer_cost ?? 0);
-    if (designer > 0) {
-      return roundMoney(
-        calculateRetailPriceFromMarkup(designer, entry.discount_percent) * qty
-      );
-    }
-    return roundMoney(Number(entry.retail_price) * qty);
-  }
   // No-trade-partner retail: markup is stored in discount_percent; do not markdown.
   if (
     entry.wholesale_retail === "retail" &&
@@ -135,7 +126,7 @@ export function getLedgerMerchandiseAmount(entry: {
 }
 
 /** Discounted retail only: retail price × (1 − discount %) × qty.
- * Service lines use designer markup instead of retail markdown. */
+ * No-trade-partner retail uses full retail (markup lives in discount_percent). */
 export function getLedgerCustomerPrice(entry: {
   retail_price: number;
   quantity: number;
@@ -145,9 +136,6 @@ export function getLedgerCustomerPrice(entry: {
   wholesale_retail?: "wholesale" | "retail" | "service";
   trade_partner_id?: string | null;
 }) {
-  if (entry.wholesale_retail === "service") {
-    return getLedgerMerchandiseAmount(entry);
-  }
   if (
     entry.wholesale_retail === "retail" &&
     !(entry.trade_partner_id ?? "").trim()
@@ -285,10 +273,16 @@ type LedgerBalanceEntry = {
   payment_fee?: number;
   payment_amount?: number;
   balance_sheet?: boolean | null;
+  source_ledger_id?: string | null;
 };
 
-/** Invoiced amount (excl. payment fee) — used as P&L / reconciliation revenue. */
-function ledgerRevenueAmount(entry: LedgerBalanceEntry) {
+/** Billed amount (excl. payment fee) — used for reconciliation vs payments, not P&L revenue. */
+export function ledgerLineBilledAmount(
+  entry: LedgerBalanceEntry,
+  invoicedPoKeys?: Set<string>
+) {
+  if (entry.source_ledger_id) return 0;
+  if (!isInvoicedForBalance(entry, invoicedPoKeys)) return 0;
   return getLedgerInvoicedAmountExcludingPaymentFee({
     retail_price: entry.retail_price,
     quantity: entry.quantity,
@@ -300,6 +294,7 @@ function ledgerRevenueAmount(entry: LedgerBalanceEntry) {
     payment_fee: entry.payment_fee ?? 0,
     balance_sheet: entry.balance_sheet,
     designer_cost: entry.designer_cost,
+    trade_partner_id: undefined,
   });
 }
 
@@ -316,21 +311,23 @@ function isInvoicedForBalance(
   return invoicedPoKeys.has(ledgerPoClientKey(entry.client_id, entry.po_number));
 }
 
-/** Whether a ledger line contributes to P&L / reconciliation revenue. */
+/** Whether a ledger line is an invoiced goods/services parent (not a companion). */
 export function isLedgerLineInvoicedForRevenue(
   entry: LedgerBalanceEntry,
   invoicedPoKeys?: Set<string>
 ) {
+  if (entry.source_ledger_id) return false;
   return isInvoicedForBalance(entry, invoicedPoKeys);
 }
 
-/** Revenue for one ledger line: invoiced amount (excl. payment fee) when invoiced, else 0. */
+/** P&L revenue: cash actually received (payment_amount). No payment → no revenue. */
 export function ledgerLineRevenue(
   entry: LedgerBalanceEntry,
-  invoicedPoKeys?: Set<string>
+  _invoicedPoKeys?: Set<string>
 ) {
-  if (!isInvoicedForBalance(entry, invoicedPoKeys)) return 0;
-  return ledgerRevenueAmount(entry);
+  // Payment cash is merged onto the parent; skip companion rows to avoid double-counting.
+  if (entry.source_ledger_id) return 0;
+  return roundMoney(Math.max(0, Number(entry.payment_amount ?? 0)));
 }
 
 /** COGS for one ledger line (P&L): designer cost when invoiced or uninvoiced debit, else 0. */
@@ -338,6 +335,7 @@ export function ledgerLineCogs(
   entry: LedgerBalanceEntry,
   invoicedPoKeys?: Set<string>
 ) {
+  if (entry.source_ledger_id) return 0;
   const designerTotal = getLedgerTotalDesignerCost(entry);
   if (isInvoicedForBalance(entry, invoicedPoKeys)) return designerTotal;
   if (entry.credit_debit === "debit") return designerTotal;
@@ -345,8 +343,8 @@ export function ledgerLineCogs(
 }
 
 /**
- * Invoiced lines: credits = invoiced amount (revenue), debits = designer cost.
- * Net balance = credits − debits. Uninvoiced debits add designer cost only.
+ * Credits = cash received (payment_amount). Debits = designer cost (COGS).
+ * Companion rows are skipped (payment is counted on the merged parent).
  */
 export function sumLedgerCreditsAndDebits(
   entries: LedgerBalanceEntry[],
@@ -354,8 +352,10 @@ export function sumLedgerCreditsAndDebits(
 ) {
   return entries.reduce(
     (acc, entry) => {
+      if (entry.source_ledger_id) return acc;
+
       const designerTotal = getLedgerTotalDesignerCost(entry);
-      const revenue = ledgerRevenueAmount(entry);
+      const revenue = ledgerLineRevenue(entry);
 
       if (isInvoicedForBalance(entry, options?.invoicedPoKeys)) {
         acc.credits += revenue;
@@ -363,6 +363,8 @@ export function sumLedgerCreditsAndDebits(
         return acc;
       }
 
+      // Uninvoiced: still count cash if present; COGS for debits.
+      acc.credits += revenue;
       if (entry.credit_debit === "debit") {
         acc.debits += designerTotal;
       }

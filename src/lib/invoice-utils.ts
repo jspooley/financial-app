@@ -178,6 +178,10 @@ export function getLedgerVarianceBeforeAcceptance(entry: LedgerAmountEntry) {
 /** Accepted variance in current sign convention (derived from payment vs invoiced). */
 export function getLedgerAcceptedVarianceAmount(entry: LedgerAmountEntry) {
   if (!entry.variance_accepted) return 0;
+  // Prefer the amount stored at acceptance. Live recompute needs payment fields on
+  // the same row; after companions those live elsewhere and a bare parent looks unpaid.
+  const stored = roundMoney(Number(entry.variance_amount ?? 0));
+  if (Math.abs(stored) >= 0.005) return stored;
   return getLedgerVarianceBeforeAcceptance(entry);
 }
 
@@ -236,9 +240,17 @@ export function deriveLedgerPaidFlag(entry: {
   });
 }
 
-/** Invoiced debit line (goods/services on an invoice). */
+/** Invoiced debit line (client goods/services). Personal-use S&U lines are excluded. */
 export function isInvoicedDebitLine(entry: LedgerAmountEntry): boolean {
+  if (entry.balance_sheet) return false;
   return entry.credit_debit === "debit" && isLedgerLineInvoiced(entry);
+}
+
+/** Uninvoiced debit line that belongs on the Invoicing outstanding list. */
+export function isToBeInvoicedLine(entry: LedgerAmountEntry): boolean {
+  if (entry.balance_sheet) return false;
+  if (entry.credit_debit && entry.credit_debit !== "debit") return false;
+  return isLedgerLineUninvoiced(entry);
 }
 
 function sumLineAmounts(entries: LedgerAmountEntry[]) {
@@ -334,7 +346,7 @@ export function isInvoicePaidByBalance(lines: LedgerAmountEntry[]): boolean {
 }
 
 export function summarizeToBeInvoiced(entries: LedgerAmountEntry[]) {
-  const lines = entries.filter(isLedgerLineUninvoiced);
+  const lines = entries.filter(isToBeInvoicedLine);
   return {
     count: lines.length,
     amount: roundMoney(
@@ -348,10 +360,7 @@ export function summarizeToBeInvoiced(entries: LedgerAmountEntry[]) {
 
 export function summarizeInvoicedUnpaid(entries: LedgerAmountEntry[]) {
   const lines = entries.filter(
-    (entry) =>
-      entry.credit_debit === "debit" &&
-      isLedgerLineInvoiced(entry) &&
-      isLedgerLineUnpaid(entry)
+    (entry) => isInvoicedDebitLine(entry) && isLedgerLineUnpaid(entry)
   );
   return {
     count: lines.length,

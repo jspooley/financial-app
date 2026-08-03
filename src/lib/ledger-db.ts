@@ -8,8 +8,9 @@ import type {
   WholesaleRetail,
 } from "./types";
 import { deriveLedgerPaidFlag } from "./invoice-utils";
-import { calculateTaxFromCustomerPrice, calculateCustomerPrice, calculateRetailPriceFromMarkup, getLedgerTotalDesignerCost, normalizeQuantity, roundMoney } from "./utils";
+import { calculateTaxFromCustomerPrice, calculateCustomerPrice, getLedgerTotalDesignerCost, normalizeQuantity, roundMoney } from "./utils";
 import { COA_COGS_CATEGORY } from "./payment-companions";
+import { COA_SU_TAX_PAYABLE_CATEGORY } from "./coa";
 
 export type { LedgerDbRow, LedgerInsert };
 
@@ -217,17 +218,13 @@ export function ledgerFormToDb(values: {
   const quantity = normalizeQuantity(Number(values.quantity) || 1);
   const designerCost = Number(values.designer_cost) || 0;
   const discountPercent = Number(values.discount_percent) || 0;
-  const isService = values.wholesale_retail === "service";
   const noTradeRetail =
     values.wholesale_retail === "retail" &&
     !(values.trade_partner_id ?? "").trim();
-  const retailPrice = isService
-    ? calculateRetailPriceFromMarkup(designerCost, discountPercent)
-    : Number(values.retail_price) || 0;
-  const merchandise =
-    isService || noTradeRetail
-      ? roundMoney(retailPrice * quantity)
-      : calculateCustomerPrice(retailPrice, quantity, discountPercent);
+  const retailPrice = Number(values.retail_price) || 0;
+  const merchandise = noTradeRetail
+    ? roundMoney(retailPrice * quantity)
+    : calculateCustomerPrice(retailPrice, quantity, discountPercent);
   const taxRate = Number(values.sand_u_tax ?? 0) || 0;
   const tax =
     values.wholesale_retail === "wholesale"
@@ -256,21 +253,21 @@ export function ledgerFormToDb(values: {
     po_number: values.po_number.trim(),
     purchaser: values.purchaser,
     department: values.department ?? "Interior Design",
-      coa_category:
-        designerCost > 0
-          ? COA_COGS_CATEGORY
-          : (values.coa_category ?? "").trim() || null,
-      // Tax / shipping / fees live on their own companion rows (migration 061).
-      // Personal use purchases are funded personally, so the register shows no
-      // debit — only the owner contribution covering the tax owed.
-      debit_amount:
-        designerCost > 0 && !values.balance_sheet
-          ? getLedgerTotalDesignerCost({
-              designer_cost: designerCost,
-              quantity,
-            })
-          : 0,
-      credit_amount: 0,
+    // Goods lines: business purchases → 101 COGS; personal use → 400 S&U payable.
+    coa_category: values.balance_sheet
+      ? COA_SU_TAX_PAYABLE_CATEGORY
+      : COA_COGS_CATEGORY,
+    // Tax / shipping / fees live on their own companion rows (migration 061).
+    // Personal use purchases are funded personally, so the register shows no
+    // debit — only the owner contribution covering the tax owed.
+    debit_amount:
+      designerCost > 0 && !values.balance_sheet
+        ? getLedgerTotalDesignerCost({
+            designer_cost: designerCost,
+            quantity,
+          })
+        : 0,
+    credit_amount: 0,
   };
 }
 

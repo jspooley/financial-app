@@ -8,10 +8,10 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
 import { ledgerFormToDb, normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import { syncCostCompanions } from "@/lib/cost-companions";
+import { syncPaymentCompanionFromParent } from "@/lib/payment-companions";
 import { deriveLedgerPaidFlag } from "@/lib/invoice-utils";
 import {
   CASHFLOW_DEPARTMENTS,
-  type ChartOfAccount,
   type Client,
   type ClientPoNumber,
   type LedgerEntry,
@@ -59,7 +59,7 @@ const schema = z
     entry_date: z.string().min(1, "Date is required"),
     designer_cost: z.coerce
       .number({ invalid_type_error: "Designer cost is required" })
-      .positive("Designer cost must be greater than 0")
+      .min(0, "Designer cost cannot be negative")
       .transform(roundMoney),
     quantity: z.coerce
       .number()
@@ -86,20 +86,27 @@ const schema = z
     department: z.enum(CASHFLOW_DEPARTMENTS, {
       required_error: "Department is required",
     }),
-    coa_category: z.string().min(1, "Chart of Accounts category is required"),
     income_statement: z.boolean(),
-    balance_sheet: z.boolean(),
   })
   .superRefine((values, ctx) => {
     const usesMarkup =
-      values.wholesale_retail === "service" ||
-      (values.wholesale_retail === "retail" &&
-        !(values.trade_partner_id ?? "").trim());
+      values.wholesale_retail === "retail" &&
+      !(values.trade_partner_id ?? "").trim();
     if (!usesMarkup && values.discount_percent > 100) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "Discount cannot exceed 100%",
         path: ["discount_percent"],
+      });
+    }
+    if (
+      values.wholesale_retail !== "service" &&
+      values.designer_cost <= 0
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Designer cost must be greater than 0",
+        path: ["designer_cost"],
       });
     }
   });
@@ -223,7 +230,6 @@ function CurrencyField({
 interface LedgerFormProps {
   clients: Client[];
   tradePartners: TradePartner[];
-  chartOfAccounts: ChartOfAccount[];
   clientPoNumbers: ClientPoNumber[];
   ledgerEntries?: LedgerEntry[];
   defaultPurchaser?: Purchaser | null;
@@ -235,7 +241,6 @@ interface LedgerFormProps {
 export function LedgerForm({
   clients,
   tradePartners,
-  chartOfAccounts,
   clientPoNumbers,
   ledgerEntries = [],
   defaultPurchaser,
@@ -261,8 +266,8 @@ export function LedgerForm({
     defaultValues: {
       entry_date: initial?.entry_date ?? new Date().toISOString().slice(0, 10),
       designer_cost:
-        initial?.designer_cost != null && initial.designer_cost > 0
-          ? roundMoney(initial.designer_cost)
+        initial != null && initial.designer_cost != null
+          ? roundMoney(Number(initial.designer_cost) || 0)
           : ("" as unknown as number),
       quantity: initial?.quantity ?? 1,
       credit_debit: initial?.credit_debit ?? "debit",
@@ -280,9 +285,7 @@ export function LedgerForm({
       po_number: initial?.po_number?.trim() ?? "",
       purchaser: initial?.purchaser ?? defaultPurchaser ?? "Jess",
       department: initial?.department ?? "Interior Design",
-      coa_category: initial?.coa_category ?? "101 COGS",
       income_statement: initial?.income_statement ?? false,
-      balance_sheet: initial?.balance_sheet ?? false,
     },
   });
 
@@ -295,7 +298,6 @@ export function LedgerForm({
   const shippingAmount = useWatch({ control, name: "shipping_receiving_amount" });
   const retailPrice = useWatch({ control, name: "retail_price" });
   const designerCost = useWatch({ control, name: "designer_cost" });
-  const balanceSheet = useWatch({ control, name: "balance_sheet" });
   const storedPaymentFee = roundMoney(initial?.payment_fee ?? 0);
   const skipPoReset = useRef(true);
   const previousClientIdRef = useRef<string | null>(null);
@@ -314,14 +316,15 @@ export function LedgerForm({
   const isService = wholesaleRetail === "service";
   const isRetail = wholesaleRetail === "retail";
   const hasTradePartner = Boolean(selectedTradePartnerId);
-  /** Service, or retail without a trade partner: % field is markup; customer pays full retail. */
-  const usesCostMarkup = isService || (isRetail && !hasTradePartner);
+  /** Retail without a trade partner: % field is markup; customer pays full retail. */
+  const usesCostMarkup = isRetail && !hasTradePartner;
 
   const selectedClient = useMemo(
     () => clients.find((client) => client.id === selectedClientId),
     [clients, selectedClientId]
   );
   const clientSandUTaxRate = Number(selectedClient?.sand_u_tax ?? 0) || 0;
+  const isPersonalUse = Boolean(selectedClient?.personal_use);
 
   const autoTax = useMemo(
     () =>
@@ -384,15 +387,7 @@ export function LedgerForm({
       ? numericDesignerCost
       : autoDesignerCost;
 
-  const effectiveRetailPrice = isService
-    ? markedUpRetailPrice
-    : numericRetailPrice;
-
-  useEffect(() => {
-    setValue("balance_sheet", Boolean(selectedClient?.personal_use), {
-      shouldValidate: true,
-    });
-  }, [selectedClientId, selectedClient?.personal_use, setValue]);
+  const effectiveRetailPrice = numericRetailPrice;
 
   const poOptions = useMemo(() => {
     const registered = poNumbersForClient(clientPoNumbers, selectedClientId);
@@ -402,22 +397,14 @@ export function LedgerForm({
 
   const customerPrice = useMemo(() => {
     if (usesCostMarkup) {
-      const unit = isService ? markedUpRetailPrice : numericRetailPrice;
-      return roundMoney(unit * numericQty);
+      return roundMoney(numericRetailPrice * numericQty);
     }
     return calculateCustomerPrice(
       numericRetailPrice,
       numericQty,
       numericDiscount
     );
-  }, [
-    usesCostMarkup,
-    isService,
-    markedUpRetailPrice,
-    numericRetailPrice,
-    numericQty,
-    numericDiscount,
-  ]);
+  }, [usesCostMarkup, numericRetailPrice, numericQty, numericDiscount]);
 
   const invoicedAmount = useMemo(
     () =>
@@ -429,7 +416,7 @@ export function LedgerForm({
         shipping_receiving_amount: numericShipping,
         wholesale_retail: wholesaleRetail,
         payment_fee: storedPaymentFee,
-        balance_sheet: Boolean(balanceSheet),
+        balance_sheet: isPersonalUse,
         designer_cost: numericDesignerCost,
         trade_partner_id: selectedTradePartnerId || null,
       }),
@@ -441,7 +428,7 @@ export function LedgerForm({
       numericShipping,
       wholesaleRetail,
       storedPaymentFee,
-      balanceSheet,
+      isPersonalUse,
       numericDesignerCost,
       selectedTradePartnerId,
     ]
@@ -483,7 +470,7 @@ export function LedgerForm({
       variance_accepted: initial.variance_accepted,
       variance_amount: initial.variance_amount,
       // Personal use lines invoice tax only, so the balance must use the same basis.
-      balance_sheet: Boolean(balanceSheet),
+      balance_sheet: isPersonalUse,
     });
   }, [
     initial,
@@ -496,18 +483,12 @@ export function LedgerForm({
     numericDesignerCost,
     selectedTradePartnerId,
     storedPaymentFee,
-    balanceSheet,
+    isPersonalUse,
   ]);
 
   useEffect(() => {
     setValue("tax_amount", effectiveTax, { shouldValidate: true });
   }, [effectiveTax, setValue]);
-
-  useEffect(() => {
-    if (!isService) return;
-    if (Math.abs(numericRetailPrice - markedUpRetailPrice) < 0.005) return;
-    setValue("retail_price", markedUpRetailPrice, { shouldValidate: true });
-  }, [isService, markedUpRetailPrice, numericRetailPrice, setValue]);
 
   // Retail with no trade partner: retail follows markup when markup is the source.
   useEffect(() => {
@@ -723,7 +704,6 @@ export function LedgerForm({
         po_number: poNumber,
         purchaser: purchaserForSave,
         department: values.department,
-        coa_category: values.coa_category,
         balance_sheet: personalUse,
       }),
       income_statement: values.income_statement,
@@ -784,13 +764,23 @@ export function LedgerForm({
     }
 
     // Tax and shipping each get their own CoA-classified companion row.
-    const companionError = await syncCostCompanions(
-      supabase,
-      normalizeLedgerRow(data as LedgerDbRow & Record<string, unknown>)
+    const savedParent = normalizeLedgerRow(
+      data as LedgerDbRow & Record<string, unknown>
     );
+    const companionError = await syncCostCompanions(supabase, savedParent);
     if (companionError) {
       setSaving(false);
       setError(companionError);
+      return;
+    }
+
+    const paymentCompanionError = await syncPaymentCompanionFromParent(
+      supabase,
+      savedParent
+    );
+    if (paymentCompanionError) {
+      setSaving(false);
+      setError(paymentCompanionError);
       return;
     }
 
@@ -833,6 +823,11 @@ export function LedgerForm({
                 </option>
               ))}
             </SelectField>
+            {isPersonalUse && (
+              <p className="mt-1.5 text-sm text-slate-600">
+                This entry is for personal use only.
+              </p>
+            )}
           </div>
 
           <div className="lg:col-start-2 lg:row-start-1 lg:row-span-2">
@@ -872,27 +867,6 @@ export function LedgerForm({
           </div>
 
           <div className="lg:col-start-1 lg:row-start-4">
-            <SelectField
-              label="CoA Category"
-              required
-              error={errors.coa_category?.message}
-              hint={
-                chartOfAccounts.length === 0
-                  ? "Add categories on the Chart of Accounts page first."
-                  : undefined
-              }
-              {...register("coa_category")}
-            >
-              <option value="">Select category...</option>
-              {chartOfAccounts.map((entry) => (
-                <option key={entry.id} value={entry.category}>
-                  {entry.category}
-                </option>
-              ))}
-            </SelectField>
-          </div>
-
-          <div className="lg:col-start-1 lg:row-start-5">
             <SelectField
               label="Credit / Debit"
               error={errors.credit_debit?.message}
@@ -968,17 +942,15 @@ export function LedgerForm({
             control={control}
             name="retail_price"
             label="Retail Price"
-            required={!isService}
-            disabled={isService}
+            required
             hint={
               isService
-                ? "Marked-up from designer cost × (1 + markup %)."
+                ? "Customer-facing service price before discount %."
                 : hasTradePartner
                   ? `Enter retail, or enter designer cost to auto-fill as designer ÷ (1 − ${formatPercent(tradePartnerDiscount)}).`
                   : "No trade partner: set retail or markup % (customer pays full retail × qty)."
             }
             error={errors.retail_price?.message}
-            computedValue={isService ? markedUpRetailPrice : undefined}
             onValueChange={isService ? undefined : resetDesignerCostAutoCalc}
           />
           <InputField
@@ -1012,10 +984,11 @@ export function LedgerForm({
             control={control}
             name="designer_cost"
             label="Designer Cost"
-            required
+            required={!isService}
+            allowZero={isService}
             hint={
               isService
-                ? "Enter designer/service cost. Markup % sets retail and customer price."
+                ? "Optional. Use 0 when the service has no designer cost."
                 : hasTradePartner
                   ? `From retail: retail × (1 − ${formatPercent(tradePartnerDiscount)}). Or enter designer cost to fill retail.`
                   : "No trade partner: enter cost; markup % or retail sets the sell price."
@@ -1049,9 +1022,7 @@ export function LedgerForm({
               disabled
               hint={
                 usesCostMarkup
-                  ? isService
-                    ? "= Designer cost × (1 + Markup %) × Qty"
-                    : "= Retail Price × Qty (full retail)"
+                  ? "= Retail Price × Qty (full retail)"
                   : "=( Retail Price x Qty ) x (1 - Discount %)"
               }
             />
@@ -1066,7 +1037,7 @@ export function LedgerForm({
                   required
                   hint={
                     isService
-                      ? "Marks up designer cost to retail/customer price."
+                      ? "0% = customer pays full retail. Applied as (retail × qty) × (1 − discount %)."
                       : isRetail && !hasTradePartner
                         ? "((retail − designer) ÷ designer) × 100. Edit to set retail from cost, or set retail to auto-fill."
                         : hasTradePartner
@@ -1151,7 +1122,7 @@ export function LedgerForm({
               readOnly
               disabled
               hint={
-                balanceSheet
+                isPersonalUse
                   ? "Personal use: tax amount only"
                   : "Customer price × qty + shipping + payment fee + tax amount"
               }
@@ -1162,17 +1133,6 @@ export function LedgerForm({
         {/* Payment & status (read-only) */}
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
-            <CheckboxField
-              label="Balance Sheet"
-              disabled
-              checked={Boolean(balanceSheet)}
-              readOnly
-              hint={
-                selectedClient?.personal_use
-                  ? "Set automatically for Personal Use clients."
-                  : undefined
-              }
-            />
             <CheckboxField
               label="Invoiced"
               disabled

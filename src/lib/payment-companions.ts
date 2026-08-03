@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   CashflowAccount,
   LedgerEntry,
@@ -79,7 +80,8 @@ export function defaultCheckingAccountForPaidTo(
 
 export function buildPaymentCompanionPayload(
   parent: LedgerEntry,
-  fields: PaymentCompanionFields
+  fields: PaymentCompanionFields,
+  existing?: Pick<LedgerEntry, "coa_category"> | null
 ) {
   const paymentAmount = roundMoney(Number(fields.payment_amount) || 0);
   const paymentFee = roundMoney(Number(fields.payment_fee) || 0);
@@ -90,6 +92,7 @@ export function buildPaymentCompanionPayload(
     parent.clients?.name ||
     parent.invoice_id ||
     "Payment";
+  const preservedCoa = existing?.coa_category?.trim() || null;
 
   return {
     entry_date: datePaid ?? parent.entry_date,
@@ -108,7 +111,8 @@ export function buildPaymentCompanionPayload(
     po_number: parent.po_number,
     purchaser: parent.purchaser,
     department: parent.department ?? "Interior Design",
-    coa_category: COA_SALES_INCOME_CATEGORY,
+    // Keep a cashflow CoA edit (e.g. 300 Owner's Contribution) on re-save.
+    coa_category: preservedCoa || COA_SALES_INCOME_CATEGORY,
     debit_amount: 0,
     credit_amount: paymentAmount,
     // Client payments hit checking for who was paid — not the purchase account
@@ -133,4 +137,70 @@ export function buildPaymentCompanionPayload(
     source_ledger_id: parent.id,
     companion_kind: "payment" as const,
   };
+}
+
+/**
+ * Keep payment companion description (and invoice link fields) aligned with the
+ * goods parent after the parent is edited.
+ */
+export async function syncPaymentCompanionFromParent(
+  supabase: SupabaseClient,
+  parent: LedgerEntry
+): Promise<string | null> {
+  const descriptionBase =
+    parent.description?.trim() ||
+    parent.clients?.name ||
+    parent.invoice_id ||
+    "Payment";
+
+  const { error } = await supabase
+    .from("ledger")
+    .update({
+      description: `${descriptionBase} (payment)`,
+      invoice_id: parent.invoice_id,
+      po_number: parent.po_number,
+      client_id: parent.client_id,
+      purchaser: parent.purchaser,
+    })
+    .eq("source_ledger_id", parent.id)
+    .eq("companion_kind", "payment");
+
+  return error?.message ?? null;
+}
+
+/**
+ * Remove Sales Income payment companion row(s) for a goods/services parent.
+ * Used when payment is cleared or written off via variance (no cash to record).
+ */
+export async function deletePaymentCompanionsForParent(
+  supabase: SupabaseClient,
+  parentId: string,
+  paymentCompanionId?: string | null
+): Promise<string | null> {
+  if (paymentCompanionId) {
+    const { error } = await supabase
+      .from("ledger")
+      .delete()
+      .eq("id", paymentCompanionId);
+    if (error) return error.message;
+  }
+
+  // Also clear by source id in case companion_kind was never backfilled (null)
+  // or payment_companion_id was missing from the merged entry.
+  const { error: byKindError } = await supabase
+    .from("ledger")
+    .delete()
+    .eq("source_ledger_id", parentId)
+    .eq("companion_kind", "payment");
+  if (byKindError) return byKindError.message;
+
+  const { error: nullKindError } = await supabase
+    .from("ledger")
+    .delete()
+    .eq("source_ledger_id", parentId)
+    .is("companion_kind", null)
+    .eq("credit_debit", "credit");
+  if (nullKindError) return nullKindError.message;
+
+  return null;
 }

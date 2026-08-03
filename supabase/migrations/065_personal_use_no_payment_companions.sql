@@ -1,27 +1,15 @@
--- Personal-use purchases do not move business cash. Owner contributions that
--- cover S&U tax are entered manually on Cashflow as 300 Owner's Contribution.
--- Remove auto-created payment companions for personal-use (balance_sheet) parents
--- so those credits are not double-counted once the manual 300 rows are added.
+-- DO NOT RUN DELETES FROM THIS MIGRATION.
+--
+-- An earlier version of this file deleted payment (and cost) companions linked
+-- to personal-use (balance_sheet) parents. That destroyed real payment rows the
+-- business had to re-enter by hand.
+--
+-- Personal-use handling belongs in application logic (do not auto-create new
+-- Sales Income companions for balance_sheet parents). Existing companions must
+-- be left in place.
+--
+-- This file is intentionally a no-op so it is never destructive if applied.
 
-DELETE FROM ledger AS companion
-WHERE companion.companion_kind = 'payment'
-  AND companion.source_ledger_id IS NOT NULL
-  AND EXISTS (
-    SELECT 1
-    FROM ledger AS parent
-    WHERE parent.id = companion.source_ledger_id
-      AND COALESCE(parent.balance_sheet, false) = true
-  );
-
--- Cost companions on personal-use parents are also non-cash for the business.
-DELETE FROM ledger AS companion
-WHERE companion.companion_kind IN ('shipping', 'fee', 'tax')
-  AND companion.source_ledger_id IS NOT NULL
-  AND EXISTS (
-    SELECT 1
-    FROM ledger AS parent
-    WHERE parent.id = companion.source_ledger_id
-      AND COALESCE(parent.balance_sheet, false) = true
-  );
+SELECT 1;
 
 NOTIFY pgrst, 'reload schema';

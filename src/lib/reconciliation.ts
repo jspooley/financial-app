@@ -17,7 +17,7 @@ import { computePlTotals } from "./pl-report";
 import type { Invoice, LedgerEntry, TradePartner } from "./types";
 import {
   isLedgerLineInvoicedForRevenue,
-  ledgerLineRevenue,
+  ledgerLineBilledAmount,
   roundMoney,
 } from "./utils";
 
@@ -376,7 +376,7 @@ export function buildReconciliationReport(
   );
   const ytdPlEntries = ytdEntries.filter((entry) => !entry.balance_sheet);
 
-  // Same revenue as P&L YTD: invoiced amount on invoiced lines (excl. balance sheet / fees).
+  // Same cash revenue as P&L YTD (payment amounts received).
   const revenueTotal = computePlTotals(ytdEntries, invoicedPoKeys).revenue;
 
   const invoicedDebits = ledgerEntries.filter((entry) => isInvoicedDebitLine(entry));
@@ -493,13 +493,13 @@ export function buildReconciliationReport(
       const paymentAmount = roundMoney(Number(entry.payment_amount ?? 0));
       const fee = paymentFeeAmount(entry);
       const under = acceptedVarianceUnderpayment(entry);
-      const revenueAmount = ledgerLineRevenue(entry, invoicedPoKeys);
-      // Compare revenue to payment after removing fee and accepted underpayment.
-      // Overpayments (payment above revenue + fee − under) are excluded from the gap.
+      const billedAmount = ledgerLineBilledAmount(entry, invoicedPoKeys);
+      // Compare billed amount to payment after removing fee and accepted underpayment.
+      // Overpayments (payment above billed + fee − under) are excluded from the gap.
       const paymentTowardRevenue = roundMoney(paymentAmount - fee);
-      const expectedRevenueCash = roundMoney(revenueAmount - under);
+      const expectedRevenueCash = roundMoney(billedAmount - under);
       const rawDifference = roundMoney(expectedRevenueCash - paymentTowardRevenue);
-      // Only under-collection of revenue; fees and overpayments are not this gap.
+      // Only under-collection of billed amount; fees and overpayments are not this gap.
       const difference = rawDifference > 0 ? rawDifference : 0;
       return {
         id: entry.id,
@@ -508,10 +508,10 @@ export function buildReconciliationReport(
         invoiceId: entry.invoice_id?.trim() || "—",
         description: entry.description?.trim() || "—",
         poNumber: entry.po_number?.trim() || "—",
-        invoicedAmount: revenueAmount,
+        invoicedAmount: billedAmount,
         paymentsReceived: paymentTowardRevenue,
         paymentAmount,
-        revenueAmount,
+        revenueAmount: billedAmount,
         difference,
       };
     })

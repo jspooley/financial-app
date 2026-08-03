@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
-import { isLedgerLineUninvoiced, normalizePoNumber } from "@/lib/invoice-utils";
+import { isToBeInvoicedLine, normalizePoNumber } from "@/lib/invoice-utils";
 import { isInvoiceGoodsLine } from "@/lib/coa";
 import {
   budgetForClientPo,
@@ -21,7 +21,7 @@ import { ledgerDetailFields, ledgerDetailColumns, ledgerDebitColumns, ledgerDebi
 import { computePlTotals } from "@/lib/pl-report";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
-import type { ChartOfAccount, Client, ClientPoNumber, LedgerEntry, TradePartner } from "@/lib/types";
+import type { Client, ClientPoNumber, LedgerEntry, TradePartner } from "@/lib/types";
 import {
   formatCurrency,
   getLedgerCustomerPrice,
@@ -102,7 +102,6 @@ function LedgerPageContent() {
   const [invoicedPoKeys, setInvoicedPoKeys] = useState<Set<string>>(new Set());
   const [clients, setClients] = useState<Client[]>([]);
   const [tradePartners, setTradePartners] = useState<TradePartner[]>([]);
-  const [chartOfAccounts, setChartOfAccounts] = useState<ChartOfAccount[]>([]);
   const [clientPoNumbers, setClientPoNumbers] = useState<ClientPoNumber[]>([]);
   const [defaultPurchaser, setDefaultPurchaser] = useState<"Jess" | "Molly" | null>(
     null
@@ -123,7 +122,6 @@ function LedgerPageContent() {
       { data: ledgerData, error: ledgerError },
       { data: clientData, error: clientError },
       { data: tradeData, error: tradeError },
-      { data: chartData, error: chartError },
       { data: clientPoData, error: clientPoError },
       { data: invoiceHeaders },
       { data: userData },
@@ -135,7 +133,6 @@ function LedgerPageContent() {
         .order("entry_date", { ascending: false }),
       supabase.from("clients").select("*").order("name", { ascending: true }),
       supabase.from("trade_partners").select("*").order("company_name", { ascending: true }),
-      supabase.from("chart_of_accounts").select("*").order("category", { ascending: true }),
       supabase.from("client_po_numbers").select("*").order("po_number", { ascending: true }),
       supabase.from("invoicing").select("client_id, po_number"),
       supabase.auth.getUser(),
@@ -156,7 +153,6 @@ function LedgerPageContent() {
     }
     setClients(clientData ?? []);
     setTradePartners(tradeData ?? []);
-    setChartOfAccounts(chartData ?? []);
     setClientPoNumbers(clientPoData ?? []);
     setInvoicedPoKeys(
       new Set(
@@ -171,13 +167,6 @@ function LedgerPageContent() {
         (current) =>
           current ??
           "PO numbers table not found. Run migration 024_client_po_numbers.sql in Supabase."
-      );
-    }
-    if (chartError) {
-      setLoadError(
-        (current) =>
-          current ??
-          "Chart of accounts table not found. Run migration 054_chart_of_accounts.sql in Supabase."
       );
     }
     setDefaultPurchaser(purchaserFromEmail(userData.user?.email));
@@ -292,7 +281,7 @@ function LedgerPageContent() {
   }, [filterClientId, filterPo, filterInvoiceId, poFilterOptions, invoiceIdFilterOptions]);
 
   const visibleEntries = useMemo(() => {
-    let result = uninvoicedOnly ? entries.filter(isLedgerLineUninvoiced) : entries;
+    let result = uninvoicedOnly ? entries.filter(isToBeInvoicedLine) : entries;
     if (hasActiveFilters) {
       result = result.filter((entry) => entryMatchesLedgerFilters(entry, ledgerFilters));
     }
@@ -417,7 +406,6 @@ function LedgerPageContent() {
             key={editing?.id ?? "new"}
             clients={clients}
             tradePartners={tradePartners}
-            chartOfAccounts={chartOfAccounts}
             clientPoNumbers={clientPoNumbers}
             ledgerEntries={entries}
             defaultPurchaser={defaultPurchaser}

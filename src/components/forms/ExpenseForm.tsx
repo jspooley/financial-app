@@ -5,7 +5,7 @@ import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
-import { isCogsCoa } from "@/lib/coa";
+import { isCashflowOperatingCoa, isCogsCoa, isOperatingExpenseCoa } from "@/lib/coa";
 import {
   CASHFLOW_ACCOUNTS,
   CASHFLOW_DEPARTMENTS,
@@ -61,11 +61,12 @@ interface ExpenseFormProps {
 
 function defaultsForCoaCategory(coaCategory: string) {
   const isCogs = isCogsCoa(coaCategory);
+  const isEquityOrTransfer = isCashflowOperatingCoa(coaCategory) && !isOperatingExpenseCoa(coaCategory);
   return {
     // Operating expenses (200-series) hit the P&L / register as cash out.
-    // Balance Sheet stays off unless the user opts in (equity / transfers).
-    expense: !isCogs,
-    balance_sheet: false,
+    // 300-series equity / transfers default to Balance Sheet (still shown on Cashflow).
+    expense: !isCogs && !isEquityOrTransfer,
+    balance_sheet: isEquityOrTransfer,
   };
 }
 
@@ -328,7 +329,7 @@ export function ExpenseForm({
         >
           Cancel
         </Button>
-        {initial && (
+        {initial && onDeleted && (
           <Button
             type="button"
             variant="danger"

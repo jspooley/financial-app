@@ -7,10 +7,8 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { coaAccountNumber } from "@/lib/coa";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 import { createClient } from "@/lib/supabase/client";
-import type { ChartOfAccount, LedgerEntry, Purchaser } from "@/lib/types";
+import type { ChartOfAccount, LedgerEntry } from "@/lib/types";
 import { formatCurrency, roundMoney } from "@/lib/utils";
-
-type PurchaserFilter = "" | Purchaser;
 
 type ScheduleCRow = {
   category: string;
@@ -48,7 +46,6 @@ export default function ScheduleCPage() {
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [chartOfAccounts, setChartOfAccounts] = useState<ChartOfAccount[]>([]);
   const [year, setYear] = useState(currentYear);
-  const [purchaser, setPurchaser] = useState<PurchaserFilter>("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -90,13 +87,8 @@ export default function ScheduleCPage() {
   }, [currentYear, entries]);
 
   const filteredEntries = useMemo(
-    () =>
-      entries.filter(
-        (entry) =>
-          entry.entry_date.startsWith(`${year}-`) &&
-          (!purchaser || entry.purchaser === purchaser)
-      ),
-    [entries, purchaser, year]
+    () => entries.filter((entry) => entry.entry_date.startsWith(`${year}-`)),
+    [entries, year]
   );
 
   const rows = useMemo<ScheduleCRow[]>(() => {
@@ -191,7 +183,7 @@ export default function ScheduleCPage() {
       />
 
       <section className="mb-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid gap-4 sm:grid-cols-2 sm:max-w-xl">
+        <div className="max-w-xs">
           <label className="block text-sm">
             <span className="mb-1 block font-medium text-slate-900">Year</span>
             <select
@@ -204,20 +196,6 @@ export default function ScheduleCPage() {
                   {option}
                 </option>
               ))}
-            </select>
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block font-medium text-slate-900">Designer</span>
-            <select
-              value={purchaser}
-              onChange={(event) =>
-                setPurchaser(event.target.value as PurchaserFilter)
-              }
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
-            >
-              <option value="">Jess and Molly</option>
-              <option value="Jess">Jess</option>
-              <option value="Molly">Molly</option>
             </select>
           </label>
         </div>
@@ -256,7 +234,8 @@ export default function ScheduleCPage() {
             <p className="mb-4 text-sm text-slate-600">
               Uses posted debit and credit amounts by entry date. Balance-sheet,
               equity (300-series), and liability (400-series) activity is shown for
-              review but excluded from Schedule C net profit.
+              review but excluded from Schedule C net profit. Per Designer is half
+              of the Schedule C amount.
             </p>
             <DataTable
               stickyHeader
@@ -268,6 +247,7 @@ export default function ScheduleCPage() {
                 { key: "debits", label: "Debits" },
                 { key: "credits", label: "Credits" },
                 { key: "scheduleC", label: "Schedule C Amount" },
+                { key: "perDesigner", label: "Per Designer" },
               ]}
               rows={rows.map((row) => ({
                 category: row.category,
@@ -279,6 +259,10 @@ export default function ScheduleCPage() {
                   row.treatment === "Excluded from Schedule C"
                     ? "—"
                     : formatCurrency(row.scheduleCAmount),
+                perDesigner:
+                  row.treatment === "Excluded from Schedule C"
+                    ? "—"
+                    : formatCurrency(roundMoney(row.scheduleCAmount / 2)),
               }))}
               emptyMessage="No chart of accounts categories found."
             />

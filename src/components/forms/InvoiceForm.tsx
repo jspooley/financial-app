@@ -14,6 +14,7 @@ import {
   INVOICE_DB_SETUP_SQL,
   isInvoiceFullyPaid,
   isLedgerLineUninvoiced,
+  isToBeInvoicedLine,
   nextInvoiceSequence,
   parseInvoiceDbError,
   poNumbersMatch,
@@ -194,9 +195,11 @@ export function InvoiceForm({
     const allLines = (ledgerData ?? [])
       .map((row) => normalizeLedgerRow(row))
       .filter(isInvoiceGoodsLine);
-    setUninvoicedLines(allLines.filter((line) => isLedgerLineUninvoiced(line)));
+    setUninvoicedLines(allLines.filter((line) => isToBeInvoicedLine(line)));
     setInvoicedLines(
-      allLines.filter((line) => !isLedgerLineUninvoiced(line)) as InvoiceLineItem[]
+      allLines.filter(
+        (line) => !isLedgerLineUninvoiced(line) && !line.balance_sheet
+      ) as InvoiceLineItem[]
     );
 
     setLoadingLines(false);

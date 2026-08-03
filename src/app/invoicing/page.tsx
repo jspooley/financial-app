@@ -15,7 +15,7 @@ import { createClient } from "@/lib/supabase/client";
 import { isInvoiceGoodsLine } from "@/lib/coa";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { InvoiceLineItem } from "@/lib/invoice-utils";
-import { getLedgerLinesForInvoice, invoiceLineTotal, isInvoiceFullyPaid, isInvoicedDebitLine, isLedgerLineUninvoiced, normalizeInvoiceId, sumInvoiceHistoryTotal, summarizeToBeInvoiced } from "@/lib/invoice-utils";
+import { getLedgerLinesForInvoice, invoiceLineTotal, isInvoiceFullyPaid, isInvoicedDebitLine, isToBeInvoicedLine, normalizeInvoiceId, sumInvoiceHistoryTotal, summarizeToBeInvoiced } from "@/lib/invoice-utils";
 import type { Client, Invoice, LedgerEntry } from "@/lib/types";
 import { formatCurrency, formatDate, roundMoney } from "@/lib/utils";
 
@@ -78,7 +78,7 @@ export default function InvoicingPage() {
   }, [loadData]);
 
   const uninvoicedEntries = useMemo(
-    () => ledgerEntries.filter(isLedgerLineUninvoiced),
+    () => ledgerEntries.filter(isToBeInvoicedLine),
     [ledgerEntries]
   );
 
@@ -97,9 +97,24 @@ export default function InvoicingPage() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [uninvoicedEntries, clients]);
 
+  const filteredInvoices = useMemo(() => {
+    const rows = historyClientId
+      ? invoices.filter((invoice) => invoice.client_id === historyClientId)
+      : invoices;
+    return rows.filter((invoice) => {
+      const invoiceId = normalizeInvoiceId(invoice.invoice_id);
+      if (!invoiceId) return false;
+      return (
+        getLedgerLinesForInvoice(ledgerEntries, invoiceId).filter(
+          isInvoicedDebitLine
+        ).length > 0
+      );
+    });
+  }, [invoices, historyClientId, ledgerEntries]);
+
   const clientsWithInvoices = useMemo(() => {
     const byId = new Map<string, string>();
-    for (const invoice of invoices) {
+    for (const invoice of filteredInvoices) {
       if (!invoice.client_id) continue;
       byId.set(
         invoice.client_id,
@@ -111,7 +126,7 @@ export default function InvoicingPage() {
     return Array.from(byId.entries())
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [invoices, clients]);
+  }, [filteredInvoices, clients]);
 
   const filteredUninvoiced = useMemo(() => {
     const rows = selectedClientId
@@ -124,13 +139,6 @@ export default function InvoicingPage() {
     () => summarizeToBeInvoiced(filteredUninvoiced),
     [filteredUninvoiced]
   );
-
-  const filteredInvoices = useMemo(() => {
-    const rows = historyClientId
-      ? invoices.filter((invoice) => invoice.client_id === historyClientId)
-      : invoices;
-    return rows;
-  }, [invoices, historyClientId]);
 
   const invoiceAmounts = useMemo(() => {
     const amounts: Record<string, number> = {};
@@ -331,7 +339,7 @@ export default function InvoicingPage() {
         ) : (
           <InvoiceForm
             key={editing?.id ?? `new-${prefillClientId ?? "none"}`}
-            clients={clients}
+            clients={clients.filter((client) => !client.personal_use)}
             initial={editing}
             defaultClientId={prefillClientId}
             onCancel={closeForm}

@@ -9,7 +9,7 @@ import { Button } from "./ui/Button";
 const navItems = [
   { href: "/", label: "Maison Joy Business Overview", shortLabel: "Overview", icon: "⌂" },
   { href: "/appointments", label: "Appointments", shortLabel: "Appts", icon: "📅" },
-  { href: "/budget-tool", label: "Budget Tool", shortLabel: "Budget Tool", icon: "📊" },
+  { href: "/budget-tool", label: "Quoting Tool", shortLabel: "Quoting Tool", icon: "📊" },
   { href: "/clients", label: "Clients", shortLabel: "Clients", icon: "👤" },
   {
     href: "/ledger",

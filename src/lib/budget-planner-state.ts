@@ -1,6 +1,7 @@
 import {
   BUDGET_SLIDER_DEFAULT_PERCENT,
   normalizeBudgetQuantity,
+  sliderPercentToAmount,
 } from "@/lib/budget-utils";
 import type { BudgetItem } from "@/lib/types";
 
@@ -11,6 +12,9 @@ export interface BudgetPlannerState {
   includedItems: Record<string, boolean>;
   quantities: Record<string, number>;
   sliderPercents: Record<string, number>;
+  /** Exact unit amounts; preferred over slider-derived values when present. */
+  unitAmounts: Record<string, number>;
+  notes: string;
 }
 
 export interface ClientBudgetPlanSaved extends BudgetPlannerState {
@@ -31,14 +35,28 @@ export function defaultBudgetPlannerState(
   const includedItems: Record<string, boolean> = {};
   const quantities: Record<string, number> = {};
   const sliderPercents: Record<string, number> = {};
+  const unitAmounts: Record<string, number> = {};
 
   for (const item of items) {
     includedItems[item.id] = false;
     quantities[item.id] = normalizeBudgetQuantity(item.quantity);
     sliderPercents[item.id] = BUDGET_SLIDER_DEFAULT_PERCENT;
+    unitAmounts[item.id] = sliderPercentToAmount(
+      item.low_amount,
+      item.medium_amount,
+      item.high_amount,
+      BUDGET_SLIDER_DEFAULT_PERCENT
+    );
   }
 
-  return { includedRooms, includedItems, quantities, sliderPercents };
+  return {
+    includedRooms,
+    includedItems,
+    quantities,
+    sliderPercents,
+    unitAmounts,
+    notes: "",
+  };
 }
 
 export function mergeLoadedBudgetPlan(
@@ -47,6 +65,21 @@ export function mergeLoadedBudgetPlan(
   rooms: string[]
 ): BudgetPlannerState {
   const defaults = defaultBudgetPlannerState(items, rooms);
+  const unitAmounts = { ...defaults.unitAmounts, ...saved.unitAmounts };
+
+  for (const item of items) {
+    if (saved.unitAmounts[item.id] !== undefined) continue;
+    const percent =
+      saved.sliderPercents[item.id] ??
+      defaults.sliderPercents[item.id] ??
+      BUDGET_SLIDER_DEFAULT_PERCENT;
+    unitAmounts[item.id] = sliderPercentToAmount(
+      item.low_amount,
+      item.medium_amount,
+      item.high_amount,
+      percent
+    );
+  }
 
   return {
     includedRooms: {
@@ -65,6 +98,8 @@ export function mergeLoadedBudgetPlan(
       ...defaults.sliderPercents,
       ...saved.sliderPercents,
     },
+    unitAmounts,
+    notes: typeof saved.notes === "string" ? saved.notes : "",
   };
 }
 
@@ -78,6 +113,8 @@ export function buildClientBudgetPlanSaved(
     includedItems: state.includedItems,
     quantities: state.quantities,
     sliderPercents: state.sliderPercents,
+    unitAmounts: state.unitAmounts,
+    notes: state.notes,
     grandTotal,
     savedAt: new Date().toISOString(),
   };
@@ -123,12 +160,16 @@ export function parseClientBudgetPlanSaved(
     return result;
   };
 
+  const unitAmountsRaw = objectRecord("unitAmounts");
+
   return {
     version: CLIENT_BUDGET_PLAN_VERSION,
     includedRooms: boolMap(includedRooms),
     includedItems: boolMap(includedItems),
     quantities: numberMap(quantities),
     sliderPercents: numberMap(sliderPercents),
+    unitAmounts: unitAmountsRaw ? numberMap(unitAmountsRaw) : {},
+    notes: typeof record.notes === "string" ? record.notes : "",
     grandTotal: record.grandTotal,
     savedAt: record.savedAt,
   };

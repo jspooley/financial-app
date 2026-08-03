@@ -270,16 +270,18 @@ export default async function PlReportPage() {
           Year to Date — {reportYear}
         </h2>
         <p className="mt-1 text-sm text-slate-600">
-          For each invoiced line: <strong>Revenue</strong> = invoiced amount (customer
-          price + tax + shipping; payment fees excluded).{" "}
+          <strong>Revenue</strong> = amount actually paid (payment amount; unpaid
+          invoices contribute $0). Wholesale S&U tax collected in that payment is
+          excluded (owed to the state).{" "}
           <strong>Cost of goods sold</strong> = total designer cost.{" "}
-          <strong>Expenses</strong> = expense amount + shipping + fees + tax.{" "}
-          <strong>Gross profit</strong> = revenue − COGS (before expenses).{" "}
-          <strong>Net profit</strong> = revenue − (COGS + expenses + accepted underpayment
-          variances). <strong>Net profit margin</strong> = net profit ÷ revenue.{" "}
+          <strong>Expenses</strong> = expense amount + shipping + fees + tax remittances.{" "}
+          <strong>Gross profit</strong> = revenue − COGS.{" "}
+          <strong>Net profit</strong> = revenue − (COGS + expenses).{" "}
+          <strong>Net profit margin</strong> = net profit ÷ revenue.{" "}
           <strong>Gross profit goal</strong> = half of average trade partner discount.
           Uninvoiced debit costs are included in cost of goods sold only. Accepted
-          underpayment variance detail is on the reconciliation report.
+          underpayment variance detail is on the reconciliation report (not subtracted
+          again here, since uncollected sales were never counted as revenue).
         </p>
         <div className="mt-4">
           <PlTotalsCards

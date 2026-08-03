@@ -75,9 +75,8 @@ function entriesForPlTotals(entries: LedgerPlEntry[]): LedgerPlEntry[] {
 }
 
 /**
- * S&U tax billed to the client on an invoiced wholesale line. It is collected on
- * behalf of the state, so it is a liability rather than revenue — the invoiced
- * total still includes it, but P&L revenue must not.
+ * S&U tax collected in cash on a wholesale line. Only when payment was received —
+ * unpaid invoices do not create tax "revenue" to strip.
  */
 export function salesUseTaxCollected(
   entry: LedgerPlEntry,
@@ -86,6 +85,7 @@ export function salesUseTaxCollected(
   if (isPlBalanceSheetEntry(entry)) return 0;
   if ((entry.wholesale_retail ?? "retail") !== "wholesale") return 0;
   if (!isLedgerLineInvoicedForRevenue(entry, invoicedPoKeys)) return 0;
+  if (roundMoney(Number(entry.payment_amount ?? 0)) < 0.005) return 0;
   return roundMoney(Number(entry.tax_amount ?? 0));
 }
 
@@ -168,7 +168,7 @@ export function ledgerLineGrossProfit(
   );
 }
 
-/** Net profit: revenue − (COGS + expenses + accepted underpayment variance). */
+/** Net profit: cash revenue − (COGS + expenses). */
 export function ledgerLineNetProfit(
   entry: LedgerPlEntry,
   invoicedPoKeys?: Set<string>
@@ -176,9 +176,7 @@ export function ledgerLineNetProfit(
   if (isPlBalanceSheetEntry(entry)) return 0;
   return roundMoney(
     plLineRevenue(entry, invoicedPoKeys) -
-      (ledgerLineCogs(entry, invoicedPoKeys) +
-        sumPlExpenseAmount(entry) +
-        sumPlAcceptedVariance(entry))
+      (ledgerLineCogs(entry, invoicedPoKeys) + sumPlExpenseAmount(entry))
   );
 }
 
@@ -199,12 +197,6 @@ function sumPlExpenses(entries: LedgerPlEntry[]): number {
   );
 }
 
-function sumPlVariances(entries: LedgerPlEntry[]): number {
-  return roundMoney(
-    entries.reduce((sum, entry) => sum + sumPlAcceptedVariance(entry), 0)
-  );
-}
-
 export function computePlTotals(
   entries: LedgerPlEntry[],
   invoicedPoKeys?: Set<string>
@@ -222,8 +214,10 @@ export function computePlTotals(
   const cogs = roundMoney(balances.debits);
   const grossProfit = roundMoney(revenue - cogs);
   const expenseAmount = sumPlExpenses(plEntries);
-  const varianceAmount = sumPlVariances(plEntries);
-  const netProfit = roundMoney(revenue - (cogs + expenseAmount + varianceAmount));
+  // Cash-basis revenue: uncollected invoice write-offs are not booked as revenue,
+  // so accepted underpayment variance is not subtracted again here.
+  const varianceAmount = 0;
+  const netProfit = roundMoney(revenue - (cogs + expenseAmount));
   const grossProfitMargin =
     revenue > 0 ? roundMoney((grossProfit / revenue) * 100) : 0;
   const netProfitMargin =

@@ -7,16 +7,20 @@ import { LedgerAccountForm } from "@/components/forms/LedgerAccountForm";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { RowActions } from "@/components/ui/RowActions";
 import { normalizeInvoiceId } from "@/lib/invoice-utils";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 import {
-  COA_SALES_INCOME_CATEGORY,
+  COA_COGS_CATEGORY,
+  isCogsCoa,
+  isCashflowOperatingCoa,
+  isInvoiceGoodsLine,
   isOperatingExpenseEntry,
-  isPersonalUseHiddenFromCashflow,
   isSalesIncomeCoa,
 } from "@/lib/coa";
 import { isCostCompanionRow } from "@/lib/cost-companions";
+import {
+  isPaymentCompanionRow,
+} from "@/lib/payment-companions";
 import { createClient } from "@/lib/supabase/client";
 import {
   CASHFLOW_ACCOUNTS,
@@ -30,6 +34,7 @@ import {
   formatCurrency,
   formatDate,
   getLedgerDesignerCostWithExtras,
+  getLedgerTotalDesignerCost,
   isSalesUseTaxPaid,
   purchaserFromEmail,
   roundMoney,
@@ -76,6 +81,67 @@ function entryMatchesMonth(entry: LedgerEntry, monthFilter: string[]): boolean {
   return cashflowMonthKeys(entry).some((month) => monthFilter.includes(month));
 }
 
+/**
+ * When a month filter is on, also keep other rows that share an invoice ID with a
+ * month-matching row. Sales Income credits often use date_paid while COGS goods
+ * use entry_date, so without this the related debits disappear from the month view.
+ */
+function entriesMatchingMonthWithInvoiceMates(
+  entries: LedgerEntry[],
+  monthFilter: string[]
+): LedgerEntry[] {
+  if (monthFilter.length === 0) return entries;
+  return withInvoiceMates(
+    entries.filter((entry) => entryMatchesMonth(entry, monthFilter)),
+    entries
+  );
+}
+
+/**
+ * Expand a filtered row set with invoice-linked mates from `pool` (sales ↔ COGS,
+ * payment companion ↔ goods parent). Account/CoA filters otherwise hide the
+ * other side of the same invoice.
+ */
+function withInvoiceMates(
+  matched: LedgerEntry[],
+  pool: LedgerEntry[]
+): LedgerEntry[] {
+  if (matched.length === 0) return matched;
+
+  const paymentInvoiceByParentId = buildPaymentInvoiceByParentId(pool);
+  const mateKeys = new Set<string>();
+  const addKey = (key: string | null | undefined) => {
+    if (key) mateKeys.add(key);
+  };
+
+  for (const entry of matched) {
+    const invoiceId = effectiveInvoiceId(entry, paymentInvoiceByParentId);
+    if (invoiceId) addKey(`inv:${invoiceId.toLowerCase()}`);
+    if (isPaymentCompanionRow(entry) && entry.source_ledger_id) {
+      addKey(`parent:${entry.source_ledger_id}`);
+      const parentInvoice = paymentInvoiceByParentId.get(entry.source_ledger_id);
+      if (parentInvoice) addKey(`inv:${parentInvoice.toLowerCase()}`);
+    }
+    if (!entry.source_ledger_id) addKey(`parent:${entry.id}`);
+  }
+
+  if (mateKeys.size === 0) return matched;
+
+  const includedIds = new Set(matched.map((entry) => entry.id));
+  const mates = pool.filter((entry) => {
+    if (includedIds.has(entry.id)) return false;
+    const invoiceId = effectiveInvoiceId(entry, paymentInvoiceByParentId);
+    if (invoiceId && mateKeys.has(`inv:${invoiceId.toLowerCase()}`)) return true;
+    if (isPaymentCompanionRow(entry) && entry.source_ledger_id) {
+      if (mateKeys.has(`parent:${entry.source_ledger_id}`)) return true;
+    }
+    if (!entry.source_ledger_id && mateKeys.has(`parent:${entry.id}`)) return true;
+    return false;
+  });
+
+  return mates.length === 0 ? matched : [...matched, ...mates];
+}
+
 function displayDate(entry: LedgerEntry): string {
   return formatDate(cashflowEntryDate(entry));
 }
@@ -86,11 +152,23 @@ function cashflowEntryDate(entry: LedgerEntry) {
     : entry.entry_date;
 }
 
-function cashflowEntryDescriptionKey(entry: LedgerEntry) {
-  return (entry.description?.trim() || entry.clients?.name || "").replace(
-    /\s*\(payment\)\s*$/i,
-    ""
-  );
+function cashflowEntryDescriptionKey(
+  entry: LedgerEntry,
+  parentById?: Map<string, LedgerEntry>
+) {
+  const parent =
+    entry.source_ledger_id && parentById
+      ? parentById.get(entry.source_ledger_id)
+      : undefined;
+  const raw =
+    parent?.description?.trim() ||
+    entry.description?.trim() ||
+    entry.clients?.name ||
+    "";
+  return raw
+    .replace(/\s*\(payment\)\s*$/i, "")
+    .replace(/\s*\(shipping\)\s*$/i, "")
+    .replace(/\s*\(payment fee\)\s*$/i, "");
 }
 
 function cashflowPaymentRank(entry: LedgerEntry) {
@@ -105,6 +183,39 @@ function isSalesIncomeCredit(entry: LedgerEntry) {
   );
 }
 
+/** Goods debit parents booked to 101 COGS (not companions). */
+function isCogsGoodsParent(entry: LedgerEntry) {
+  return !entry.source_ledger_id && isCogsCoa(entry.coa_category);
+}
+
+/**
+ * Invoice on the row, or — for goods parents — the invoice from a linked payment
+ * companion. Payments and COGS often need this bridge when invoice_id only landed
+ * on one side of the pair.
+ */
+function effectiveInvoiceId(
+  entry: LedgerEntry,
+  paymentInvoiceByParentId: Map<string, string>
+): string {
+  const own = normalizeInvoiceId(entry.invoice_id);
+  if (own) return own;
+  if (entry.source_ledger_id) return "";
+  return paymentInvoiceByParentId.get(entry.id) ?? "";
+}
+
+function buildPaymentInvoiceByParentId(entries: LedgerEntry[]) {
+  const map = new Map<string, string>();
+  for (const entry of entries) {
+    if (!isPaymentCompanionRow(entry) || !entry.source_ledger_id) continue;
+    const invoiceId = normalizeInvoiceId(entry.invoice_id);
+    if (!invoiceId) continue;
+    if (!map.has(entry.source_ledger_id)) {
+      map.set(entry.source_ledger_id, invoiceId);
+    }
+  }
+  return map;
+}
+
 function uniqueOrDash(values: Array<string | null | undefined>) {
   const unique = [
     ...new Set(
@@ -116,6 +227,19 @@ function uniqueOrDash(values: Array<string | null | undefined>) {
   if (unique.length === 0) return "—";
   if (unique.length === 1) return unique[0];
   return "Multiple";
+}
+
+/** Join unique ledger descriptions for rollup rows (never collapse to "Multiple"). */
+function joinedDescriptions(values: Array<string | null | undefined>) {
+  const unique = [
+    ...new Set(
+      values
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter(Boolean)
+    ),
+  ];
+  if (unique.length === 0) return "—";
+  return unique.join("; ");
 }
 
 function MultiSelectDropdown({
@@ -195,7 +319,7 @@ function MultiSelectDropdown({
   );
 }
 
-type CashflowGroupType = "sales-income" | "purchase";
+type CashflowGroupType = "sales-income" | "cogs" | "purchase" | "description";
 
 type CashflowGroup = {
   kind: "group";
@@ -239,13 +363,22 @@ function purchaseGroupSubtitle(group: LedgerEntry[]) {
     : `${group.length} lines`;
 }
 
+function groupTypeFromKey(key: string): CashflowGroupType {
+  if (key.startsWith("sales:")) return "sales-income";
+  if (key.startsWith("cogs:")) return "cogs";
+  if (key.startsWith("desc:") || key.startsWith("linked:")) return "description";
+  return "purchase";
+}
+
 function buildCashflowGroup(
   key: string,
   groupType: CashflowGroupType,
   group: LedgerEntry[],
   monthFilter: string[],
   accountFilter: CashflowAccount[],
-  showAllAccounts: boolean
+  showAllAccounts: boolean,
+  paymentInvoiceByParentId: Map<string, string> = new Map(),
+  parentById: Map<string, LedgerEntry> = new Map()
 ): CashflowGroup {
   let debit = 0;
   let credit = 0;
@@ -266,8 +399,22 @@ function buildCashflowGroup(
   const invoiceId =
     normalizeInvoiceId(
       group.find((entry) => normalizeInvoiceId(entry.invoice_id))?.invoice_id
-    ) || "";
+    ) ||
+    group
+      .map((entry) => effectiveInvoiceId(entry, paymentInvoiceByParentId))
+      .find(Boolean) ||
+    "";
   const parent = group.find((entry) => !entry.source_ledger_id) ?? group[0];
+  const companionCount = group.filter((entry) => isCostCompanionRow(entry)).length;
+  const descriptionSources =
+    groupType === "cogs"
+      ? group.filter((entry) => !entry.source_ledger_id)
+      : group;
+  const descriptionTitle = joinedDescriptions(
+    descriptionSources.map(
+      (entry) => cashflowEntryDescriptionKey(entry, parentById) || null
+    )
+  );
 
   return {
     kind: "group",
@@ -278,16 +425,24 @@ function buildCashflowGroup(
     date: dates[0] ? formatDate(dates[0]) : "—",
     account: uniqueOrDash(group.map((entry) => entry.account)),
     title:
-      groupType === "sales-income"
-        ? `Invoice ${invoiceId} payments`
+      groupType === "sales-income" ||
+      groupType === "cogs" ||
+      groupType === "description"
+        ? descriptionTitle
         : parent.description?.trim() || parent.clients?.name || "Purchase",
     subtitle:
       groupType === "sales-income"
         ? `${group.length} payments`
-        : purchaseGroupSubtitle(group),
+        : groupType === "cogs"
+          ? companionCount > 0
+            ? `${group.length - companionCount} goods + ${companionCount} companion${companionCount === 1 ? "" : "s"}`
+            : `${group.length} goods lines`
+          : groupType === "description"
+            ? `${group.length} lines`
+            : purchaseGroupSubtitle(group),
     coaLabel:
-      groupType === "sales-income"
-        ? COA_SALES_INCOME_CATEGORY
+      groupType === "cogs"
+        ? COA_COGS_CATEGORY
         : uniqueOrDash(group.map((entry) => entry.coa_category)),
     debit: roundMoney(debit),
     credit: roundMoney(credit),
@@ -297,9 +452,10 @@ function buildCashflowGroup(
 }
 
 /**
- * Collapsible register rows. Sales Income credits collapse by invoice ID and a
- * goods line collapses together with its tax / shipping / fee companions.
- * Expanding a group re-lists its members underneath the summary row.
+ * Collapsible register rows. Sales Income credits and 101 COGS goods (plus their
+ * shipping/fee companions) each collapse by invoice ID into separate summary
+ * rows. Goods without an invoice still collapse with their companions as a
+ * purchase group. Expanding a group re-lists its members underneath.
  */
 function buildCashflowDisplayItems(
   entries: LedgerEntry[],
@@ -314,6 +470,8 @@ function buildCashflowDisplayItems(
   }
 
   const visibleIds = new Set(entries.map((entry) => entry.id));
+  const entryById = new Map(entries.map((entry) => [entry.id, entry]));
+  const paymentInvoiceByParentId = buildPaymentInvoiceByParentId(entries);
 
   const salesCountByInvoice = new Map<string, number>();
   for (const entry of entries) {
@@ -326,6 +484,17 @@ function buildCashflowDisplayItems(
     );
   }
 
+  const cogsCountByInvoice = new Map<string, number>();
+  for (const entry of entries) {
+    if (!isCogsGoodsParent(entry)) continue;
+    const invoiceId = effectiveInvoiceId(entry, paymentInvoiceByParentId);
+    if (!invoiceId) continue;
+    cogsCountByInvoice.set(
+      invoiceId,
+      (cogsCountByInvoice.get(invoiceId) ?? 0) + 1
+    );
+  }
+
   const parentsWithCompanions = new Set<string>();
   for (const entry of entries) {
     if (!isCostCompanionRow(entry)) continue;
@@ -333,19 +502,66 @@ function buildCashflowDisplayItems(
     if (parentId && visibleIds.has(parentId)) parentsWithCompanions.add(parentId);
   }
 
-  const groupKeyFor = (entry: LedgerEntry): string | null => {
+  const cogsInvoiceKeyForParent = (parent: LedgerEntry): string | null => {
+    if (!isCogsGoodsParent(parent)) return null;
+    const invoiceId = effectiveInvoiceId(parent, paymentInvoiceByParentId);
+    // Roll up whenever this invoice has COGS — including a single goods line —
+    // so it can sit next to the matching Sales Income rollup.
+    if (!invoiceId || (cogsCountByInvoice.get(invoiceId) ?? 0) < 1) return null;
+    return `cogs:${invoiceId}`;
+  };
+
+  /** Invoice / purchase rollups — description grouping is a fallback after these. */
+  const primaryGroupKeyFor = (entry: LedgerEntry): string | null => {
     if (isCostCompanionRow(entry)) {
       const parentId = entry.source_ledger_id;
-      return parentId && parentsWithCompanions.has(parentId)
-        ? `purchase:${parentId}`
-        : null;
+      if (!parentId || !parentsWithCompanions.has(parentId)) return null;
+      const parent = entryById.get(parentId);
+      if (parent) {
+        const cogsKey = cogsInvoiceKeyForParent(parent);
+        if (cogsKey) return cogsKey;
+      }
+      return `purchase:${parentId}`;
     }
+
+    const cogsKey = cogsInvoiceKeyForParent(entry);
+    if (cogsKey) return cogsKey;
+
     if (parentsWithCompanions.has(entry.id)) return `purchase:${entry.id}`;
+
+    // Personal-use S&U tax lives on the S&U report; remittances are entered
+    // manually via Add Entry on Cashflow — do not group payment leftovers here.
     if (isSalesIncomeCredit(entry)) {
       const invoiceId = normalizeInvoiceId(entry.invoice_id);
-      if (invoiceId && (salesCountByInvoice.get(invoiceId) ?? 0) > 1) {
+      // Match COGS: roll up any invoiced sales credit so it can sit beside COGS.
+      if (invoiceId && (salesCountByInvoice.get(invoiceId) ?? 0) >= 1) {
         return `sales:${invoiceId}`;
       }
+    }
+    return null;
+  };
+
+  const descriptionCounts = new Map<string, number>();
+  for (const entry of entries) {
+    if (primaryGroupKeyFor(entry)) continue;
+    const description = cashflowEntryDescriptionKey(entry, entryById)
+      .trim()
+      .toLowerCase();
+    if (!description) continue;
+    descriptionCounts.set(
+      description,
+      (descriptionCounts.get(description) ?? 0) + 1
+    );
+  }
+
+  const groupKeyFor = (entry: LedgerEntry): string | null => {
+    const primary = primaryGroupKeyFor(entry);
+    if (primary) return primary;
+    const description = cashflowEntryDescriptionKey(entry, entryById)
+      .trim()
+      .toLowerCase();
+    if (description && (descriptionCounts.get(description) ?? 0) >= 2) {
+      return `desc:${description}`;
     }
     return null;
   };
@@ -374,11 +590,13 @@ function buildCashflowDisplayItems(
     items.push(
       buildCashflowGroup(
         key,
-        key.startsWith("sales:") ? "sales-income" : "purchase",
+        groupTypeFromKey(key),
         members,
         monthFilter,
         accountFilter,
-        showAllAccounts
+        showAllAccounts,
+        paymentInvoiceByParentId,
+        entryById
       )
     );
     if (expandedGroups.has(key)) {
@@ -391,14 +609,47 @@ function buildCashflowDisplayItems(
 }
 
 /**
- * Register amounts are the row's own debit_amount / credit_amount, regardless of
- * CoA classification. Migration 060 backfilled these for legacy rows.
+ * Personal-use goods (balance_sheet invoice lines) and their payment companions.
+ * Cashflow Add Entry rows — including Owner's Contribution (300) equity — stay
+ * visible even when Balance Sheet is checked.
+ */
+function isExcludedPersonalUseCashflowRow(
+  entry: LedgerEntry,
+  parentById: Map<string, LedgerEntry>
+) {
+  if (!entry.source_ledger_id && Boolean(entry.balance_sheet)) {
+    // Equity / OpEx / transfers entered on Cashflow are not personal-use goods.
+    if (
+      isOperatingExpenseEntry(entry) ||
+      isCashflowOperatingCoa(entry.coa_category)
+    ) {
+      return false;
+    }
+    if (isInvoiceGoodsLine(entry)) return true;
+  }
+  if (isPaymentCompanionRow(entry) && entry.source_ledger_id) {
+    const parent = parentById.get(entry.source_ledger_id);
+    if (
+      parent &&
+      Boolean(parent.balance_sheet) &&
+      isInvoiceGoodsLine(parent)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Register amounts prefer posted debit_amount / credit_amount. Goods parents
+ * whose debit was wiped (or never backfilled) still show designer_cost × qty
+ * when that cost exists and the line is not marked personal-use.
  */
 function amountsForAccountFilter(
   entry: LedgerEntry,
   monthFilter: string[],
-  accountFilter: CashflowAccount[],
-  showAllAccounts: boolean
+  _accountFilter: CashflowAccount[],
+  _showAllAccounts: boolean
 ) {
   const designerCostRaw = getLedgerDesignerCostWithExtras(entry);
   const paymentRaw = Number(entry.payment_amount ?? 0);
@@ -408,26 +659,37 @@ function amountsForAccountFilter(
   const paidMonthMatches =
     monthFilter.length === 0 ||
     monthFilter.includes(monthKeyFromDate(entry.date_paid));
-  const debitRaw = entryMonthMatches ? Number(entry.debit_amount ?? 0) : 0;
+
+  const storedDebit = Number(entry.debit_amount ?? 0);
+  const goodsDebitFallback =
+    !entry.source_ledger_id &&
+    !entry.balance_sheet &&
+    storedDebit <= 0 &&
+    Number(entry.designer_cost ?? 0) > 0
+      ? getLedgerTotalDesignerCost(entry)
+      : 0;
+  const resolvedDebit = storedDebit > 0 ? storedDebit : goodsDebitFallback;
+
+  // Pure debit rows (COGS / expenses) keep their amount whenever the row is
+  // visible — including when pulled in as an invoice mate of a paid month.
+  // Combined payment rows still hide debit outside the entry month.
+  const debitRaw =
+    entryMonthMatches || paymentRaw <= 0 ? resolvedDebit : 0;
   const creditMonthMatches =
     paymentRaw > 0 && monthKeyFromDate(entry.date_paid)
       ? paidMonthMatches
       : entryMonthMatches;
   const creditRaw = creditMonthMatches ? Number(entry.credit_amount ?? 0) : 0;
-  const selected = new Set(accountFilter);
-  const accountMatches =
-    entry.account != null && selected.has(entry.account as CashflowAccount);
-  const include = showAllAccounts || accountMatches;
-  const showDesignerCost = include && designerCostRaw > 0;
-  const showPayment = include && paymentRaw > 0;
-  const showDebit = include && debitRaw > 0;
-  const showCredit = include && creditRaw > 0;
+  const showDesignerCost = designerCostRaw > 0;
+  const showPayment = paymentRaw > 0;
+  const showDebit = debitRaw > 0;
+  const showCredit = creditRaw > 0;
 
   return {
-    designerCost: include ? designerCostRaw : 0,
-    payment: include ? paymentRaw : 0,
-    debit: include ? debitRaw : 0,
-    credit: include ? creditRaw : 0,
+    designerCost: designerCostRaw,
+    payment: paymentRaw,
+    debit: debitRaw,
+    credit: creditRaw,
     showDesignerCost,
     showPayment,
     showDebit,
@@ -448,17 +710,34 @@ function entryMatchesAccountFilter(
 /** Register net for Checking accounts: credits − debits (cash on hand). */
 function checkingBalance(
   entries: LedgerEntry[],
-  parentById: Map<string, LedgerEntry>
+  options?: {
+    monthFilter?: string[];
+    accountFilter?: CashflowAccount[];
+    showAllAccounts?: boolean;
+    parentById?: Map<string, LedgerEntry>;
+  }
 ): number {
+  const monthFilter = options?.monthFilter ?? [];
+  const accountFilter = options?.accountFilter ?? [];
+  const showAllAccounts = options?.showAllAccounts ?? true;
+  const parentById =
+    options?.parentById ?? new Map(entries.map((entry) => [entry.id, entry]));
   return roundMoney(
     entries
+      .filter((entry) => entry.account?.startsWith("Checking"))
       .filter(
         (entry) =>
-          entry.account?.startsWith("Checking") &&
-          !isPersonalUseHiddenFromCashflow(entry, parentById)
+          showAllAccounts ||
+          entryMatchesAccountFilter(entry, accountFilter)
       )
       .reduce((sum, entry) => {
-        const amounts = amountsForAccountFilter(entry, [], [], true);
+        if (isExcludedPersonalUseCashflowRow(entry, parentById)) return sum;
+        const amounts = amountsForAccountFilter(
+          entry,
+          monthFilter,
+          accountFilter,
+          showAllAccounts
+        );
         return sum + amounts.credit - amounts.debit;
       }, 0)
   );
@@ -485,17 +764,34 @@ function salesUseTaxPayable(entries: LedgerEntry[]): number {
 /** Credit card balance owed: debits − credits (charges minus payments). */
 function creditCardBalance(
   entries: LedgerEntry[],
-  parentById: Map<string, LedgerEntry>
+  options?: {
+    monthFilter?: string[];
+    accountFilter?: CashflowAccount[];
+    showAllAccounts?: boolean;
+    parentById?: Map<string, LedgerEntry>;
+  }
 ): number {
+  const monthFilter = options?.monthFilter ?? [];
+  const accountFilter = options?.accountFilter ?? [];
+  const showAllAccounts = options?.showAllAccounts ?? true;
+  const parentById =
+    options?.parentById ?? new Map(entries.map((entry) => [entry.id, entry]));
   return roundMoney(
     entries
+      .filter((entry) => entry.account?.startsWith("Credit Card"))
       .filter(
         (entry) =>
-          entry.account?.startsWith("Credit Card") &&
-          !isPersonalUseHiddenFromCashflow(entry, parentById)
+          showAllAccounts ||
+          entryMatchesAccountFilter(entry, accountFilter)
       )
       .reduce((sum, entry) => {
-        const amounts = amountsForAccountFilter(entry, [], [], true);
+        if (isExcludedPersonalUseCashflowRow(entry, parentById)) return sum;
+        const amounts = amountsForAccountFilter(
+          entry,
+          monthFilter,
+          accountFilter,
+          showAllAccounts
+        );
         return sum + amounts.debit - amounts.credit;
       }, 0)
   );
@@ -526,7 +822,6 @@ export default function CashflowPage() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     () => new Set()
   );
-  const [savingCoaId, setSavingCoaId] = useState<string | null>(null);
 
   const loadEntries = useCallback(async () => {
     setLoading(true);
@@ -570,6 +865,20 @@ export default function CashflowPage() {
   }, [loadEntries]);
 
   useEffect(() => {
+    function reloadWhenVisible() {
+      if (document.visibilityState === "visible") {
+        void loadEntries();
+      }
+    }
+    document.addEventListener("visibilitychange", reloadWhenVisible);
+    window.addEventListener("focus", reloadWhenVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", reloadWhenVisible);
+      window.removeEventListener("focus", reloadWhenVisible);
+    };
+  }, [loadEntries]);
+
+  useEffect(() => {
     async function loadDesignerDefault() {
       const supabase = createClient();
       const {
@@ -579,23 +888,6 @@ export default function CashflowPage() {
     }
     void loadDesignerDefault();
   }, []);
-
-  const parentById = useMemo(() => {
-    const map = new Map<string, LedgerEntry>();
-    for (const entry of entries) {
-      map.set(entry.id, entry);
-    }
-    return map;
-  }, [entries]);
-
-  const accountBalances = useMemo(
-    () => ({
-      checking: checkingBalance(entries, parentById),
-      creditCard: creditCardBalance(entries, parentById),
-      salesUseTaxPayable: salesUseTaxPayable(entries),
-    }),
-    [entries, parentById]
-  );
 
   const monthOptions = useMemo(() => {
     const months = new Set<string>();
@@ -619,13 +911,24 @@ export default function CashflowPage() {
   const showAllAccounts = accountFilter.length === 0;
   const showAllCoaCategories = coaCategoryFilter.length === 0;
 
-  const visibleEntries = useMemo(() => {
-    let result = entries.filter(
-      (entry) => !isPersonalUseHiddenFromCashflow(entry, parentById)
-    );
-    if (monthFilter.length > 0) {
-      result = result.filter((entry) => entryMatchesMonth(entry, monthFilter));
+  const parentById = useMemo(() => {
+    const map = new Map<string, LedgerEntry>();
+    for (const entry of entries) {
+      map.set(entry.id, entry);
     }
+    return map;
+  }, [entries]);
+
+  const visibleEntries = useMemo(() => {
+    let result =
+      monthFilter.length > 0
+        ? entriesMatchingMonthWithInvoiceMates(entries, monthFilter)
+        : entries;
+
+    result = result.filter(
+      (entry) => !isExcludedPersonalUseCashflowRow(entry, parentById)
+    );
+
     if (invoiceFilter.length > 0) {
       const selectedInvoices = new Set(
         invoiceFilter.map((invoiceId) => invoiceId.toLowerCase())
@@ -635,37 +938,106 @@ export default function CashflowPage() {
       );
     }
     if (!showAllAccounts) {
-      result = result.filter((entry) =>
+      const accountMatched = result.filter((entry) =>
         entryMatchesAccountFilter(entry, accountFilter)
+      );
+      result = withInvoiceMates(accountMatched, result).filter(
+        (entry) => !isExcludedPersonalUseCashflowRow(entry, parentById)
       );
     }
     if (!showAllCoaCategories) {
       const selected = new Set(coaCategoryFilter);
-      result = result.filter(
+      const coaMatched = result.filter(
         (entry) =>
           entry.coa_category != null && selected.has(entry.coa_category)
       );
+      result = withInvoiceMates(coaMatched, result).filter(
+        (entry) => !isExcludedPersonalUseCashflowRow(entry, parentById)
+      );
     }
+
+    // Cluster invoice mates (and payment→goods parent links) by the latest date
+    // in the set so Sales Income credits sit next to related COGS debits even
+    // when purchase entry_date is earlier than date_paid.
+    const paymentInvoiceByParentId = buildPaymentInvoiceByParentId(result);
+    const clusterDateByKey = new Map<string, string>();
+    const clusterKeyFor = (entry: LedgerEntry): string | null => {
+      const invoiceId = effectiveInvoiceId(entry, paymentInvoiceByParentId);
+      if (invoiceId) return `inv:${invoiceId.toLowerCase()}`;
+      if (isPaymentCompanionRow(entry) && entry.source_ledger_id) {
+        return `parent:${entry.source_ledger_id}`;
+      }
+      if (!entry.source_ledger_id && paymentInvoiceByParentId.has(entry.id)) {
+        return `parent:${entry.id}`;
+      }
+      return null;
+    };
+
+    for (const entry of result) {
+      const key = clusterKeyFor(entry);
+      if (!key) continue;
+      const date = cashflowEntryDate(entry);
+      const current = clusterDateByKey.get(key);
+      if (!current || date > current) clusterDateByKey.set(key, date);
+    }
+
+    // Payment companion parents without invoice_id still inherit the payment date.
+    for (const entry of result) {
+      if (!isPaymentCompanionRow(entry) || !entry.source_ledger_id) continue;
+      const payDate = cashflowEntryDate(entry);
+      const parentKey = `parent:${entry.source_ledger_id}`;
+      const invoiceId = normalizeInvoiceId(entry.invoice_id);
+      const invKey = invoiceId ? `inv:${invoiceId.toLowerCase()}` : null;
+      for (const key of [parentKey, invKey]) {
+        if (!key) continue;
+        const current = clusterDateByKey.get(key);
+        if (!current || payDate > current) clusterDateByKey.set(key, payDate);
+      }
+    }
+
+    const sortDate = (entry: LedgerEntry) => {
+      const key = clusterKeyFor(entry);
+      if (key && clusterDateByKey.has(key)) return clusterDateByKey.get(key)!;
+      if (isPaymentCompanionRow(entry) && entry.source_ledger_id) {
+        const parentKey = `parent:${entry.source_ledger_id}`;
+        if (clusterDateByKey.has(parentKey)) return clusterDateByKey.get(parentKey)!;
+      }
+      return cashflowEntryDate(entry);
+    };
+
+    const invoiceCoaRank = (entry: LedgerEntry) => {
+      if (isSalesIncomeCredit(entry)) return 0;
+      if (isCogsGoodsParent(entry) || isCostCompanionRow(entry)) return 1;
+      return 2;
+    };
+
     return [...result].sort((a, b) => {
       if (sortBy === "description") {
-        const byDescription = cashflowEntryDescriptionKey(a).localeCompare(
-          cashflowEntryDescriptionKey(b),
+        const byDescription = cashflowEntryDescriptionKey(a, parentById).localeCompare(
+          cashflowEntryDescriptionKey(b, parentById),
           undefined,
           { sensitivity: "base" }
         );
         if (byDescription !== 0) return byDescription;
 
-        const byDate = cashflowEntryDate(b).localeCompare(cashflowEntryDate(a));
+        const byDate = sortDate(b).localeCompare(sortDate(a));
         if (byDate !== 0) return byDate;
 
         return cashflowPaymentRank(a) - cashflowPaymentRank(b);
       }
 
-      const byDate = cashflowEntryDate(b).localeCompare(cashflowEntryDate(a));
-      if (byDate !== 0) return byDate;
+      const byClusterDate = sortDate(b).localeCompare(sortDate(a));
+      if (byClusterDate !== 0) return byClusterDate;
 
-      const byDescription = cashflowEntryDescriptionKey(a).localeCompare(
-        cashflowEntryDescriptionKey(b),
+      const keyA = clusterKeyFor(a);
+      const keyB = clusterKeyFor(b);
+      if (keyA && keyA === keyB) {
+        const byCoa = invoiceCoaRank(a) - invoiceCoaRank(b);
+        if (byCoa !== 0) return byCoa;
+      }
+
+      const byDescription = cashflowEntryDescriptionKey(a, parentById).localeCompare(
+        cashflowEntryDescriptionKey(b, parentById),
         undefined,
         { sensitivity: "base" }
       );
@@ -685,25 +1057,32 @@ export default function CashflowPage() {
     sortBy,
   ]);
 
-  const filteredTotals = useMemo(() => {
-    let debit = 0;
-    let credit = 0;
-    for (const entry of visibleEntries) {
-      const amounts = amountsForAccountFilter(
-        entry,
+  const accountBalances = useMemo(
+    () => ({
+      checking: checkingBalance(visibleEntries, {
         monthFilter,
         accountFilter,
-        showAllAccounts
-      );
-      debit += amounts.debit;
-      credit += amounts.credit;
-    }
-    return {
-      debit: roundMoney(debit),
-      credit: roundMoney(credit),
-      net: roundMoney(credit - debit),
-    };
-  }, [visibleEntries, monthFilter, accountFilter, showAllAccounts]);
+        showAllAccounts,
+        parentById,
+      }),
+      creditCard: creditCardBalance(visibleEntries, {
+        monthFilter,
+        accountFilter,
+        showAllAccounts,
+        parentById,
+      }),
+      // Liability summary is always global (not tied to bank filters).
+      salesUseTaxPayable: salesUseTaxPayable(entries),
+    }),
+    [
+      visibleEntries,
+      entries,
+      monthFilter,
+      accountFilter,
+      showAllAccounts,
+      parentById,
+    ]
+  );
 
   const displayItems = useMemo(
     () =>
@@ -782,48 +1161,6 @@ export default function CashflowPage() {
     );
   }
 
-  async function handleDelete(entry: LedgerEntry) {
-    const label = entry.description?.trim() || formatDate(entry.entry_date);
-    if (!confirm(`Delete cashflow entry "${label}"?`)) return;
-    const supabase = createClient();
-    const { error } = await supabase.from("ledger").delete().eq("id", entry.id);
-    if (error) {
-      alert(error.message);
-      return;
-    }
-    loadEntries();
-  }
-
-  async function handleCoaCategoryChange(entryId: string, category: string) {
-    const next = category.trim() || null;
-    const previous =
-      entries.find((entry) => entry.id === entryId)?.coa_category ?? null;
-    if (previous === next) return;
-
-    setSavingCoaId(entryId);
-    setEntries((current) =>
-      current.map((entry) =>
-        entry.id === entryId ? { ...entry, coa_category: next } : entry
-      )
-    );
-
-    const supabase = createClient();
-    const { error } = await supabase
-      .from("ledger")
-      .update({ coa_category: next })
-      .eq("id", entryId);
-
-    if (error) {
-      setEntries((current) =>
-        current.map((entry) =>
-          entry.id === entryId ? { ...entry, coa_category: previous } : entry
-        )
-      );
-      alert(error.message);
-    }
-    setSavingCoaId(null);
-  }
-
   function closeForms() {
     setShowForm(false);
     setEditing(null);
@@ -878,10 +1215,6 @@ export default function CashflowPage() {
               closeForms();
               loadEntries();
             }}
-            onDeleted={() => {
-              closeForms();
-              loadEntries();
-            }}
           />
         )
       ) : loading ? (
@@ -909,7 +1242,10 @@ export default function CashflowPage() {
               <p className="mt-1 text-2xl font-bold text-brand-800">
                 {formatCurrency(accountBalances.checking)}
               </p>
-              <p className="mt-1 text-xs text-slate-500">Credits − debits</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Credits − debits
+                {hasActiveListFilters ? " (current filters)" : ""}
+              </p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <p className="text-xs uppercase tracking-wide text-slate-500">
@@ -920,6 +1256,7 @@ export default function CashflowPage() {
               </p>
               <p className="mt-1 text-xs text-slate-500">
                 Amount owed (debits − credits)
+                {hasActiveListFilters ? " (current filters)" : ""}
               </p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1069,37 +1406,12 @@ export default function CashflowPage() {
               </div>
             </div>
 
-            <div className="grid gap-3 border-t border-slate-100 pt-4 sm:grid-cols-3 lg:max-w-lg">
-              <div>
-                <p className="text-xs uppercase tracking-wide text-slate-500">
-                  Debits
-                </p>
-                <p className="mt-0.5 text-lg font-semibold text-slate-900">
-                  {formatCurrency(filteredTotals.debit)}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-wide text-slate-500">
-                  Credits
-                </p>
-                <p className="mt-0.5 text-lg font-semibold text-slate-900">
-                  {formatCurrency(filteredTotals.credit)}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-wide text-slate-500">
-                  Total
-                </p>
-                <p className="mt-0.5 text-lg font-semibold text-slate-900">
-                  {formatCurrency(filteredTotals.net)}
-                </p>
-                <p className="mt-0.5 text-xs text-slate-500">Credits − debits</p>
-              </div>
-            </div>
-
             {hasActiveListFilters && (
-              <p className="text-xs text-slate-500">
-                Showing {displayItems.length} rows ({visibleEntries.length}{" "}
+              <p className="border-t border-slate-100 pt-3 text-xs text-slate-500">
+                Checking and credit card balances above use the current filters
+                (selected accounts only — invoice mates on other accounts are not
+                included in those totals). Showing {displayItems.length} rows (
+                {visibleEntries.length}{" "}
                 source {visibleEntries.length === 1 ? "entry" : "entries"}
                 {grouped && groupKeys.length > 0
                   ? `; ${groupKeys.length} grouped`
@@ -1122,9 +1434,9 @@ export default function CashflowPage() {
               { key: "coaCategory", label: "CoA Category" },
               { key: "debit", label: "Debit" },
               { key: "credit", label: "Credit" },
+              { key: "invoiceId", label: "Invoice ID" },
               { key: "purchasedBy", label: "Purchased By" },
               { key: "paidTo", label: "Paid To" },
-              { key: "invoiceId", label: "Invoice ID" },
             ]}
             rows={displayItems.map((item) => {
               if (item.kind === "group") {
@@ -1173,7 +1485,6 @@ export default function CashflowPage() {
 
               const entry = item.entry;
               const isChild = item.kind === "child";
-              const isCompanion = isCostCompanionRow(entry);
               const isExpense = isOperatingExpense(entry);
               const amounts = amountsForAccountFilter(
                 entry,
@@ -1183,14 +1494,17 @@ export default function CashflowPage() {
               );
               return {
                 actions: isExpense ? (
-                  <RowActions
-                    onEdit={() => {
+                  <Button
+                    variant="secondary"
+                    className="w-full min-h-[33px] px-3 py-1.5"
+                    onClick={() => {
                       setEditingAccountEntries(null);
                       setEditing(entry);
                       setShowForm(true);
                     }}
-                    onDelete={() => handleDelete(entry)}
-                  />
+                  >
+                    Edit
+                  </Button>
                 ) : (
                   <Button
                     variant="secondary"
@@ -1202,34 +1516,10 @@ export default function CashflowPage() {
                 ),
                 date: displayDate(entry),
                 account: entry.account ?? "—",
-                coaCategory: isCompanion ? (
-                  // Cost companions are rebuilt from the parent on save, so a
-                  // manual CoA change here would not stick.
+                coaCategory: (
                   <span className="text-slate-600">
                     {entry.coa_category ?? "—"}
                   </span>
-                ) : (
-                  <select
-                    value={entry.coa_category ?? ""}
-                    disabled={
-                      savingCoaId === entry.id || chartOfAccounts.length === 0
-                    }
-                    onChange={(event) => {
-                      void handleCoaCategoryChange(
-                        entry.id,
-                        event.target.value
-                      );
-                    }}
-                    className="min-w-[10rem] max-w-[16rem] rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:opacity-60"
-                    aria-label={`CoA category for ${displayDate(entry)}`}
-                  >
-                    <option value="">Select...</option>
-                    {chartOfAccounts.map((account) => (
-                      <option key={account.id} value={account.category}>
-                        {account.category}
-                      </option>
-                    ))}
-                  </select>
                 ),
                 debit: amounts.showDebit
                   ? formatCurrency(amounts.debit)
@@ -1245,7 +1535,9 @@ export default function CashflowPage() {
                 description: (
                   <span className={isChild ? "block pl-5 text-slate-600" : ""}>
                     {isChild ? "↳ " : ""}
-                    {entry.description?.trim() || entry.clients?.name || "—"}
+                    {cashflowEntryDescriptionKey(entry, parentById) ||
+                      entry.clients?.name ||
+                      "—"}
                   </span>
                 ),
               };

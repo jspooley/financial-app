@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import type { BudgetPlannerState } from "@/lib/budget-planner-state";
 import {
   BUDGET_SLIDER_DEFAULT_PERCENT,
+  amountToSliderPercent,
   budgetLineTotal,
   buildBudgetPlanSnapshot,
+  clampBudgetUnitAmount,
   groupBudgetItemsByRoom,
   normalizeBudgetQuantity,
   sliderPercentToAmount,
@@ -13,7 +15,7 @@ import {
   type BudgetPlanSnapshot,
 } from "@/lib/budget-utils";
 import { BUDGET_ROOM_OPTIONS, type BudgetItem } from "@/lib/types";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, roundMoney } from "@/lib/utils";
 
 interface BudgetPlannerProps {
   items: BudgetItem[];
@@ -40,6 +42,9 @@ export function BudgetPlanner({
   const [includedItems, setIncludedItems] = useState<Record<string, boolean>>({});
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [sliderPercents, setSliderPercents] = useState<Record<string, number>>({});
+  const [unitAmounts, setUnitAmounts] = useState<Record<string, number>>({});
+  const [amountDrafts, setAmountDrafts] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState("");
 
   useEffect(() => {
     if (!loadedPlanState || loadPlanToken === 0) return;
@@ -48,6 +53,9 @@ export function BudgetPlanner({
     setIncludedItems(loadedPlanState.includedItems);
     setQuantities(loadedPlanState.quantities);
     setSliderPercents(loadedPlanState.sliderPercents);
+    setUnitAmounts(loadedPlanState.unitAmounts);
+    setNotes(loadedPlanState.notes ?? "");
+    setAmountDrafts({});
   }, [loadedPlanState, loadPlanToken]);
 
   useEffect(() => {
@@ -102,6 +110,20 @@ export function BudgetPlanner({
       }
       return next;
     });
+    setUnitAmounts((current) => {
+      const next = { ...current };
+      for (const item of items) {
+        if (next[item.id] === undefined) {
+          next[item.id] = sliderPercentToAmount(
+            item.low_amount,
+            item.medium_amount,
+            item.high_amount,
+            BUDGET_SLIDER_DEFAULT_PERCENT
+          );
+        }
+      }
+      return next;
+    });
   }, [items]);
 
   const itemsByRoom = useMemo(() => groupBudgetItemsByRoom(items), [items]);
@@ -118,18 +140,30 @@ export function BudgetPlanner({
         if (!includedItems[item.id]) return sum;
         const percent = sliderPercents[item.id] ?? BUDGET_SLIDER_DEFAULT_PERCENT;
         const quantity = quantities[item.id] ?? 0;
-        const unitAmount = sliderPercentToAmount(
-          item.low_amount,
-          item.medium_amount,
-          item.high_amount,
-          percent
-        );
+        const storedAmount = unitAmounts[item.id];
+        const unitAmount =
+          typeof storedAmount === "number" && Number.isFinite(storedAmount)
+            ? roundMoney(storedAmount)
+            : sliderPercentToAmount(
+                item.low_amount,
+                item.medium_amount,
+                item.high_amount,
+                percent
+              );
         return sum + budgetLineTotal(unitAmount, quantity);
       }, 0);
       totals.set(room, total);
     }
     return totals;
-  }, [rooms, includedRooms, includedItems, quantities, itemsByRoom, sliderPercents]);
+  }, [
+    rooms,
+    includedRooms,
+    includedItems,
+    quantities,
+    itemsByRoom,
+    sliderPercents,
+    unitAmounts,
+  ]);
 
   const grandTotal = useMemo(
     () => [...roomTotals.values()].reduce((sum, value) => sum + value, 0),
@@ -144,9 +178,20 @@ export function BudgetPlanner({
         includedRooms,
         includedItems,
         quantities,
-        sliderPercents
+        sliderPercents,
+        unitAmounts,
+        notes
       ),
-    [items, rooms, includedRooms, includedItems, quantities, sliderPercents]
+    [
+      items,
+      rooms,
+      includedRooms,
+      includedItems,
+      quantities,
+      sliderPercents,
+      unitAmounts,
+      notes,
+    ]
   );
 
   const plannerState = useMemo(
@@ -155,8 +200,10 @@ export function BudgetPlanner({
       includedItems,
       quantities,
       sliderPercents,
+      unitAmounts,
+      notes,
     }),
-    [includedRooms, includedItems, quantities, sliderPercents]
+    [includedRooms, includedItems, quantities, sliderPercents, unitAmounts, notes]
   );
 
   useEffect(() => {
@@ -166,6 +213,47 @@ export function BudgetPlanner({
   useEffect(() => {
     onPlannerStateChange?.(plannerState);
   }, [plannerState, onPlannerStateChange]);
+
+  function applySliderPercent(item: BudgetItem, percent: number) {
+    const nextPercent = Math.max(0, Math.min(100, percent));
+    const nextAmount = sliderPercentToAmount(
+      item.low_amount,
+      item.medium_amount,
+      item.high_amount,
+      nextPercent
+    );
+    setSliderPercents((current) => ({ ...current, [item.id]: nextPercent }));
+    setUnitAmounts((current) => ({ ...current, [item.id]: nextAmount }));
+    setAmountDrafts((current) => {
+      if (!(item.id in current)) return current;
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
+  }
+
+  function commitExactAmount(item: BudgetItem, rawValue: string) {
+    const parsed = Number(rawValue.replace(/[$,\s]/g, ""));
+    const nextAmount = clampBudgetUnitAmount(
+      item.low_amount,
+      item.medium_amount,
+      item.high_amount,
+      parsed
+    );
+    const nextPercent = amountToSliderPercent(
+      item.low_amount,
+      item.medium_amount,
+      item.high_amount,
+      nextAmount
+    );
+    setUnitAmounts((current) => ({ ...current, [item.id]: nextAmount }));
+    setSliderPercents((current) => ({ ...current, [item.id]: nextPercent }));
+    setAmountDrafts((current) => {
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
+  }
 
   if (items.length === 0) {
     return (
@@ -245,13 +333,20 @@ export function BudgetPlanner({
                     sliderPercents[item.id] ?? BUDGET_SLIDER_DEFAULT_PERCENT;
                   const itemIncluded = includedItems[item.id] ?? false;
                   const quantity = quantities[item.id] ?? 0;
-                  const unitAmount = sliderPercentToAmount(
-                    item.low_amount,
-                    item.medium_amount,
-                    item.high_amount,
-                    percent
-                  );
+                  const storedAmount = unitAmounts[item.id];
+                  const unitAmount =
+                    typeof storedAmount === "number" && Number.isFinite(storedAmount)
+                      ? roundMoney(storedAmount)
+                      : sliderPercentToAmount(
+                          item.low_amount,
+                          item.medium_amount,
+                          item.high_amount,
+                          percent
+                        );
                   const lineTotal = budgetLineTotal(unitAmount, quantity);
+                  const amountDraft = amountDrafts[item.id];
+                  const amountInputValue =
+                    amountDraft !== undefined ? amountDraft : String(unitAmount);
 
                   return (
                     <li
@@ -302,7 +397,7 @@ export function BudgetPlanner({
                           />
                         </label>
 
-                        <div className="flex min-w-0 flex-1 items-center justify-center">
+                        <div className="flex min-w-0 flex-1 flex-col items-center gap-2">
                           <div className="grid grid-cols-[5.5rem_11.7rem_5.5rem_4.5rem] items-center gap-x-2 max-lg:my-1 max-lg:w-full">
                             <div className="flex w-[5.5rem] items-center justify-end gap-[2ch]">
                               <span className="shrink-0 text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -321,10 +416,7 @@ export function BudgetPlanner({
                                 value={percent}
                                 disabled={!itemIncluded}
                                 onChange={(event) =>
-                                  setSliderPercents((current) => ({
-                                    ...current,
-                                    [item.id]: Number(event.target.value),
-                                  }))
+                                  applySliderPercent(item, Number(event.target.value))
                                 }
                                 className="budget-range h-2 w-full cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                                 aria-label={`${item.item_description} budget slider`}
@@ -337,6 +429,43 @@ export function BudgetPlanner({
                               splurge
                             </span>
                           </div>
+                          <label className="flex items-center gap-2">
+                            <span className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                              Amount
+                            </span>
+                            <input
+                              type="number"
+                              min={Math.min(
+                                item.low_amount,
+                                item.medium_amount,
+                                item.high_amount
+                              )}
+                              max={Math.max(
+                                item.low_amount,
+                                item.medium_amount,
+                                item.high_amount
+                              )}
+                              step={0.01}
+                              value={amountInputValue}
+                              disabled={!itemIncluded}
+                              onChange={(event) =>
+                                setAmountDrafts((current) => ({
+                                  ...current,
+                                  [item.id]: event.target.value,
+                                }))
+                              }
+                              onBlur={(event) =>
+                                commitExactAmount(item, event.target.value)
+                              }
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.currentTarget.blur();
+                                }
+                              }}
+                              className="w-28 rounded-lg border border-brand-300 bg-white px-2 py-1 text-sm tabular-nums shadow-sm disabled:cursor-not-allowed disabled:bg-slate-100 disabled:opacity-60"
+                              aria-label={`${item.item_description} exact amount`}
+                            />
+                          </label>
                         </div>
 
                         <div className="shrink-0 text-right lg:min-w-[6.5rem]">
@@ -362,6 +491,19 @@ export function BudgetPlanner({
           </section>
         );
       })}
+
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <label className="block">
+          <span className="mb-1 block text-sm font-medium text-slate-900">Notes</span>
+          <textarea
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
+            rows={3}
+            placeholder="Optional notes for this investment approach…"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+          />
+        </label>
+      </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-200 bg-brand-50 p-4">
         <p className="text-sm font-medium uppercase tracking-wide text-brand-800">

@@ -95,22 +95,6 @@ export function isOperatingExpenseEntry(entry: CoaKindFields): boolean {
   return true;
 }
 
-/**
- * Personal-use goods (and their companions) never move business cash. Hide them
- * from Cashflow so the register matches the bank statement. Owner contributions
- * (300) and tax remittances (400) are entered manually and stay visible.
- */
-export function isPersonalUseHiddenFromCashflow(
-  entry: Pick<LedgerEntry, "balance_sheet" | "source_ledger_id"> & CoaKindFields,
-  parentById: Map<string, Pick<LedgerEntry, "balance_sheet"> & CoaKindFields>
-): boolean {
-  if (entry.balance_sheet && isInvoiceGoodsLine(entry)) return true;
-  const parentId = entry.source_ledger_id;
-  if (!parentId) return false;
-  const parent = parentById.get(parentId);
-  return Boolean(parent?.balance_sheet && isInvoiceGoodsLine(parent));
-}
-
 function normalizeText(value: string | null | undefined) {
   return typeof value === "string" ? value.trim() : "";
 }

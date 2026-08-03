@@ -41,6 +41,7 @@ import {
 } from "@/lib/utils";
 import {
   buildPaymentCompanionPayload,
+  deletePaymentCompanionsForParent,
   designerCostDebitAmount,
   isInvoiceGoodsLine,
   mergePaymentCompanionsOntoEntries,
@@ -190,6 +191,9 @@ const defaultPaidTo: Purchaser = "Jess";
 function defaultPaymentAmount(entry: LedgerEntry) {
   const saved = Number(entry.payment_amount);
   if (saved > 0) return saved;
+  // Keep $0 when the line is already settled (e.g. full underpayment variance
+  // write-off). Prefilling the invoiced total made Save look like it failed.
+  if (isLedgerLineFullyPaid(entry)) return 0;
   return ledgerLineAmount(entry);
 }
 
@@ -328,7 +332,12 @@ export default function PaymentsPage() {
       .map((row) =>
         normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
       )
-      .filter(isInvoiceGoodsLine);
+      .filter(
+        (entry) =>
+          isInvoiceGoodsLine(entry) &&
+          // Personal-use tax is remitted via S&U, not tracked as client payments here.
+          !entry.balance_sheet
+      );
 
     const invoiceLineIds = invoiceLines.map((entry) => entry.id);
     let companions: LedgerEntry[] = [];
@@ -364,8 +373,10 @@ export default function PaymentsPage() {
     const unpaidDebits = allInvoicedDebits.filter(
       (entry) => !isLedgerLineFullyPaid(entry)
     );
+    // Include variance-only / expense write-offs (cash settled may be $0).
     const paymentHistory = allInvoicedDebits.filter(
-      (entry) => ledgerLineAmountSettled(entry) > 0
+      (entry) =>
+        isLedgerLineFullyPaid(entry) || ledgerLineAmountSettled(entry) > 0
     );
 
     if (unpaidDebits.length === 0) {
@@ -843,28 +854,15 @@ export default function PaymentsPage() {
     const supabase = createClient();
 
     for (const entry of editingEntries) {
-      const companionId = entry.payment_companion_id;
-      if (companionId) {
-        const { error: deleteError } = await supabase
-          .from("ledger")
-          .delete()
-          .eq("id", companionId);
-        if (deleteError) {
-          setSaving(false);
-          setError(deleteError.message);
-          return;
-        }
-      } else {
-        const { error: companionClearError } = await supabase
-          .from("ledger")
-          .delete()
-          .eq("source_ledger_id", entry.id)
-          .eq("companion_kind", "payment");
-        if (companionClearError) {
-          setSaving(false);
-          setError(companionClearError.message);
-          return;
-        }
+      const companionDeleteError = await deletePaymentCompanionsForParent(
+        supabase,
+        entry.id,
+        entry.payment_companion_id
+      );
+      if (companionDeleteError) {
+        setSaving(false);
+        setError(companionDeleteError);
+        return;
       }
 
       const { error: updateError } = await supabase
@@ -966,33 +964,22 @@ export default function PaymentsPage() {
         return false;
       }
 
-      // Personal-use tax is funded by a manual 300 Owner's Contribution on
-      // Cashflow — do not auto-create a Sales Income payment companion.
-      if (entry.balance_sheet) {
-        const { error: companionClearError } = await supabase
-          .from("ledger")
-          .delete()
-          .eq("source_ledger_id", entry.id)
-          .eq("companion_kind", "payment");
-        if (companionClearError) {
-          setSaving(false);
-          setError(companionClearError.message);
-          return false;
-        }
-      } else {
-        const companionPayload = buildPaymentCompanionPayload(entry, {
-          date_paid: draft.date_paid || null,
-          paid_to: draft.paid_to,
-          payment_type: draft.payment_type,
-          payment_amount: paymentAmount,
-          payment_fee: projected.payment_fee,
-        });
+      // Personal-use: do not create or update Sales Income payment companions.
+      if (!entry.balance_sheet) {
+        if (paymentAmount > 0) {
+          const companionPayload = buildPaymentCompanionPayload(entry, {
+            date_paid: draft.date_paid || null,
+            paid_to: draft.paid_to,
+            payment_type: draft.payment_type,
+            payment_amount: paymentAmount,
+            payment_fee: projected.payment_fee,
+          });
 
-        if (paymentAmount > 0 || acceptVariance) {
           if (entry.payment_companion_id) {
+            const { coa_category: _coa, ...companionUpdate } = companionPayload;
             const { error: companionError } = await supabase
               .from("ledger")
-              .update(companionPayload)
+              .update(companionUpdate)
               .eq("id", entry.payment_companion_id);
             if (companionError) {
               setSaving(false);
@@ -1007,16 +994,17 @@ export default function PaymentsPage() {
               .eq("companion_kind", "payment")
               .maybeSingle();
             if (existingCompanion?.id) {
+              const { coa_category: _coa, ...companionUpdate } = companionPayload;
               const { error: companionError } = await supabase
                 .from("ledger")
-                .update(companionPayload)
+                .update(companionUpdate)
                 .eq("id", existingCompanion.id);
               if (companionError) {
                 setSaving(false);
                 setError(companionError.message);
                 return false;
               }
-            } else if (paymentAmount > 0) {
+            } else {
               const { error: companionError } = await supabase
                 .from("ledger")
                 .insert(companionPayload);
@@ -1027,22 +1015,19 @@ export default function PaymentsPage() {
               }
             }
           }
-        } else if (entry.payment_companion_id) {
-          const { error: companionError } = await supabase
-            .from("ledger")
-            .delete()
-            .eq("id", entry.payment_companion_id);
-          if (companionError) {
+        } else {
+          // $0 payment (including full underpayment variance write-off): remove any
+          // Sales Income companion so stale payment_amount cannot reappear on reload.
+          const companionDeleteError = await deletePaymentCompanionsForParent(
+            supabase,
+            entry.id,
+            entry.payment_companion_id
+          );
+          if (companionDeleteError) {
             setSaving(false);
-            setError(companionError.message);
+            setError(companionDeleteError);
             return false;
           }
-        } else {
-          await supabase
-            .from("ledger")
-            .delete()
-            .eq("source_ledger_id", entry.id)
-            .eq("companion_kind", "payment");
         }
       }
 
@@ -1063,8 +1048,9 @@ export default function PaymentsPage() {
   }
 
   async function finishPendingSave(pending: PendingPaymentSave) {
-    const ok = await persistPaymentDrafts(pending.rows, pending.decisions);
+    // Close the modal first so a second click cannot start a duplicate persist.
     setPendingSave(null);
+    const ok = await persistPaymentDrafts(pending.rows, pending.decisions);
     if (!ok) return;
     setSuccess(pending.successMessage);
     await loadData();
