@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -15,6 +16,8 @@ import { formatDate } from "@/lib/utils";
 
 type DraftMap = Record<string, string>;
 
+const DOCUMENTATION_PATH = "/documentation";
+
 function emptyDrafts(): DraftMap {
   const drafts: DraftMap = {};
   for (const section of DOCUMENTATION_SECTIONS) {
@@ -23,7 +26,17 @@ function emptyDrafts(): DraftMap {
   return drafts;
 }
 
+function isSameDocumentationPath(href: string) {
+  try {
+    const url = new URL(href, window.location.origin);
+    return url.pathname === DOCUMENTATION_PATH;
+  } catch {
+    return href === DOCUMENTATION_PATH;
+  }
+}
+
 export default function DocumentationPage() {
+  const router = useRouter();
   const [drafts, setDrafts] = useState<DraftMap>(emptyDrafts);
   const [saved, setSaved] = useState<DraftMap>(emptyDrafts);
   const [updatedAtByKey, setUpdatedAtByKey] = useState<Record<string, string>>(
@@ -34,6 +47,7 @@ export default function DocumentationPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
 
   const dirty = useMemo(
     () =>
@@ -42,6 +56,8 @@ export default function DocumentationPage() {
       ),
     [drafts, saved]
   );
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
 
   const loadDocumentation = useCallback(async () => {
     setLoading(true);
@@ -82,9 +98,83 @@ export default function DocumentationPage() {
     void loadDocumentation();
   }, [loadDocumentation]);
 
+  useEffect(() => {
+    function onBeforeUnload(event: BeforeUnloadEvent) {
+      if (!dirtyRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, []);
+
+  useEffect(() => {
+    if (!dirty) return;
+
+    function onDocumentClick(event: MouseEvent) {
+      if (!dirtyRef.current) return;
+      if (event.defaultPrevented) return;
+      if (event.button !== 0) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+
+      const anchor = target.closest("a[href]");
+      if (!(anchor instanceof HTMLAnchorElement)) return;
+      if (anchor.target === "_blank" || anchor.hasAttribute("download")) return;
+
+      const href = anchor.getAttribute("href");
+      if (!href || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:")) {
+        return;
+      }
+
+      let nextUrl: URL;
+      try {
+        nextUrl = new URL(href, window.location.origin);
+      } catch {
+        return;
+      }
+
+      if (nextUrl.origin !== window.location.origin) return;
+      if (isSameDocumentationPath(nextUrl.pathname)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      setPendingHref(`${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+    }
+
+    document.addEventListener("click", onDocumentClick, true);
+    return () => document.removeEventListener("click", onDocumentClick, true);
+  }, [dirty]);
+
+  useEffect(() => {
+    if (!pendingHref) return;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setPendingHref(null);
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [pendingHref]);
+
   function updateDraft(key: string, value: string) {
     setDrafts((current) => ({ ...current, [key]: value }));
     setSuccess(null);
+  }
+
+  function handleStayOnPage() {
+    setPendingHref(null);
+  }
+
+  function handleLeaveWithoutSaving() {
+    if (!pendingHref) return;
+    const href = pendingHref;
+    setPendingHref(null);
+    dirtyRef.current = false;
+    router.push(href);
   }
 
   async function handleSave() {
@@ -127,6 +217,36 @@ export default function DocumentationPage() {
 
   return (
     <AppShell>
+      {pendingHref && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="unsaved-docs-title"
+        >
+          <div className="w-full max-w-md rounded-xl border border-amber-200 bg-white p-5 shadow-lg">
+            <h2
+              id="unsaved-docs-title"
+              className="text-lg font-semibold text-slate-900"
+            >
+              Save before leaving?
+            </h2>
+            <p className="mt-2 text-sm text-slate-600">
+              You have unsaved documentation changes. Save before leaving this
+              page, or your updates will be lost.
+            </p>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <Button variant="secondary" onClick={handleStayOnPage}>
+                Stay on page
+              </Button>
+              <Button variant="danger" onClick={handleLeaveWithoutSaving}>
+                Leave without saving
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <PageHeader
         title="Documentation"
         description="Shared notes on how to use each part of Maison Joy Financial Manager. Anyone signed in can edit."

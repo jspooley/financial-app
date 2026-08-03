@@ -15,7 +15,7 @@ import { createClient } from "@/lib/supabase/client";
 import { isInvoiceGoodsLine } from "@/lib/coa";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { InvoiceLineItem } from "@/lib/invoice-utils";
-import { getLedgerLinesForInvoice, invoiceLineTotal, isInvoiceFullyPaid, isInvoicedDebitLine, isToBeInvoicedLine, normalizeInvoiceId, sumInvoiceHistoryTotal, summarizeToBeInvoiced } from "@/lib/invoice-utils";
+import { getLedgerLinesForInvoice, invoiceLineTotal, isInvoiceFullyPaid, isInvoicePaidByBalance, isInvoicedDebitLine, isToBeInvoicedLine, normalizeInvoiceId, sumInvoiceHistoryTotal, summarizeToBeInvoiced } from "@/lib/invoice-utils";
 import type { Client, Invoice, LedgerEntry } from "@/lib/types";
 import { formatCurrency, formatDate, roundMoney } from "@/lib/utils";
 
@@ -164,7 +164,8 @@ export default function InvoicingPage() {
         isInvoicedDebitLine
       );
       if (lines.length === 0) continue;
-      result[invoiceId] = isInvoiceFullyPaid(lines);
+      result[invoiceId] =
+        isInvoiceFullyPaid(lines) || isInvoicePaidByBalance(lines);
     }
     return result;
   }, [invoices, ledgerEntries]);
@@ -287,11 +288,16 @@ export default function InvoicingPage() {
             actions: (
               <RowActions
                 onEdit={() => {
+                  if (isPaid) {
+                    alert("This invoice is paid in full and cannot be edited.");
+                    return;
+                  }
                   setEditing(invoice);
                   setPrefillClientId(undefined);
                   setShowForm(true);
                 }}
                 onDelete={() => handleDeleteClick(invoice)}
+                editDisabled={isPaid}
                 deleteDisabled={isPaid}
               />
             ),

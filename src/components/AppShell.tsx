@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { useInactivityLogout } from "@/lib/use-inactivity-logout";
 import { Button } from "./ui/Button";
 
 const navItems = [
@@ -76,6 +77,7 @@ const reconciliationHref = "/reconciliation";
 const salesUseTaxHref = "/sales-use-tax";
 const plReportHref = "/pl-report";
 const scheduleCHref = "/schedule-c";
+const bankCashflowHref = "/bank-cashflow";
 const documentationHref = "/documentation";
 
 function ReportsBox({ pathname }: { pathname: string }) {
@@ -93,6 +95,14 @@ function ReportsBox({ pathname }: { pathname: string }) {
       >
         <span aria-hidden>💸</span>
         Cashflow
+      </Link>
+      <Link
+        href={bankCashflowHref}
+        className={navLinkClass(pathname === bankCashflowHref)}
+        title="Bank vs Cashflow Comparison"
+      >
+        <span aria-hidden>🏦</span>
+        Bank vs CF
       </Link>
       <Link
         href={salesUseTaxHref}
@@ -154,6 +164,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [tradeAccountCount, setTradeAccountCount] = useState<number | null>(null);
+
+  useInactivityLogout();
 
   useEffect(() => {
     const supabase = createClient();

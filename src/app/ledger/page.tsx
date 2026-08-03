@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
-import { isToBeInvoicedLine, jobKeysByStatus, ledgerJobKey, normalizePoNumber } from "@/lib/invoice-utils";
+import { isToBeInvoicedLine, jobKeysByStatus, ledgerJobKey, normalizePoNumber, isLedgerLineFullyPaid } from "@/lib/invoice-utils";
 import { isInvoiceGoodsLine } from "@/lib/coa";
 import {
   isPaymentCompanionRow,
@@ -35,6 +35,10 @@ import {
 import { SelectField } from "@/components/ui/FormFields";
 
 const GOODS_AND_SERVICES_LABEL = "Goods and Services";
+
+function isGoodsLineLocked(entry: LedgerEntry) {
+  return isLedgerLineFullyPaid(entry) || Boolean(entry.paid);
+}
 
 function GoodsAndServicesSectionHeader({
   entryCount,
@@ -206,6 +210,10 @@ function LedgerPageContent() {
   }, []);
 
   async function handleDelete(entry: LedgerEntry) {
+    if (isGoodsLineLocked(entry)) {
+      alert("This line is paid in full and cannot be deleted.");
+      return;
+    }
     if (!confirm("Delete this ledger entry?")) return;
     const supabase = createClient();
     const { error } = await supabase.from("ledger").delete().eq("id", entry.id);
@@ -217,15 +225,22 @@ function LedgerPageContent() {
   }
 
   function startEdit(entry: LedgerEntry) {
+    if (isGoodsLineLocked(entry)) {
+      alert("This line is paid in full and cannot be edited.");
+      return;
+    }
     setEditing(entry);
     setShowForm(true);
   }
 
   function entryActions(entry: LedgerEntry) {
+    const locked = isGoodsLineLocked(entry);
     return (
       <RowActions
         onEdit={() => startEdit(entry)}
         onDelete={() => handleDelete(entry)}
+        editDisabled={locked}
+        deleteDisabled={locked}
       />
     );
   }

@@ -13,6 +13,7 @@ import {
   formatInvoiceId,
   INVOICE_DB_SETUP_SQL,
   isInvoiceFullyPaid,
+  isInvoicePaidByBalance,
   isLedgerLineUninvoiced,
   isToBeInvoicedLine,
   nextInvoiceSequence,
@@ -275,7 +276,10 @@ export function InvoiceForm({
   );
 
   const invoiceFullyPaid = useMemo(
-    () => isInvoiceFullyPaid(currentInvoiceLines),
+    () =>
+      currentInvoiceLines.length > 0 &&
+      (isInvoiceFullyPaid(currentInvoiceLines) ||
+        isInvoicePaidByBalance(currentInvoiceLines)),
     [currentInvoiceLines]
   );
 
@@ -417,6 +421,12 @@ export function InvoiceForm({
     setError(null);
     setNeedsDbSetup(false);
     setSetupMessage(null);
+
+    if (initial && invoiceFullyPaid) {
+      setError("This invoice is paid in full and cannot be modified.");
+      return;
+    }
+
     const supabase = createClient();
     const po = values.po_number.trim();
 
@@ -442,36 +452,34 @@ export function InvoiceForm({
         return;
       }
 
-      if (!invoiceFullyPaid) {
-        const previousIds = new Set(currentInvoiceLines.map((line) => line.id));
-        const toAdd = [...includedLineIds].filter((id) => !previousIds.has(id));
-        const toRemove = [...previousIds].filter((id) => !includedLineIds.has(id));
+      const previousIds = new Set(currentInvoiceLines.map((line) => line.id));
+      const toAdd = [...includedLineIds].filter((id) => !previousIds.has(id));
+      const toRemove = [...previousIds].filter((id) => !includedLineIds.has(id));
 
-        if (includedLineIds.size === 0) {
-          setError("Invoice must include at least one ledger item.");
+      if (includedLineIds.size === 0) {
+        setError("Invoice must include at least one ledger item.");
+        return;
+      }
+
+      if (toRemove.length > 0) {
+        const unlinkResult = await unlinkLinesFromInvoice(toRemove);
+        if (!unlinkResult.ok) {
+          setError(unlinkResult.error.message);
           return;
         }
+      }
 
-        if (toRemove.length > 0) {
-          const unlinkResult = await unlinkLinesFromInvoice(toRemove);
-          if (!unlinkResult.ok) {
-            setError(unlinkResult.error.message);
-            return;
+      if (toAdd.length > 0) {
+        const linkResult = await linkLinesToInvoice(invoiceId, toAdd);
+        if (!linkResult.ok) {
+          const parsed = parseInvoiceDbError(linkResult.error);
+          if (parsed.needsSetup) {
+            setNeedsDbSetup(true);
+            setSetupMessage(parsed.message);
+          } else {
+            setError(parsed.message);
           }
-        }
-
-        if (toAdd.length > 0) {
-          const linkResult = await linkLinesToInvoice(invoiceId, toAdd);
-          if (!linkResult.ok) {
-            const parsed = parseInvoiceDbError(linkResult.error);
-            if (parsed.needsSetup) {
-              setNeedsDbSetup(true);
-              setSetupMessage(parsed.message);
-            } else {
-              setError(parsed.message);
-            }
-            return;
-          }
+          return;
         }
       }
 
@@ -552,6 +560,17 @@ export function InvoiceForm({
           {initial ? "Edit Invoice" : "New Invoice"}
         </h2>
 
+        {initial && invoiceFullyPaid && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+            This invoice is paid in full and cannot be modified. Use View Invoice
+            for a read-only copy, or adjust payments first if a correction is needed.
+          </div>
+        )}
+
+        <fieldset
+          disabled={Boolean(initial && invoiceFullyPaid)}
+          className="min-w-0 space-y-6"
+        >
         <div className="grid gap-4 sm:grid-cols-2">
           <SelectField
             label="Client"
@@ -613,8 +632,7 @@ export function InvoiceForm({
             <h3 className="font-medium text-slate-900">Include in this invoice</h3>
             {initial && invoiceFullyPaid && (
               <p className="text-sm text-amber-800">
-                All items on this invoice are marked paid. Line items are locked, but you
-                can still update the invoice date and notes.
+                All items on this invoice are paid in full. Line items are locked.
               </p>
             )}
             {initial && !invoiceFullyPaid && (
@@ -713,6 +731,7 @@ export function InvoiceForm({
             )}
           </section>
         )}
+        </fieldset>
 
         {needsDbSetup && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
@@ -743,11 +762,13 @@ export function InvoiceForm({
         {error && <p className="text-sm text-red-600">{error}</p>}
 
         <div className="flex flex-wrap gap-2">
-          <Button type="submit" loading={isSubmitting}>
-            {initial ? "Save Changes" : "Create Invoice"}
-          </Button>
+          {!(initial && invoiceFullyPaid) && (
+            <Button type="submit" loading={isSubmitting}>
+              {initial ? "Save Changes" : "Create Invoice"}
+            </Button>
+          )}
           <Button type="button" variant="secondary" onClick={onCancel}>
-            Cancel
+            {initial && invoiceFullyPaid ? "Close" : "Cancel"}
           </Button>
         </div>
       </form>

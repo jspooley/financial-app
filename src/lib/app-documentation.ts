@@ -9,6 +9,7 @@ export const DOCUMENTATION_SECTIONS = [
   { key: "trade-accounts", title: "Trade Accounts" },
   { key: "chart-of-accounts", title: "Chart of Accounts" },
   { key: "cashflow", title: "Cashflow" },
+  { key: "bank-cashflow", title: "Bank vs Cashflow" },
   { key: "sales-use-tax", title: "Sales & Use Tax" },
   { key: "pl-report", title: "P&L Report" },
   { key: "reconciliation", title: "Reconciliation" },

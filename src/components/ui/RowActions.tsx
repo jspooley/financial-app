@@ -4,6 +4,7 @@ interface RowActionsProps {
   onEdit: () => void;
   onDelete: () => void;
   onDuplicate?: () => void;
+  editDisabled?: boolean;
   deleteDisabled?: boolean;
   editLabel?: string;
   deleteLabel?: string;
@@ -14,6 +15,7 @@ export function RowActions({
   onEdit,
   onDelete,
   onDuplicate,
+  editDisabled,
   deleteDisabled,
   editLabel = "Edit",
   deleteLabel = "Delete",
@@ -25,6 +27,7 @@ export function RowActions({
         variant="secondary"
         className="w-full min-h-[33px] px-3 py-1.5"
         onClick={onEdit}
+        disabled={editDisabled}
       >
         {editLabel}
       </Button>
