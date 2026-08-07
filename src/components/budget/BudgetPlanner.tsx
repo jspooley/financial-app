@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { BudgetPlannerState } from "@/lib/budget-planner-state";
 import {
   BUDGET_SLIDER_DEFAULT_PERCENT,
@@ -12,6 +12,7 @@ import {
   normalizeBudgetQuantity,
   sliderPercentToAmount,
   sortBudgetRooms,
+  sortBudgetRoomsByLoadedTotals,
   type BudgetPlanSnapshot,
 } from "@/lib/budget-utils";
 import { BUDGET_ROOM_OPTIONS, type BudgetItem } from "@/lib/types";
@@ -22,7 +23,55 @@ interface BudgetPlannerProps {
   onPlanChange?: (plan: BudgetPlanSnapshot) => void;
   onPlannerStateChange?: (state: BudgetPlannerState) => void;
   loadedPlanState?: BudgetPlannerState | null;
+  /** Saved plan snapshot from Load; used to order rooms when totals are authoritative. */
+  loadedSnapshot?: BudgetPlanSnapshot | null;
   loadPlanToken?: number;
+}
+
+function roomTotalsMapFromSnapshot(
+  rooms: string[],
+  snapshot: BudgetPlanSnapshot | null | undefined
+) {
+  const totals = new Map<string, number>();
+  for (const room of rooms) totals.set(room, 0);
+  for (const room of snapshot?.rooms ?? []) {
+    totals.set(room.room, Number(room.total) || 0);
+  }
+  return totals;
+}
+
+function roomOrderForLoadedPlan(
+  items: BudgetItem[],
+  state: BudgetPlannerState,
+  snapshot?: BudgetPlanSnapshot | null
+): string[] {
+  const baseRooms = sortBudgetRooms(
+    [...groupBudgetItemsByRoom(items).keys()],
+    BUDGET_ROOM_OPTIONS
+  );
+
+  if (snapshot?.rooms?.length) {
+    return sortBudgetRoomsByLoadedTotals(
+      baseRooms,
+      roomTotalsMapFromSnapshot(baseRooms, snapshot),
+      BUDGET_ROOM_OPTIONS
+    );
+  }
+
+  const plan = buildBudgetPlanSnapshot(
+    items,
+    baseRooms,
+    state.includedRooms,
+    state.includedItems,
+    state.quantities,
+    state.sliderPercents,
+    state.unitAmounts,
+    state.notes
+  );
+  const totals = new Map<string, number>();
+  for (const room of baseRooms) totals.set(room, 0);
+  for (const room of plan.rooms) totals.set(room.room, room.total);
+  return sortBudgetRoomsByLoadedTotals(baseRooms, totals, BUDGET_ROOM_OPTIONS);
 }
 
 export function BudgetPlanner({
@@ -30,22 +79,57 @@ export function BudgetPlanner({
   onPlanChange,
   onPlannerStateChange,
   loadedPlanState,
+  loadedSnapshot = null,
   loadPlanToken = 0,
 }: BudgetPlannerProps) {
-  const rooms = useMemo(() => {
-    const grouped = groupBudgetItemsByRoom(items);
-    return sortBudgetRooms([...grouped.keys()], BUDGET_ROOM_OPTIONS);
-  }, [items]);
-
   // Seed from loaded plan on mount (parent remounts via key={loadPlanToken}).
   const seed =
     loadPlanToken > 0 && loadedPlanState ? loadedPlanState : null;
+
+  const baseRooms = useMemo(
+    () =>
+      sortBudgetRooms(
+        [...groupBudgetItemsByRoom(items).keys()],
+        BUDGET_ROOM_OPTIONS
+      ),
+    [items]
+  );
+
+  const [roomDisplayOrder, setRoomDisplayOrder] = useState<string[] | null>(
+    () =>
+      seed
+        ? roomOrderForLoadedPlan(items, seed, loadedSnapshot)
+        : null
+  );
+  const pinnedOrderForTokenRef = useRef(0);
+
+  const rooms = useMemo(() => {
+    if (!roomDisplayOrder) return baseRooms;
+    const available = new Set(baseRooms);
+    const ordered = roomDisplayOrder.filter((room) => available.has(room));
+    const missing = sortBudgetRooms(
+      baseRooms.filter((room) => !ordered.includes(room)),
+      BUDGET_ROOM_OPTIONS
+    );
+    return [...ordered, ...missing];
+  }, [baseRooms, roomDisplayOrder]);
 
   const [includedRooms, setIncludedRooms] = useState<Record<string, boolean>>(
     () => seed?.includedRooms ?? {}
   );
   const [expandedRooms, setExpandedRooms] = useState<Record<string, boolean>>(
-    {}
+    () => {
+      if (!seed) return {};
+      const totals = loadedSnapshot?.rooms?.length
+        ? roomTotalsMapFromSnapshot(baseRooms, loadedSnapshot)
+        : null;
+      if (!totals) return {};
+      const next: Record<string, boolean> = {};
+      for (const room of baseRooms) {
+        next[room] = (totals.get(room) ?? 0) > 0;
+      }
+      return next;
+    }
   );
   const [includedItems, setIncludedItems] = useState<Record<string, boolean>>(
     () => seed?.includedItems ?? {}
@@ -72,13 +156,17 @@ export function BudgetPlanner({
     setUnitAmounts(loadedPlanState.unitAmounts);
     setNotes(loadedPlanState.notes ?? "");
     setAmountDrafts({});
+    pinnedOrderForTokenRef.current = 0;
+    setRoomDisplayOrder(
+      roomOrderForLoadedPlan(items, loadedPlanState, loadedSnapshot)
+    );
   }, [loadPlanToken]); // eslint-disable-line react-hooks/exhaustive-deps -- apply only on explicit load
 
   useEffect(() => {
     setIncludedRooms((current) => {
       let changed = false;
       const next = { ...current };
-      for (const room of rooms) {
+      for (const room of baseRooms) {
         if (next[room] === undefined) {
           next[room] = true;
           changed = true;
@@ -86,13 +174,13 @@ export function BudgetPlanner({
       }
       return changed ? next : current;
     });
-  }, [rooms]);
+  }, [baseRooms]);
 
   useEffect(() => {
     setExpandedRooms((current) => {
       let changed = false;
       const next = { ...current };
-      for (const room of rooms) {
+      for (const room of baseRooms) {
         if (next[room] === undefined) {
           next[room] = false;
           changed = true;
@@ -100,7 +188,7 @@ export function BudgetPlanner({
       }
       return changed ? next : current;
     });
-  }, [rooms]);
+  }, [baseRooms]);
 
   useEffect(() => {
     setIncludedItems((current) => {
@@ -164,7 +252,7 @@ export function BudgetPlanner({
 
   const roomTotals = useMemo(() => {
     const totals = new Map<string, number>();
-    for (const room of rooms) {
+    for (const room of baseRooms) {
       if (!includedRooms[room]) {
         totals.set(room, 0);
         continue;
@@ -190,7 +278,7 @@ export function BudgetPlanner({
     }
     return totals;
   }, [
-    rooms,
+    baseRooms,
     includedRooms,
     includedItems,
     quantities,
@@ -198,6 +286,32 @@ export function BudgetPlanner({
     sliderPercents,
     unitAmounts,
   ]);
+
+  // After load, re-pin room order once live totals show non-zero amounts.
+  // Covers cases where the first pass had empty inclusions before state settled.
+  useEffect(() => {
+    if (loadPlanToken === 0) return;
+    if (pinnedOrderForTokenRef.current === loadPlanToken) return;
+    let hasNonZero = false;
+    for (const total of roomTotals.values()) {
+      if (total > 0) {
+        hasNonZero = true;
+        break;
+      }
+    }
+    if (!hasNonZero) return;
+    pinnedOrderForTokenRef.current = loadPlanToken;
+    setRoomDisplayOrder(
+      sortBudgetRoomsByLoadedTotals(baseRooms, roomTotals, BUDGET_ROOM_OPTIONS)
+    );
+    setExpandedRooms((current) => {
+      const next = { ...current };
+      for (const room of baseRooms) {
+        next[room] = (roomTotals.get(room) ?? 0) > 0;
+      }
+      return next;
+    });
+  }, [loadPlanToken, roomTotals, baseRooms]);
 
   const grandTotal = useMemo(
     () => [...roomTotals.values()].reduce((sum, value) => sum + value, 0),

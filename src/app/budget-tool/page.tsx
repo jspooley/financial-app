@@ -189,6 +189,7 @@ export default function BudgetToolPage() {
     notes: "",
   });
   const [loadedPlanState, setLoadedPlanState] = useState<BudgetPlannerState | null>(null);
+  const [loadedSnapshot, setLoadedSnapshot] = useState<BudgetPlanSnapshot | null>(null);
   const [loadPlanToken, setLoadPlanToken] = useState(0);
   const [draftReady, setDraftReady] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState("");
@@ -289,6 +290,7 @@ export default function BudgetToolPage() {
       setSelectedPoId(draft.poId);
       setPlannerState(draft.plannerState);
       setLoadedPlanState(draft.plannerState);
+      setLoadedSnapshot(null);
       setLoadPlanToken((token) => token + 1);
       setPlannerDirty(true);
     }
@@ -347,13 +349,17 @@ export default function BudgetToolPage() {
     setPlannerDirty(true);
   }, []);
 
-  const handleLoadPlan = useCallback((state: BudgetPlannerState) => {
-    ignorePlannerDirtyRef.current = true;
-    setPlannerDirty(false);
-    clearPlannerDraft();
-    setLoadedPlanState(normalizePlannerState(state));
-    setLoadPlanToken((token) => token + 1);
-  }, []);
+  const handleLoadPlan = useCallback(
+    (state: BudgetPlannerState, snapshot?: BudgetPlanSnapshot | null) => {
+      ignorePlannerDirtyRef.current = true;
+      setPlannerDirty(false);
+      clearPlannerDraft();
+      setLoadedPlanState(normalizePlannerState(state));
+      setLoadedSnapshot(snapshot ?? null);
+      setLoadPlanToken((token) => token + 1);
+    },
+    []
+  );
 
   const handlePlannerSaved = useCallback(() => {
     ignorePlannerDirtyRef.current = true;
@@ -602,6 +608,7 @@ export default function BudgetToolPage() {
               onPlanChange={handlePlanChange}
               onPlannerStateChange={handlePlannerStateChange}
               loadedPlanState={loadedPlanState}
+              loadedSnapshot={loadedSnapshot}
               loadPlanToken={loadPlanToken}
             />
           </>

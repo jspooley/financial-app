@@ -3,6 +3,8 @@
 import {
   alignPlannerStateWithPlan,
   buildClientBudgetPlanSaved,
+  type BudgetPdfDetailMode,
+  type BudgetPlannerState,
 } from "@/lib/budget-planner-state";
 import {
   CLIENT_BUDGET_PDF_BUCKET,
@@ -12,7 +14,6 @@ import {
 import type { BudgetPlanSnapshot } from "@/lib/budget-utils";
 import { createClient } from "@/lib/supabase/client";
 import { roundMoney } from "@/lib/utils";
-import type { BudgetPlannerState } from "@/lib/budget-planner-state";
 
 export async function saveClientBudgetPlan({
   clientId,
@@ -21,6 +22,7 @@ export async function saveClientBudgetPlan({
   plan,
   grandTotal,
   pdfElement,
+  pdfDetail,
 }: {
   clientId: string;
   poId: string;
@@ -28,6 +30,7 @@ export async function saveClientBudgetPlan({
   plan: BudgetPlanSnapshot;
   grandTotal: number;
   pdfElement?: HTMLElement | null;
+  pdfDetail?: BudgetPdfDetailMode;
 }) {
   const supabase = createClient();
   const budgetAmount = roundMoney(grandTotal);
@@ -35,7 +38,8 @@ export async function saveClientBudgetPlan({
   const budgetPlan = buildClientBudgetPlanSaved(
     alignedState,
     budgetAmount,
-    plan
+    plan,
+    pdfDetail
   );
   let budgetPdfPath: string | null = null;
   let pdfWarning: string | null = null;

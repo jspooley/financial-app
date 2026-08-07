@@ -19,12 +19,16 @@ export interface BudgetPlannerState {
   notes: string;
 }
 
+export type BudgetPdfDetailMode = "summary" | "detailed";
+
 export interface ClientBudgetPlanSaved extends BudgetPlannerState {
   version: typeof CLIENT_BUDGET_PLAN_VERSION;
   grandTotal: number;
   savedAt: string;
   /** Authoritative line items at save time; used to restore selections if IDs drift. */
   snapshot?: BudgetPlanSnapshot;
+  /** Last PDF layout used when saving (summary = room totals; detailed = line items). */
+  pdfDetail?: BudgetPdfDetailMode;
 }
 
 export function defaultBudgetPlannerState(
@@ -197,7 +201,8 @@ export function mergeLoadedBudgetPlan(
 export function buildClientBudgetPlanSaved(
   state: BudgetPlannerState,
   grandTotal: number,
-  snapshot?: BudgetPlanSnapshot
+  snapshot?: BudgetPlanSnapshot,
+  pdfDetail?: BudgetPdfDetailMode
 ): ClientBudgetPlanSaved {
   return {
     version: CLIENT_BUDGET_PLAN_VERSION,
@@ -210,6 +215,7 @@ export function buildClientBudgetPlanSaved(
     grandTotal,
     savedAt: new Date().toISOString(),
     ...(snapshot ? { snapshot } : {}),
+    ...(pdfDetail ? { pdfDetail } : {}),
   };
 }
 
@@ -307,6 +313,10 @@ export function parseClientBudgetPlanSaved(
 
   const unitAmountsRaw = objectRecord("unitAmounts");
   const snapshot = parseSnapshot(record.snapshot);
+  const pdfDetail =
+    record.pdfDetail === "summary" || record.pdfDetail === "detailed"
+      ? record.pdfDetail
+      : undefined;
 
   return {
     version: CLIENT_BUDGET_PLAN_VERSION,
@@ -319,5 +329,6 @@ export function parseClientBudgetPlanSaved(
     grandTotal: record.grandTotal,
     savedAt: record.savedAt,
     ...(snapshot ? { snapshot } : {}),
+    ...(pdfDetail ? { pdfDetail } : {}),
   };
 }

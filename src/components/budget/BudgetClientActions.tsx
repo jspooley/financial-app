@@ -1,7 +1,10 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { BudgetPdfContent } from "@/components/budget/BudgetPdfContent";
+import {
+  BudgetPdfContent,
+  type BudgetPdfDetail,
+} from "@/components/budget/BudgetPdfContent";
 import { BudgetPdfPreview } from "@/components/budget/BudgetPdfPreview";
 import { Button } from "@/components/ui/Button";
 import { SelectField } from "@/components/ui/FormFields";
@@ -33,7 +36,10 @@ interface BudgetClientActionsProps {
   onSelectedClientIdChange: (clientId: string) => void;
   onSelectedPoIdChange: (poId: string) => void;
   onClientsUpdated: () => void;
-  onLoadPlan: (state: BudgetPlannerState) => void;
+  onLoadPlan: (
+    state: BudgetPlannerState,
+    snapshot?: BudgetPlanSnapshot | null
+  ) => void;
   onSaved?: () => void;
 }
 
@@ -58,6 +64,7 @@ export function BudgetClientActions({
   const [exporting, setExporting] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [pdfDetail, setPdfDetail] = useState<BudgetPdfDetail>("summary");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [needsBudgetSetup, setNeedsBudgetSetup] = useState(false);
@@ -73,6 +80,15 @@ export function BudgetClientActions({
     onSelectedPoIdChange("");
     setError(null);
     setSuccess(null);
+  }
+
+  function handlePoChange(poId: string) {
+    onSelectedPoIdChange(poId);
+    setError(null);
+    setSuccess(null);
+    const po = clientPos.find((row) => row.id === poId);
+    const parsed = po ? parseClientBudgetPlanSaved(po.budget_plan) : null;
+    if (parsed?.pdfDetail) setPdfDetail(parsed.pdfDetail);
   }
 
   function isBudgetSchemaError(message: string) {
@@ -115,12 +131,14 @@ export function BudgetClientActions({
         plan,
         grandTotal: budgetAmount,
         pdfElement: pdfRef.current,
+        pdfDetail,
       });
       onClientsUpdated();
       onSaved?.();
+      const layoutLabel = pdfDetail === "detailed" ? "detailed" : "summary";
       setSuccess(
         result.pdfWarning ??
-          `Saved budget (${formatCurrency(budgetAmount)}) for ${selectedClient?.name ?? "client"} · PO ${selectedPo?.po_number ?? ""}.`
+          `Saved ${layoutLabel} budget (${formatCurrency(budgetAmount)}) for ${selectedClient?.name ?? "client"} · PO ${selectedPo?.po_number ?? ""}.`
       );
     } catch (saveError) {
       const message =
@@ -164,7 +182,8 @@ export function BudgetClientActions({
       return;
     }
 
-    onLoadPlan(mergeLoadedBudgetPlan(parsed, items, rooms));
+    if (parsed.pdfDetail) setPdfDetail(parsed.pdfDetail);
+    onLoadPlan(mergeLoadedBudgetPlan(parsed, items, rooms), parsed.snapshot ?? null);
     setSuccess(
       `Loaded budget saved ${formatDate(parsed.savedAt)} for PO ${selectedPo?.po_number ?? ""}.`
     );
@@ -233,7 +252,9 @@ export function BudgetClientActions({
         pdfRef.current,
         budgetPdfFilename(selectedClient.name, selectedPo?.po_number)
       );
-      setSuccess("PDF saved to your downloads folder.");
+      setSuccess(
+        `PDF saved to your downloads folder (${pdfDetail === "detailed" ? "detailed" : "summary"}).`
+      );
     } catch (exportError) {
       setError(
         exportError instanceof Error ? exportError.message : "Could not save PDF."
@@ -272,11 +293,7 @@ export function BudgetClientActions({
             label="Client PO"
             value={selectedPoId}
             disabled={!selectedClientId || clientPos.length === 0}
-            onChange={(event) => {
-              onSelectedPoIdChange(event.target.value);
-              setError(null);
-              setSuccess(null);
-            }}
+            onChange={(event) => handlePoChange(event.target.value)}
           >
             <option value="">
               {!selectedClientId
@@ -294,10 +311,45 @@ export function BudgetClientActions({
           </SelectField>
         </div>
 
+        <fieldset className="mt-4">
+          <legend className="text-sm font-medium text-slate-700">PDF layout</legend>
+          <p className="mt-1 text-xs text-slate-500">
+            Applies to View PDF, Save PDF, and Save Client Budget.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-4">
+            <label className="inline-flex items-center gap-2 text-sm text-slate-800">
+              <input
+                type="radio"
+                name="budget-pdf-detail"
+                value="summary"
+                checked={pdfDetail === "summary"}
+                onChange={() => setPdfDetail("summary")}
+                className="h-4 w-4 border-slate-300 text-brand-600 focus:ring-brand-500"
+              />
+              Summary (room totals only)
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm text-slate-800">
+              <input
+                type="radio"
+                name="budget-pdf-detail"
+                value="detailed"
+                checked={pdfDetail === "detailed"}
+                onChange={() => setPdfDetail("detailed")}
+                className="h-4 w-4 border-slate-300 text-brand-600 focus:ring-brand-500"
+              />
+              Detailed (line items)
+            </label>
+          </div>
+        </fieldset>
+
         {savedPlan && (
           <p className="mt-3 text-sm text-slate-600">
             Last saved for this PO: {formatCurrency(savedPlan.grandTotal)} on{" "}
-            {formatDate(savedPlan.savedAt)}.
+            {formatDate(savedPlan.savedAt)}
+            {savedPlan.pdfDetail
+              ? ` · ${savedPlan.pdfDetail === "detailed" ? "detailed" : "summary"} PDF`
+              : ""}
+            .
           </p>
         )}
 
@@ -351,6 +403,7 @@ export function BudgetClientActions({
           clientName={selectedClient.name}
           poNumber={selectedPo?.po_number}
           plan={plan}
+          detail={pdfDetail}
           onClose={() => setShowPreview(false)}
         />
       )}
@@ -366,6 +419,7 @@ export function BudgetClientActions({
             clientName={selectedClient.name}
             poNumber={selectedPo?.po_number}
             plan={plan}
+            detail={pdfDetail}
           />
         ) : (
           <div ref={pdfRef} />

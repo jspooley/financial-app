@@ -105,6 +105,26 @@ export function sortBudgetRooms(
   });
 }
 
+/**
+ * After loading a client budget: rooms with a non-zero total float to the top
+ * (A–Z). Remaining rooms keep the usual preferred order.
+ */
+export function sortBudgetRoomsByLoadedTotals(
+  rooms: string[],
+  roomTotals: Map<string, number> | Record<string, number>,
+  preferredOrder: readonly string[]
+) {
+  const totalOf = (room: string) => {
+    if (roomTotals instanceof Map) return Number(roomTotals.get(room) ?? 0);
+    return Number(roomTotals[room] ?? 0);
+  };
+  const nonZero = rooms
+    .filter((room) => totalOf(room) > 0)
+    .sort((a, b) => a.localeCompare(b));
+  const zero = rooms.filter((room) => totalOf(room) <= 0);
+  return [...nonZero, ...sortBudgetRooms(zero, preferredOrder)];
+}
+
 export interface BudgetPlanLine {
   itemId: string;
   description: string;

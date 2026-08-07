@@ -1,7 +1,10 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { BudgetPdfContent } from "@/components/budget/BudgetPdfContent";
+import {
+  BudgetPdfContent,
+  type BudgetPdfDetail,
+} from "@/components/budget/BudgetPdfContent";
 import { Button } from "@/components/ui/Button";
 import { budgetPdfFilename, saveBudgetPdf } from "@/lib/budget-pdf";
 import type { BudgetPlanSnapshot } from "@/lib/budget-utils";
@@ -11,6 +14,7 @@ export interface BudgetPdfPreviewProps {
   clientName: string;
   poNumber?: string;
   plan: BudgetPlanSnapshot;
+  detail?: BudgetPdfDetail;
   onClose: () => void;
 }
 
@@ -18,6 +22,7 @@ export function BudgetPdfPreview({
   clientName,
   poNumber,
   plan,
+  detail = "summary",
   onClose,
 }: BudgetPdfPreviewProps) {
   const pdfRef = useRef<HTMLDivElement>(null);
@@ -64,6 +69,7 @@ export function BudgetPdfPreview({
             <p className="text-sm text-slate-600">
               {clientName}
               {poNumber ? ` · PO ${poNumber}` : ""}
+              {` · ${detail === "detailed" ? "Detailed" : "Summary"}`}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -91,6 +97,7 @@ export function BudgetPdfPreview({
               clientName={clientName}
               poNumber={poNumber}
               plan={plan}
+              detail={detail}
             />
           </div>
         </div>
