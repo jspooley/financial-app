@@ -6,7 +6,7 @@ import type {
   Purchaser,
 } from "./types";
 import { COA_SALES_INCOME_CATEGORY } from "./coa";
-import { getLedgerTotalDesignerCost, roundMoney } from "./utils";
+import { checkingAccountForPurchaser, getLedgerTotalDesignerCost, roundMoney } from "./utils";
 
 export {
   COA_COGS_CATEGORY,
@@ -80,7 +80,7 @@ export function mergePaymentCompanionsOntoEntries(
 export function defaultCheckingAccountForPaidTo(
   paidTo: Purchaser | null | undefined
 ): CashflowAccount {
-  return paidTo === "Molly" ? "Checking - Molly" : "Checking - Jess";
+  return checkingAccountForPurchaser(paidTo);
 }
 
 export function buildPaymentCompanionPayload(

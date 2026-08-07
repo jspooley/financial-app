@@ -1036,11 +1036,24 @@ export default function CashflowPage() {
         const byDate = sortDate(b).localeCompare(sortDate(a));
         if (byDate !== 0) return byDate;
 
+        if (!grouped) {
+          const byCreated = (b.created_at ?? "").localeCompare(a.created_at ?? "");
+          if (byCreated !== 0) return byCreated;
+          return b.id.localeCompare(a.id);
+        }
+
         return cashflowPaymentRank(a) - cashflowPaymentRank(b);
       }
 
       const byClusterDate = sortDate(b).localeCompare(sortDate(a));
       if (byClusterDate !== 0) return byClusterDate;
+
+      // Ungrouped: keep same-date rows newest-entered first.
+      if (!grouped) {
+        const byCreated = (b.created_at ?? "").localeCompare(a.created_at ?? "");
+        if (byCreated !== 0) return byCreated;
+        return b.id.localeCompare(a.id);
+      }
 
       const keyA = clusterKeyFor(a);
       const keyB = clusterKeyFor(b);

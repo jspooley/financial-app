@@ -11,7 +11,9 @@ import { syncCostCompanions } from "@/lib/cost-companions";
 import { syncPaymentCompanionFromParent } from "@/lib/payment-companions";
 import { deriveLedgerPaidFlag } from "@/lib/invoice-utils";
 import {
+  CASHFLOW_ACCOUNTS,
   CASHFLOW_DEPARTMENTS,
+  type CashflowAccount,
   type Client,
   type ClientPoNumber,
   type LedgerEntry,
@@ -34,6 +36,7 @@ import {
   calculateRetailPriceFromMarkup,
   calculateMarkupPercentFromPricing,
   calculateTaxFromCustomerPrice,
+  checkingAccountForPurchaser,
   formatCurrency,
   formatPercent,
   formatSandUTaxPercent,
@@ -82,6 +85,9 @@ const schema = z
     po_number: z.string().trim().min(1, "PO number is required"),
     purchaser: z.enum(["Jess", "Molly"], {
       required_error: "Purchaser is required",
+    }),
+    account: z.enum(CASHFLOW_ACCOUNTS, {
+      required_error: "Account is required",
     }),
     department: z.enum(CASHFLOW_DEPARTMENTS, {
       required_error: "Department is required",
@@ -287,6 +293,9 @@ export function LedgerForm({
       client_id: initial?.client_id ?? "",
       po_number: initial?.po_number?.trim() ?? "",
       purchaser: initial?.purchaser ?? defaultPurchaser ?? "Jess",
+      account:
+        initial?.account ??
+        checkingAccountForPurchaser(defaultPurchaser),
       department: initial?.department ?? "Interior Design",
       income_statement: initial?.income_statement ?? false,
     },
@@ -717,6 +726,7 @@ export function LedgerForm({
         department: values.department,
         balance_sheet: personalUse,
       }),
+      account: values.account as CashflowAccount,
       income_statement: values.income_statement,
       balance_sheet: personalUse,
     };
@@ -980,8 +990,8 @@ export function LedgerForm({
           />
         </div>
 
-        {/* Cost row: purchaser, designer cost, total designer cost */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-3 lg:gap-4">
+        {/* Cost row: purchaser, account, designer cost, total designer cost */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
           <SelectField
             label="Purchaser"
             required
@@ -998,6 +1008,19 @@ export function LedgerForm({
           >
             <option value="Jess">Jess</option>
             <option value="Molly">Molly</option>
+          </SelectField>
+          <SelectField
+            label="Account"
+            required
+            error={errors.account?.message}
+            hint="Defaults to the signed-in user's checking account."
+            {...register("account")}
+          >
+            {CASHFLOW_ACCOUNTS.map((account) => (
+              <option key={account} value={account}>
+                {account}
+              </option>
+            ))}
           </SelectField>
           <CurrencyField
             control={control}

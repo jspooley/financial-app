@@ -472,7 +472,7 @@ function LedgerPageContent() {
           </div>
         ) : (
           <LedgerForm
-            key={editing?.id ?? "new"}
+            key={editing?.id ?? `new-${defaultPurchaser ?? "pending"}`}
             clients={clients}
             tradePartners={tradePartners}
             clientPoNumbers={clientPoNumbers}

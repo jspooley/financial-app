@@ -554,6 +554,13 @@ export function purchaserFromEmail(email: string | undefined): "Jess" | "Molly" 
   return null;
 }
 
+/** Checking register for the given purchaser (Jess / Molly). */
+export function checkingAccountForPurchaser(
+  purchaser: "Jess" | "Molly" | null | undefined
+): "Checking - Jess" | "Checking - Molly" {
+  return purchaser === "Molly" ? "Checking - Molly" : "Checking - Jess";
+}
+
 export function currentMonthKey(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }

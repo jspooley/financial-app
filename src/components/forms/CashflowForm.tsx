@@ -14,7 +14,7 @@ import {
 } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { InputField, SelectField, TextareaField } from "@/components/ui/FormFields";
-import { formatMoneyInput, roundMoney } from "@/lib/utils";
+import { checkingAccountForPurchaser, formatMoneyInput, roundMoney } from "@/lib/utils";
 
 const schema = z
   .object({
@@ -74,7 +74,7 @@ export function CashflowForm({
       description: initial?.description ?? "",
       debit_amount: initial?.debit_amount ?? 0,
       credit_amount: initial?.credit_amount ?? 0,
-      account: initial?.account ?? "Checking - Jess",
+      account: initial?.account ?? checkingAccountForPurchaser(defaultDesigner),
       designer: initial?.designer ?? defaultDesigner,
     },
   });

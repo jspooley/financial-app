@@ -20,7 +20,7 @@ import {
   SelectField,
   TextareaField,
 } from "@/components/ui/FormFields";
-import { formatMoneyInput, roundMoney } from "@/lib/utils";
+import { checkingAccountForPurchaser, formatMoneyInput, roundMoney } from "@/lib/utils";
 
 const schema = z
   .object({
@@ -101,7 +101,7 @@ export function ExpenseForm({
       description: initial?.description ?? "",
       debit_amount: initial?.debit_amount ?? 0,
       credit_amount: initial?.credit_amount ?? 0,
-      account: initial?.account ?? "Checking - Jess",
+      account: initial?.account ?? checkingAccountForPurchaser(defaultDesigner),
       designer: initial?.purchaser ?? defaultDesigner,
       coa_category: initial?.coa_category ?? "",
       expense: initialFlags.expense,
