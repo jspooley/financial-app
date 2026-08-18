@@ -26,6 +26,7 @@ interface BudgetPlannerProps {
   /** Saved plan snapshot from Load; used to order rooms when totals are authoritative. */
   loadedSnapshot?: BudgetPlanSnapshot | null;
   loadPlanToken?: number;
+  hideUncheckedRooms?: boolean;
 }
 
 function roomTotalsMapFromSnapshot(
@@ -81,6 +82,7 @@ export function BudgetPlanner({
   loadedPlanState,
   loadedSnapshot = null,
   loadPlanToken = 0,
+  hideUncheckedRooms = false,
 }: BudgetPlannerProps) {
   // Seed from loaded plan on mount (parent remounts via key={loadPlanToken}).
   const seed =
@@ -318,6 +320,14 @@ export function BudgetPlanner({
     [roomTotals]
   );
 
+  const visibleRooms = useMemo(
+    () =>
+      hideUncheckedRooms
+        ? rooms.filter((room) => includedRooms[room] ?? true)
+        : rooms,
+    [rooms, hideUncheckedRooms, includedRooms]
+  );
+
   const planSnapshot = useMemo(
     () =>
       buildBudgetPlanSnapshot(
@@ -413,7 +423,13 @@ export function BudgetPlanner({
 
   return (
     <div className="space-y-4">
-      {rooms.map((room) => {
+      {visibleRooms.length === 0 ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
+          All rooms are hidden. Uncheck “Hide rooms with no check” to show them.
+        </div>
+      ) : null}
+
+      {visibleRooms.map((room) => {
         const roomItems = itemsByRoom.get(room) ?? [];
         const roomIncluded = includedRooms[room] ?? true;
         const roomExpanded = expandedRooms[room] ?? false;

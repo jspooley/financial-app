@@ -41,6 +41,8 @@ interface BudgetClientActionsProps {
     snapshot?: BudgetPlanSnapshot | null
   ) => void;
   onSaved?: () => void;
+  hideUncheckedRooms?: boolean;
+  onHideUncheckedRoomsChange?: (hide: boolean) => void;
 }
 
 export function BudgetClientActions({
@@ -57,6 +59,8 @@ export function BudgetClientActions({
   onClientsUpdated,
   onLoadPlan,
   onSaved,
+  hideUncheckedRooms = false,
+  onHideUncheckedRoomsChange,
 }: BudgetClientActionsProps) {
   const pdfRef = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
@@ -341,6 +345,16 @@ export function BudgetClientActions({
             </label>
           </div>
         </fieldset>
+
+        <label className="mt-4 inline-flex items-center gap-2 text-sm text-slate-800">
+          <input
+            type="checkbox"
+            checked={hideUncheckedRooms}
+            onChange={(event) => onHideUncheckedRoomsChange?.(event.target.checked)}
+            className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+          />
+          Hide rooms with no check
+        </label>
 
         {savedPlan && (
           <p className="mt-3 text-sm text-slate-600">
