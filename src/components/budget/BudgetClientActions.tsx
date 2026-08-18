@@ -326,7 +326,7 @@ export function BudgetClientActions({
                 onChange={() => setPdfDetail("summary")}
                 className="h-4 w-4 border-slate-300 text-brand-600 focus:ring-brand-500"
               />
-              Summary (room totals only)
+              Summary (items, room totals)
             </label>
             <label className="inline-flex items-center gap-2 text-sm text-slate-800">
               <input
@@ -337,7 +337,7 @@ export function BudgetClientActions({
                 onChange={() => setPdfDetail("detailed")}
                 className="h-4 w-4 border-slate-300 text-brand-600 focus:ring-brand-500"
               />
-              Detailed (line items)
+              Detailed (priced line items)
             </label>
           </div>
         </fieldset>

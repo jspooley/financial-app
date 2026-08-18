@@ -20,9 +20,15 @@ export interface BudgetPdfContentProps {
   clientName: string;
   poNumber?: string;
   plan: BudgetPlanSnapshot;
-  /** Summary = room totals only (default). Detailed = line items per room. */
+  /** Summary = line items without prices + room totals. Detailed = priced line items. */
   detail?: BudgetPdfDetail;
 }
+
+const thRight = {
+  textAlign: "right" as const,
+  padding: "0.06in 0",
+  fontWeight: 600,
+};
 
 export const BudgetPdfContent = forwardRef<HTMLDivElement, BudgetPdfContentProps>(
   function BudgetPdfContent({ clientName, poNumber, plan, detail = "summary" }, ref) {
@@ -81,129 +87,65 @@ export const BudgetPdfContent = forwardRef<HTMLDivElement, BudgetPdfContentProps
           </p>
         ) : null}
 
-        {isDetailed ? (
-          plan.rooms.map((room) => (
-            <section key={room.room} style={{ marginBottom: "0.28in" }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "baseline",
-                  borderBottom: `2px solid ${PINK}`,
-                  paddingBottom: "0.06in",
-                  marginBottom: "0.1in",
-                }}
-              >
-                <h2 style={{ margin: 0, fontSize: "14pt", fontWeight: 700 }}>{room.room}</h2>
-                <span style={{ fontSize: "12pt", fontWeight: 700, color: PINK }}>
-                  {formatMoney(room.total)}
-                </span>
-              </div>
-              <table
-                style={{
-                  width: "100%",
-                  borderCollapse: "collapse",
-                  fontSize: "10pt",
-                }}
-              >
-                <thead>
-                  <tr style={{ borderBottom: "1px solid #e2e8f0" }}>
-                    <th style={{ textAlign: "left", padding: "0.06in 0", fontWeight: 600 }}>
-                      Item
-                    </th>
-                    <th
-                      style={{
-                        textAlign: "right",
-                        padding: "0.06in 0",
-                        fontWeight: 600,
-                        width: "0.55in",
-                      }}
-                    >
-                      Qty
-                    </th>
-                    <th
-                      style={{
-                        textAlign: "right",
-                        padding: "0.06in 0",
-                        fontWeight: 600,
-                        width: "1.1in",
-                      }}
-                    >
-                      Each
-                    </th>
-                    <th
-                      style={{
-                        textAlign: "right",
-                        padding: "0.06in 0",
-                        fontWeight: 600,
-                        width: "1.1in",
-                      }}
-                    >
-                      Total
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {room.lines.map((line) => (
-                    <tr key={line.itemId} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                      <td style={{ padding: "0.05in 0" }}>{line.description}</td>
-                      <td style={{ textAlign: "right", padding: "0.05in 0" }}>{line.quantity}</td>
-                      <td style={{ textAlign: "right", padding: "0.05in 0" }}>
-                        {formatMoney(line.unitAmount)}
-                      </td>
-                      <td style={{ textAlign: "right", padding: "0.05in 0" }}>
-                        {formatMoney(line.lineTotal)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-          ))
-        ) : (
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              fontSize: "12pt",
-            }}
-          >
-            <thead>
-              <tr style={{ borderBottom: `2px solid ${PINK}` }}>
-                <th style={{ textAlign: "left", padding: "0.08in 0", fontWeight: 700 }}>
-                  Room
-                </th>
-                <th
-                  style={{
-                    textAlign: "right",
-                    padding: "0.08in 0",
-                    fontWeight: 700,
-                    width: "1.6in",
-                  }}
-                >
-                  Total
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {plan.rooms.map((room) => (
-                <tr key={room.room} style={{ borderBottom: "1px solid #e2e8f0" }}>
-                  <td style={{ padding: "0.12in 0", fontWeight: 600 }}>{room.room}</td>
-                  <td
-                    style={{
-                      textAlign: "right",
-                      padding: "0.12in 0",
-                      fontWeight: 700,
-                      color: PINK,
-                    }}
-                  >
-                    {formatMoney(room.total)}
-                  </td>
+        {plan.rooms.map((room) => (
+          <section key={room.room} style={{ marginBottom: "0.28in" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "baseline",
+                borderBottom: `2px solid ${PINK}`,
+                paddingBottom: "0.06in",
+                marginBottom: "0.1in",
+              }}
+            >
+              <h2 style={{ margin: 0, fontSize: "14pt", fontWeight: 700 }}>{room.room}</h2>
+              <span style={{ fontSize: "12pt", fontWeight: 700, color: PINK }}>
+                {formatMoney(room.total)}
+              </span>
+            </div>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: "10pt",
+              }}
+            >
+              <thead>
+                <tr style={{ borderBottom: "1px solid #e2e8f0" }}>
+                  <th style={{ textAlign: "left", padding: "0.06in 0", fontWeight: 600 }}>
+                    Item
+                  </th>
+                  <th style={{ ...thRight, width: "0.55in" }}>Qty</th>
+                  {isDetailed ? (
+                    <>
+                      <th style={{ ...thRight, width: "1.1in" }}>Each</th>
+                      <th style={{ ...thRight, width: "1.1in" }}>Total</th>
+                    </>
+                  ) : null}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+              </thead>
+              <tbody>
+                {room.lines.map((line) => (
+                  <tr key={line.itemId} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                    <td style={{ padding: "0.05in 0" }}>{line.description}</td>
+                    <td style={{ textAlign: "right", padding: "0.05in 0" }}>{line.quantity}</td>
+                    {isDetailed ? (
+                      <>
+                        <td style={{ textAlign: "right", padding: "0.05in 0" }}>
+                          {formatMoney(line.unitAmount)}
+                        </td>
+                        <td style={{ textAlign: "right", padding: "0.05in 0" }}>
+                          {formatMoney(line.lineTotal)}
+                        </td>
+                      </>
+                    ) : null}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        ))}
 
         <div
           style={{

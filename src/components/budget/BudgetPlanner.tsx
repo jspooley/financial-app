@@ -26,6 +26,8 @@ interface BudgetPlannerProps {
   /** Saved plan snapshot from Load; used to order rooms when totals are authoritative. */
   loadedSnapshot?: BudgetPlanSnapshot | null;
   loadPlanToken?: number;
+  hideUncheckedRooms?: boolean;
+  onHideUncheckedRoomsChange?: (hide: boolean) => void;
 }
 
 function roomTotalsMapFromSnapshot(
@@ -81,6 +83,8 @@ export function BudgetPlanner({
   loadedPlanState,
   loadedSnapshot = null,
   loadPlanToken = 0,
+  hideUncheckedRooms = false,
+  onHideUncheckedRoomsChange,
 }: BudgetPlannerProps) {
   // Seed from loaded plan on mount (parent remounts via key={loadPlanToken}).
   const seed =
@@ -354,6 +358,14 @@ export function BudgetPlanner({
     [includedRooms, includedItems, quantities, sliderPercents, unitAmounts, notes]
   );
 
+  const visibleRooms = useMemo(
+    () =>
+      hideUncheckedRooms
+        ? rooms.filter((room) => includedRooms[room] ?? true)
+        : rooms,
+    [hideUncheckedRooms, includedRooms, rooms]
+  );
+
   useEffect(() => {
     onPlanChange?.(planSnapshot);
   }, [planSnapshot, onPlanChange]);
@@ -413,7 +425,27 @@ export function BudgetPlanner({
 
   return (
     <div className="space-y-4">
-      {rooms.map((room) => {
+      <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-5">
+        <label className="inline-flex items-center gap-2 text-sm text-slate-800">
+          <input
+            type="checkbox"
+            checked={hideUncheckedRooms}
+            onChange={(event) =>
+              onHideUncheckedRoomsChange?.(event.target.checked)
+            }
+            className="size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
+          />
+          Hide unchecked rooms
+        </label>
+      </div>
+
+      {visibleRooms.length === 0 ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
+          No rooms to show. Uncheck “Hide unchecked rooms” to see rooms without a
+          check beside the name.
+        </div>
+      ) : (
+        visibleRooms.map((room) => {
         const roomItems = itemsByRoom.get(room) ?? [];
         const roomIncluded = includedRooms[room] ?? true;
         const roomExpanded = expandedRooms[room] ?? false;
@@ -638,7 +670,8 @@ export function BudgetPlanner({
             )}
           </section>
         );
-      })}
+      })
+      )}
 
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <label className="block">

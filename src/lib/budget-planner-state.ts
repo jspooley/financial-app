@@ -27,7 +27,7 @@ export interface ClientBudgetPlanSaved extends BudgetPlannerState {
   savedAt: string;
   /** Authoritative line items at save time; used to restore selections if IDs drift. */
   snapshot?: BudgetPlanSnapshot;
-  /** Last PDF layout used when saving (summary = room totals; detailed = line items). */
+  /** Last PDF layout used when saving (summary = items without prices; detailed = priced lines). */
   pdfDetail?: BudgetPdfDetailMode;
 }
 

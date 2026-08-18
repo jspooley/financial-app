@@ -8,6 +8,7 @@ import {
   BudgetItemForm,
   type BudgetItemFormDefaults,
 } from "@/components/forms/BudgetItemForm";
+import { RenameRoomForm } from "@/components/forms/RenameRoomForm";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -81,6 +82,46 @@ function viewButtonClass(active: boolean) {
       ? "bg-brand-600 text-white"
       : "bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50"
   }`;
+}
+
+function remapIncludedRoom(
+  includedRooms: Record<string, boolean>,
+  fromRoom: string,
+  toRoom: string
+): Record<string, boolean> {
+  if (fromRoom === toRoom) return includedRooms;
+  const next = { ...includedRooms };
+  const fromValue = next[fromRoom];
+  delete next[fromRoom];
+  if (fromValue !== undefined) {
+    next[toRoom] = Boolean(next[toRoom] || fromValue);
+  }
+  return next;
+}
+
+function remapPlanSnapshotRooms(
+  snapshot: BudgetPlanSnapshot | null,
+  fromRoom: string,
+  toRoom: string
+): BudgetPlanSnapshot | null {
+  if (!snapshot || fromRoom === toRoom) return snapshot;
+
+  const combined = new Map<string, BudgetPlanSnapshot["rooms"][number]>();
+  for (const room of snapshot.rooms) {
+    const name = room.room === fromRoom ? toRoom : room.room;
+    const existing = combined.get(name);
+    if (!existing) {
+      combined.set(name, { room: name, total: room.total, lines: [...room.lines] });
+    } else {
+      combined.set(name, {
+        room: name,
+        total: existing.total + room.total,
+        lines: [...existing.lines, ...room.lines],
+      });
+    }
+  }
+
+  return { ...snapshot, rooms: [...combined.values()] };
 }
 
 function budgetItemDefaults(item: BudgetItem): BudgetItemFormDefaults {
@@ -173,6 +214,7 @@ export default function BudgetToolPage() {
   const [needsDbSetup, setNeedsDbSetup] = useState(false);
   const [view, setView] = useState<BudgetView>("planner");
   const [showForm, setShowForm] = useState(false);
+  const [showRenameRoom, setShowRenameRoom] = useState(false);
   const [editing, setEditing] = useState<BudgetItem | null>(null);
   const [formDefaults, setFormDefaults] = useState<BudgetItemFormDefaults | null>(
     null
@@ -191,6 +233,7 @@ export default function BudgetToolPage() {
   const [loadedPlanState, setLoadedPlanState] = useState<BudgetPlannerState | null>(null);
   const [loadedSnapshot, setLoadedSnapshot] = useState<BudgetPlanSnapshot | null>(null);
   const [loadPlanToken, setLoadPlanToken] = useState(0);
+  const [hideUncheckedRooms, setHideUncheckedRooms] = useState(false);
   const [draftReady, setDraftReady] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState("");
   const [selectedPoId, setSelectedPoId] = useState("");
@@ -377,8 +420,39 @@ export default function BudgetToolPage() {
 
   function closeItemForm() {
     setShowForm(false);
+    setShowRenameRoom(false);
     setEditing(null);
     setFormDefaults(null);
+  }
+
+  function openRenameRoomForm() {
+    rememberListScroll();
+    setEditing(null);
+    setFormDefaults(null);
+    setShowForm(false);
+    setShowRenameRoom(true);
+  }
+
+  function handleRoomRenamed(fromRoom: string, toRoom: string) {
+    setPlannerState((current) => ({
+      ...current,
+      includedRooms: remapIncludedRoom(current.includedRooms, fromRoom, toRoom),
+    }));
+    setLoadedPlanState((current) =>
+      current
+        ? {
+            ...current,
+            includedRooms: remapIncludedRoom(current.includedRooms, fromRoom, toRoom),
+          }
+        : current
+    );
+    setLoadedSnapshot((current) => remapPlanSnapshotRooms(current, fromRoom, toRoom));
+    setItems((current) =>
+      current.map((item) => (item.room === fromRoom ? { ...item, room: toRoom } : item))
+    );
+    if (roomFilter === fromRoom) setRoomFilter(toRoom);
+    setShowRenameRoom(false);
+    loadItems();
   }
 
   function rememberListScroll() {
@@ -399,6 +473,7 @@ export default function BudgetToolPage() {
     rememberListScroll();
     setEditing(null);
     setFormDefaults(null);
+    setShowRenameRoom(false);
     setShowForm(true);
   }
 
@@ -406,6 +481,7 @@ export default function BudgetToolPage() {
     rememberListScroll();
     setEditing(item);
     setFormDefaults(null);
+    setShowRenameRoom(false);
     setShowForm(true);
   }
 
@@ -413,6 +489,7 @@ export default function BudgetToolPage() {
     rememberListScroll();
     setEditing(null);
     setFormDefaults(budgetItemDefaults(item));
+    setShowRenameRoom(false);
     setShowForm(true);
   }
 
@@ -420,6 +497,14 @@ export default function BudgetToolPage() {
     () => sortBudgetRooms(customRooms, BUDGET_ROOM_OPTIONS),
     [customRooms]
   );
+
+  const roomItemCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const item of items) {
+      counts[item.room] = (counts[item.room] ?? 0) + 1;
+    }
+    return counts;
+  }, [items]);
 
   const filteredItems = useMemo(() => {
     const list = roomFilter
@@ -447,6 +532,7 @@ export default function BudgetToolPage() {
   useLayoutEffect(() => {
     if (
       showForm ||
+      showRenameRoom ||
       view !== "items" ||
       loading ||
       !restoreListScrollRef.current
@@ -458,7 +544,7 @@ export default function BudgetToolPage() {
     requestAnimationFrame(() => {
       window.scrollTo(0, y);
     });
-  }, [showForm, view, loading, filteredItems]);
+  }, [showForm, showRenameRoom, view, loading, filteredItems]);
 
   async function handleDelete(item: BudgetItem) {
     rememberListScroll();
@@ -515,10 +601,18 @@ export default function BudgetToolPage() {
           </button>
         </div>
 
-        {view === "items" && !showForm && (
+        {view === "items" && !showForm && !showRenameRoom && (
           <div className="flex flex-wrap items-center gap-3">
             <Button className="min-h-11" onClick={openCreateForm}>
               Add Item
+            </Button>
+            <Button
+              variant="secondary"
+              className="min-h-11"
+              onClick={openRenameRoomForm}
+              disabled={loading || roomFilterOptions.length === 0}
+            >
+              Rename Room
             </Button>
             <div className="flex min-h-11 items-center gap-4 rounded-xl border border-slate-200 bg-white py-1.5 pl-4 pr-2 shadow-sm">
               <span className="shrink-0 text-sm font-medium text-slate-700 whitespace-nowrap">
@@ -610,9 +704,19 @@ export default function BudgetToolPage() {
               loadedPlanState={loadedPlanState}
               loadedSnapshot={loadedSnapshot}
               loadPlanToken={loadPlanToken}
+              hideUncheckedRooms={hideUncheckedRooms}
+              onHideUncheckedRoomsChange={setHideUncheckedRooms}
             />
           </>
         )
+      ) : showRenameRoom ? (
+        <RenameRoomForm
+          rooms={roomFilterOptions}
+          itemCounts={roomItemCounts}
+          initialRoom={roomFilter}
+          onCancel={closeItemForm}
+          onSuccess={handleRoomRenamed}
+        />
       ) : showForm ? (
         <BudgetItemForm
           key={formKey}
