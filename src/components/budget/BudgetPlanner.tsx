@@ -26,6 +26,7 @@ interface BudgetPlannerProps {
   /** Saved plan snapshot from Load; used to order rooms when totals are authoritative. */
   loadedSnapshot?: BudgetPlanSnapshot | null;
   loadPlanToken?: number;
+  hideUncheckedRooms?: boolean;
 }
 
 function roomTotalsMapFromSnapshot(
@@ -81,6 +82,7 @@ export function BudgetPlanner({
   loadedPlanState,
   loadedSnapshot = null,
   loadPlanToken = 0,
+  hideUncheckedRooms = false,
 }: BudgetPlannerProps) {
   // Seed from loaded plan on mount (parent remounts via key={loadPlanToken}).
   const seed =
@@ -145,14 +147,6 @@ export function BudgetPlanner({
   );
   const [amountDrafts, setAmountDrafts] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState(() => seed?.notes ?? "");
-  const [hideUncheckedRooms, setHideUncheckedRooms] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return sessionStorage.getItem("budget-hide-unchecked-rooms-v1") === "1";
-    } catch {
-      return false;
-    }
-  });
 
   useEffect(() => {
     if (!loadedPlanState || loadPlanToken === 0) return;
@@ -334,18 +328,6 @@ export function BudgetPlanner({
     [rooms, hideUncheckedRooms, includedRooms]
   );
 
-  useEffect(() => {
-    try {
-      if (hideUncheckedRooms) {
-        sessionStorage.setItem("budget-hide-unchecked-rooms-v1", "1");
-      } else {
-        sessionStorage.removeItem("budget-hide-unchecked-rooms-v1");
-      }
-    } catch {
-      // Ignore quota / private mode failures.
-    }
-  }, [hideUncheckedRooms]);
-
   const planSnapshot = useMemo(
     () =>
       buildBudgetPlanSnapshot(
@@ -441,18 +423,6 @@ export function BudgetPlanner({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-end">
-        <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-1.5 text-sm text-slate-800 shadow-sm">
-          <input
-            type="checkbox"
-            checked={hideUncheckedRooms}
-            onChange={(event) => setHideUncheckedRooms(event.target.checked)}
-            className="size-4 rounded border-brand-300 text-brand-600 focus:ring-brand-500"
-          />
-          Hide rooms with no check
-        </label>
-      </div>
-
       {visibleRooms.length === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">
           All rooms are hidden. Uncheck “Hide rooms with no check” to show them.

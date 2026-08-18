@@ -30,6 +30,7 @@ type ItemsSortBy = "room" | "item";
 const EMPTY_PLAN: BudgetPlanSnapshot = { rooms: [], grandTotal: 0, notes: "" };
 const PLANNER_DRAFT_STORAGE_KEY = "budget-planner-draft-v2";
 const ITEMS_SORT_STORAGE_KEY = "budget-items-sort-v1";
+const HIDE_UNCHECKED_ROOMS_KEY = "budget-hide-unchecked-rooms-v1";
 const PLANNER_DRAFT_VERSION = 2;
 
 interface PlannerDraft {
@@ -57,6 +58,28 @@ function writeItemsSortBy(value: ItemsSortBy) {
       sessionStorage.removeItem(ITEMS_SORT_STORAGE_KEY);
     } else {
       sessionStorage.setItem(ITEMS_SORT_STORAGE_KEY, value);
+    }
+  } catch {
+    // Ignore quota / private mode failures.
+  }
+}
+
+function readHideUncheckedRooms(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return sessionStorage.getItem(HIDE_UNCHECKED_ROOMS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeHideUncheckedRooms(value: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    if (value) {
+      sessionStorage.setItem(HIDE_UNCHECKED_ROOMS_KEY, "1");
+    } else {
+      sessionStorage.removeItem(HIDE_UNCHECKED_ROOMS_KEY);
     }
   } catch {
     // Ignore quota / private mode failures.
@@ -198,6 +221,8 @@ export default function BudgetToolPage() {
   const [roomFilter, setRoomFilter] = useState("");
   const [itemsSortBy, setItemsSortBy] = useState<ItemsSortBy>("room");
   const [itemsSortReady, setItemsSortReady] = useState(false);
+  const [hideUncheckedRooms, setHideUncheckedRooms] = useState(false);
+  const [hideUncheckedRoomsReady, setHideUncheckedRoomsReady] = useState(false);
   const skipDraftWriteRef = useRef(false);
   const ignorePlannerDirtyRef = useRef(true);
   const listScrollYRef = useRef(0);
@@ -272,12 +297,19 @@ export default function BudgetToolPage() {
   useEffect(() => {
     setItemsSortBy(readItemsSortBy());
     setItemsSortReady(true);
+    setHideUncheckedRooms(readHideUncheckedRooms());
+    setHideUncheckedRoomsReady(true);
   }, []);
 
   useEffect(() => {
     if (!itemsSortReady) return;
     writeItemsSortBy(itemsSortBy);
   }, [itemsSortBy, itemsSortReady]);
+
+  useEffect(() => {
+    if (!hideUncheckedRoomsReady) return;
+    writeHideUncheckedRooms(hideUncheckedRooms);
+  }, [hideUncheckedRooms, hideUncheckedRoomsReady]);
 
   useEffect(() => {
     if (loading || draftReady) return;
@@ -601,6 +633,8 @@ export default function BudgetToolPage() {
               onClientsUpdated={loadClients}
               onLoadPlan={handleLoadPlan}
               onSaved={handlePlannerSaved}
+              hideUncheckedRooms={hideUncheckedRooms}
+              onHideUncheckedRoomsChange={setHideUncheckedRooms}
             />
             <BudgetPlanner
               key={loadPlanToken}
@@ -610,6 +644,7 @@ export default function BudgetToolPage() {
               loadedPlanState={loadedPlanState}
               loadedSnapshot={loadedSnapshot}
               loadPlanToken={loadPlanToken}
+              hideUncheckedRooms={hideUncheckedRooms}
             />
           </>
         )
