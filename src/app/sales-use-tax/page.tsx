@@ -4,9 +4,11 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { useRecordLocks } from "@/components/RecordLockProvider";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { normalizeLedgerRow, updateLedgerSalesUseTaxPaid } from "@/lib/ledger-db";
+import { loadLedgerLockTargets } from "@/lib/record-lock";
 import { createClient } from "@/lib/supabase/client";
 import type { LedgerEntry } from "@/lib/types";
 import {
@@ -63,6 +65,7 @@ export default function SalesUseTaxPaymentsPage() {
 }
 
 function SalesUseTaxPaymentsPageContent() {
+  const { acquireLocks, releaseLocks } = useRecordLocks();
   const searchParams = useSearchParams();
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [view, setView] = useState<TaxView>(() =>
@@ -287,14 +290,19 @@ function SalesUseTaxPaymentsPageContent() {
     updateDraft(entry.id, taxDraftFromEntry(entry));
   }
 
-  function beginEdit(entry: LedgerEntry) {
+  async function beginEdit(entry: LedgerEntry) {
     setError(null);
+    const ok = await acquireLocks(await loadLedgerLockTargets(entry.id), {
+      mode: "add",
+    });
+    if (!ok) return;
     updateDraft(entry.id, { editing: true });
   }
 
   function cancelRowEdit(entry: LedgerEntry) {
     setError(null);
     resetDraftFromEntry(entry);
+    void loadLedgerLockTargets(entry.id).then((targets) => releaseLocks(targets));
   }
 
   async function submitUpdates() {
@@ -328,6 +336,7 @@ function SalesUseTaxPaymentsPageContent() {
 
     setSaving(false);
     setSuccess(`Updated ${rows.length} ${rows.length === 1 ? "entry" : "entries"}.`);
+    await releaseLocks();
     await loadData();
   }
 

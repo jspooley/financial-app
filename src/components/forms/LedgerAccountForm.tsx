@@ -3,9 +3,17 @@
 import { useState, type FormEvent } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
+  cashflowClassificationFlags,
+  isCashflowManagedEntry,
+  isInvoiceGoodsLine,
+} from "@/lib/coa";
+import { isCostCompanionRow, COST_COMPANION_KINDS } from "@/lib/cost-companions";
+import {
   CASHFLOW_ACCOUNTS,
   type CashflowAccount,
+  type ChartOfAccount,
   type LedgerEntry,
+  type Purchaser,
 } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { SelectField } from "@/components/ui/FormFields";
@@ -15,6 +23,7 @@ import { normalizeInvoiceId } from "@/lib/invoice-utils";
 interface LedgerAccountFormProps {
   /** One or more ledger rows to assign the same account (e.g. Sales Income rollup). */
   entries: LedgerEntry[];
+  chartOfAccounts?: ChartOfAccount[];
   onSuccess: () => void;
   onCancel: () => void;
 }
@@ -34,12 +43,49 @@ function sharedAccount(entries: LedgerEntry[]): string {
   return accounts.length === 1 ? accounts[0] : "";
 }
 
+function sharedPurchaser(entries: LedgerEntry[]): Purchaser | "" {
+  const purchasers = [
+    ...new Set(
+      entries
+        .map((entry) => entry.purchaser)
+        .filter(
+          (value): value is Purchaser => value === "Jess" || value === "Molly"
+        )
+    ),
+  ];
+  return purchasers.length === 1 ? purchasers[0] : "";
+}
+
+function sharedCoaCategory(entries: LedgerEntry[]): string {
+  const categories = [
+    ...new Set(
+      entries
+        .map((entry) => (entry.coa_category ?? "").trim())
+        .filter(Boolean)
+    ),
+  ];
+  return categories.length === 1 ? categories[0] : "";
+}
+
 export function LedgerAccountForm({
   entries,
+  chartOfAccounts = [],
   onSuccess,
   onCancel,
 }: LedgerAccountFormProps) {
+  const canEditCoa = entries.length > 0 && entries.every(isCashflowManagedEntry);
+  const canEditPurchaser =
+    entries.length > 0 &&
+    entries.every(
+      (entry) => isInvoiceGoodsLine(entry) || isCostCompanionRow(entry)
+    );
   const [account, setAccount] = useState<string>(() => sharedAccount(entries));
+  const [purchaser, setPurchaser] = useState<Purchaser | "">(() =>
+    canEditPurchaser ? sharedPurchaser(entries) : ""
+  );
+  const [coaCategory, setCoaCategory] = useState<string>(() =>
+    canEditCoa ? sharedCoaCategory(entries) : ""
+  );
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -56,7 +102,9 @@ export function LedgerAccountForm({
   const description =
     entries.length === 1
       ? primary.description?.trim() || primary.clients?.name || "—"
-      : `Invoice ${invoiceId || "—"} payments (${entries.length})`;
+      : invoiceId
+        ? `Invoice ${invoiceId} (${entries.length} rows)`
+        : primary.description?.trim() || `${entries.length} cashflow entries`;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -69,20 +117,77 @@ export function LedgerAccountForm({
       setError("No entries to update");
       return;
     }
+    if (canEditCoa && chartOfAccounts.length > 0 && !coaCategory) {
+      setError("Select a CoA category");
+      return;
+    }
+    if (canEditPurchaser && purchaser !== "Jess" && purchaser !== "Molly") {
+      setError("Select a purchaser");
+      return;
+    }
     setSaving(true);
     const supabase = createClient();
+    const payload: Record<string, unknown> = {
+      account: account as CashflowAccount,
+    };
+    if (canEditPurchaser && (purchaser === "Jess" || purchaser === "Molly")) {
+      payload.purchaser = purchaser;
+    }
+    if (canEditCoa && coaCategory) {
+      payload.coa_category = coaCategory;
+      if (entries.some((entry) => (entry.coa_category ?? "") !== coaCategory)) {
+        const flags = cashflowClassificationFlags(coaCategory);
+        payload.expense = flags.expense;
+        payload.balance_sheet = flags.balance_sheet;
+        payload.income_statement = flags.income_statement;
+      }
+    }
     const { error: dbError } = await supabase
       .from("ledger")
-      .update({ account: account as CashflowAccount })
+      .update(payload)
       .in(
         "id",
         entries.map((entry) => entry.id)
       );
-    setSaving(false);
     if (dbError) {
+      setSaving(false);
       setError(dbError.message);
       return;
     }
+    if (canEditPurchaser && (purchaser === "Jess" || purchaser === "Molly")) {
+      const parentIds = [
+        ...new Set(
+          entries
+            .map((entry) =>
+              entry.source_ledger_id ||
+              (isInvoiceGoodsLine(entry) ? entry.id : null)
+            )
+            .filter((id): id is string => Boolean(id))
+        ),
+      ];
+      for (const parentId of parentIds) {
+        const { error: parentError } = await supabase
+          .from("ledger")
+          .update({ purchaser })
+          .eq("id", parentId);
+        if (parentError) {
+          setSaving(false);
+          setError(parentError.message);
+          return;
+        }
+        const { error: companionError } = await supabase
+          .from("ledger")
+          .update({ purchaser })
+          .eq("source_ledger_id", parentId)
+          .in("companion_kind", [...COST_COMPANION_KINDS]);
+        if (companionError) {
+          setSaving(false);
+          setError(companionError.message);
+          return;
+        }
+      }
+    }
+    setSaving(false);
     onSuccess();
   }
 
@@ -91,12 +196,21 @@ export function LedgerAccountForm({
       onSubmit={handleSubmit}
       className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
     >
-      <h2 className="text-lg font-semibold text-slate-900">Assign Account</h2>
+      <h2 className="text-lg font-semibold text-slate-900">
+        {canEditCoa
+          ? "Edit Account & CoA Category"
+          : canEditPurchaser
+            ? "Edit Account & Purchaser"
+            : "Assign Account"}
+      </h2>
       <p className="text-sm text-slate-600">
-        Only the account can be changed here. Edit other fields on the Ledger
-        page.
+        {canEditCoa
+          ? "Change the account and CoA category for this cashflow entry."
+          : canEditPurchaser
+            ? "Change who purchased this line. Shipping and payment-fee companions stay with the same purchaser."
+            : "Only the account can be changed here. Edit other fields on the Ledger page."}
         {entries.length > 1
-          ? ` This updates all ${entries.length} Sales Income payment rows for this invoice.`
+          ? ` This updates all ${entries.length} rows in this group.`
           : ""}
       </p>
 
@@ -145,6 +259,47 @@ export function LedgerAccountForm({
         ))}
       </SelectField>
 
+      {canEditPurchaser ? (
+        <SelectField
+          label="Purchaser"
+          required
+          value={purchaser}
+          onChange={(event) => {
+            const value = event.target.value;
+            setPurchaser(value === "Molly" || value === "Jess" ? value : "");
+          }}
+        >
+          {sharedPurchaser(entries) ? null : (
+            <option value="">Multiple — select a purchaser</option>
+          )}
+          <option value="Jess">Jess</option>
+          <option value="Molly">Molly</option>
+        </SelectField>
+      ) : null}
+
+      {canEditCoa ? (
+        <SelectField
+          label="CoA Category"
+          required
+          value={coaCategory}
+          onChange={(event) => setCoaCategory(event.target.value)}
+          hint={
+            chartOfAccounts.length === 0
+              ? "Add categories on the Chart of Accounts page first."
+              : undefined
+          }
+        >
+          <option value="">
+            {sharedCoaCategory(entries) ? "Select category..." : "Multiple — select a category"}
+          </option>
+          {chartOfAccounts.map((entry) => (
+            <option key={entry.id} value={entry.category}>
+              {entry.category}
+            </option>
+          ))}
+        </SelectField>
+      ) : null}
+
       {error && (
         <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
           {error}
@@ -153,7 +308,13 @@ export function LedgerAccountForm({
 
       <div className="flex flex-wrap gap-2">
         <Button type="submit" disabled={saving}>
-          {saving ? "Saving..." : "Save Account"}
+          {saving
+            ? "Saving..."
+            : canEditCoa
+              ? "Save"
+              : canEditPurchaser
+                ? "Save"
+                : "Save Account"}
         </Button>
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancel

@@ -8,12 +8,15 @@ import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
+import { useRecordLocks } from "@/components/RecordLockProvider";
+import { clientLockTargets } from "@/lib/record-lock";
 import { createClient } from "@/lib/supabase/client";
 import type { Client } from "@/lib/types";
 import { formatCurrency, formatSandUTaxPercent } from "@/lib/utils";
 
 function ClientsPageContent() {
   const searchParams = useSearchParams();
+  const { acquireLocks, releaseLocks } = useRecordLocks();
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -125,10 +128,27 @@ function ClientsPageContent() {
     }
   }, [searchParams]);
 
+  function closeForm() {
+    void releaseLocks();
+    setShowForm(false);
+    setEditing(null);
+  }
+
+  async function startEdit(client: Client) {
+    const ok = await acquireLocks(clientLockTargets(client));
+    if (!ok) return;
+    setEditing(client);
+    setShowForm(true);
+  }
+
   async function handleDelete(client: Client) {
     if (!confirm(`Delete client "${client.name}"?`)) return;
+    const targets = clientLockTargets(client);
+    const ok = await acquireLocks(targets);
+    if (!ok) return;
     const supabase = createClient();
     const { error } = await supabase.from("clients").delete().eq("id", client.id);
+    await releaseLocks(targets);
     if (error) {
       alert(error.message);
       return;
@@ -185,13 +205,9 @@ function ClientsPageContent() {
       {showForm ? (
         <ClientForm
           initial={editing}
-          onCancel={() => {
-            setShowForm(false);
-            setEditing(null);
-          }}
+          onCancel={closeForm}
           onSuccess={() => {
-            setShowForm(false);
-            setEditing(null);
+            closeForm();
             loadClients();
           }}
         />
@@ -231,8 +247,7 @@ function ClientsPageContent() {
             actions: (
               <RowActions
                 onEdit={() => {
-                  setEditing(client);
-                  setShowForm(true);
+                  void startEdit(client);
                 }}
                 onDelete={() => handleDelete(client)}
               />

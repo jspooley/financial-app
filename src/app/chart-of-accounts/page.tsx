@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ChartOfAccountForm } from "@/components/forms/ChartOfAccountForm";
+import { useRecordLocks } from "@/components/RecordLockProvider";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -11,6 +12,7 @@ import { createClient } from "@/lib/supabase/client";
 import type { ChartOfAccount } from "@/lib/types";
 
 export default function ChartOfAccountsPage() {
+  const { acquireLocks, releaseLocks } = useRecordLocks();
   const [entries, setEntries] = useState<ChartOfAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -39,17 +41,29 @@ export default function ChartOfAccountsPage() {
   }, [loadEntries]);
 
   function closeForm() {
+    void releaseLocks();
     setShowForm(false);
     setEditing(null);
   }
 
+  async function startEdit(entry: ChartOfAccount) {
+    const ok = await acquireLocks([{ table: "chart_of_accounts", id: entry.id }]);
+    if (!ok) return;
+    setEditing(entry);
+    setShowForm(true);
+  }
+
   async function handleDelete(entry: ChartOfAccount) {
     if (!confirm(`Delete chart of accounts entry "${entry.category}"?`)) return;
+    const targets = [{ table: "chart_of_accounts" as const, id: entry.id }];
+    const ok = await acquireLocks(targets);
+    if (!ok) return;
     const supabase = createClient();
     const { error } = await supabase
       .from("chart_of_accounts")
       .delete()
       .eq("id", entry.id);
+    await releaseLocks(targets);
     if (error) {
       alert(error.message);
       return;
@@ -118,8 +132,7 @@ export default function ChartOfAccountsPage() {
             actions: (
               <RowActions
                 onEdit={() => {
-                  setEditing(entry);
-                  setShowForm(true);
+                  void startEdit(entry);
                 }}
                 onDelete={() => handleDelete(entry)}
               />

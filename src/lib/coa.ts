@@ -2,6 +2,9 @@ import type { LedgerEntry } from "./types";
 
 export const COA_SALES_INCOME_CATEGORY = "100 Sales Income";
 export const COA_COGS_CATEGORY = "101 COGS";
+export const COA_FEES_CATEGORY = "203 commissions and fees";
+export const COA_TRANSFERS_CATEGORY =
+  "302 Transfers between accounts (paying a credit card bill)";
 export const COA_SU_TAX_PAYABLE_CATEGORY = "400 Sales & Use Tax Payable";
 
 /** Leading account number from a CoA label, e.g. "210 Office Expense" → 210. */
@@ -43,6 +46,43 @@ export function isOperatingExpenseCoa(
 }
 
 /**
+ * Expense / Balance Sheet / Income Statement flags written on Cashflow Add/Edit.
+ * Derived from CoA (not user checkboxes): 300-series equity and transfers are
+ * Balance Sheet; 200-series operating expenses are Income Statement expenses.
+ */
+export function cashflowClassificationFlags(coaCategory: string) {
+  const isCogs = isCogsCoa(coaCategory);
+  const isEquityOrTransfer =
+    isCashflowOperatingCoa(coaCategory) && !isOperatingExpenseCoa(coaCategory);
+  return {
+    expense: !isCogs && !isEquityOrTransfer,
+    balance_sheet: isEquityOrTransfer,
+    income_statement: !isEquityOrTransfer,
+  };
+}
+
+/** Partner true-up transfers: 203 commissions/fees and 302–399 account transfers. */
+export function isRecordedTransferCoa(
+  category: string | null | undefined
+): boolean {
+  const n = coaAccountNumber(category);
+  return n === 203 || (n != null && n >= 302 && n < 400);
+}
+
+/** 300 Owner's Contribution and 301 Owner's Draws — equity, not a 50/50 share. */
+export function isOwnerEquityCoa(category: string | null | undefined): boolean {
+  const n = coaAccountNumber(category);
+  return n === 300 || n === 301;
+}
+
+/** 214 Taxes and licenses — remitted to the state, not a 50/50 partner share. */
+export function isTaxesAndLicensesCoa(
+  category: string | null | undefined
+): boolean {
+  return coaAccountNumber(category) === 214;
+}
+
+/**
  * Liability categories (400+), e.g. S&U tax collected from clients and owed to
  * the state. Cash moves through them, but they are never P&L revenue or expense.
  */
@@ -74,9 +114,21 @@ export function isInvoiceGoodsLine(entry: CoaKindFields): boolean {
   if (entry.client_id) return true;
   if (Number(entry.designer_cost ?? 0) > 0) return true;
   if (entry.invoiced) return true;
-  if (normalizeText(entry.invoice_id)) return true;
   if (normalizeText(entry.po_number)) return true;
+  // invoice_id alone is not a goods line — Cashflow transfers can reference an
+  // invoice for the True Up report without being a Ledger/Invoicing line.
   return false;
+}
+
+/**
+ * Row owned by Cashflow Add/Edit: not a ledger goods line and not a companion.
+ * Includes operating expenses, equity/transfers, and sales-income credits typed
+ * in on Cashflow (those are excluded from isOperatingExpenseEntry).
+ */
+export function isCashflowManagedEntry(entry: CoaKindFields): boolean {
+  if (entry.source_ledger_id) return false;
+  if (isInvoiceGoodsLine(entry)) return false;
+  return true;
 }
 
 /**
@@ -89,8 +141,7 @@ export function isInvoiceGoodsLine(entry: CoaKindFields): boolean {
  * including rows whose CoA is blank or unrecognized, so Edit/Delete stay available.
  */
 export function isOperatingExpenseEntry(entry: CoaKindFields): boolean {
-  if (entry.source_ledger_id) return false;
-  if (isInvoiceGoodsLine(entry)) return false;
+  if (!isCashflowManagedEntry(entry)) return false;
   if (isSalesIncomeCoa(entry.coa_category)) return false;
   return true;
 }

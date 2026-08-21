@@ -5,11 +5,12 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { LedgerForm } from "@/components/forms/LedgerForm";
+import { useRecordLocks } from "@/components/RecordLockProvider";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
-import { isToBeInvoicedLine, jobKeysByStatus, ledgerJobKey, normalizePoNumber, isLedgerLineFullyPaid } from "@/lib/invoice-utils";
+import { isToBeInvoicedLine, jobKeysByStatus, ledgerJobKey, normalizePoNumber } from "@/lib/invoice-utils";
 import { isInvoiceGoodsLine } from "@/lib/coa";
 import {
   isPaymentCompanionRow,
@@ -23,6 +24,7 @@ import {
 } from "@/lib/client-po-db";
 import { ledgerDetailFields, ledgerDetailColumns, ledgerDebitColumns, ledgerDebitColumnTotals, mapLedgerTableRow, downloadGoodsAndServicesLedgerCsv } from "@/lib/ledger-display";
 import { computePlTotals } from "@/lib/pl-report";
+import { loadLedgerLockTargets } from "@/lib/record-lock";
 import { createClient } from "@/lib/supabase/client";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { Client, ClientPoNumber, LedgerEntry, TradePartner } from "@/lib/types";
@@ -35,10 +37,6 @@ import {
 import { SelectField } from "@/components/ui/FormFields";
 
 const GOODS_AND_SERVICES_LABEL = "Goods and Services";
-
-function isGoodsLineLocked(entry: LedgerEntry) {
-  return isLedgerLineFullyPaid(entry) || Boolean(entry.paid);
-}
 
 function GoodsAndServicesSectionHeader({
   entryCount,
@@ -104,6 +102,7 @@ export default function LedgerPage() {
 }
 
 function LedgerPageContent() {
+  const { acquireLocks, releaseLocks } = useRecordLocks();
   const searchParams = useSearchParams();
   const uninvoicedOnly = searchParams.get("uninvoiced") === "1";
   const jobsFilterParam = searchParams.get("jobs");
@@ -210,13 +209,13 @@ function LedgerPageContent() {
   }, []);
 
   async function handleDelete(entry: LedgerEntry) {
-    if (isGoodsLineLocked(entry)) {
-      alert("This line is paid in full and cannot be deleted.");
-      return;
-    }
     if (!confirm("Delete this ledger entry?")) return;
+    const targets = await loadLedgerLockTargets(entry.id);
+    const ok = await acquireLocks(targets);
+    if (!ok) return;
     const supabase = createClient();
     const { error } = await supabase.from("ledger").delete().eq("id", entry.id);
+    await releaseLocks(targets);
     if (error) {
       alert(error.message);
       return;
@@ -224,23 +223,24 @@ function LedgerPageContent() {
     loadData();
   }
 
-  function startEdit(entry: LedgerEntry) {
-    if (isGoodsLineLocked(entry)) {
-      alert("This line is paid in full and cannot be edited.");
-      return;
-    }
+  async function startEdit(entry: LedgerEntry) {
+    const ok = await acquireLocks(await loadLedgerLockTargets(entry.id));
+    if (!ok) return;
     setEditing(entry);
     setShowForm(true);
   }
 
+  function closeForm() {
+    void releaseLocks();
+    setShowForm(false);
+    setEditing(null);
+  }
+
   function entryActions(entry: LedgerEntry) {
-    const locked = isGoodsLineLocked(entry);
     return (
       <RowActions
         onEdit={() => startEdit(entry)}
         onDelete={() => handleDelete(entry)}
-        editDisabled={locked}
-        deleteDisabled={locked}
       />
     );
   }
@@ -479,13 +479,9 @@ function LedgerPageContent() {
             ledgerEntries={entries}
             defaultPurchaser={defaultPurchaser}
             initial={editing}
-            onCancel={() => {
-              setShowForm(false);
-              setEditing(null);
-            }}
+            onCancel={closeForm}
             onSuccess={() => {
-              setShowForm(false);
-              setEditing(null);
+              closeForm();
               loadData();
             }}
           />

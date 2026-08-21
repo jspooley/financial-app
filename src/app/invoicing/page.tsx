@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { InvoiceForm } from "@/components/forms/InvoiceForm";
+import { useRecordLocks } from "@/components/RecordLockProvider";
 import { DeleteInvoiceDialog } from "@/components/invoicing/DeleteInvoiceDialog";
 import { InvoiceDetailView } from "@/components/invoicing/InvoiceDetailView";
 import { Button } from "@/components/ui/Button";
@@ -16,12 +17,14 @@ import { isInvoiceGoodsLine } from "@/lib/coa";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { InvoiceLineItem } from "@/lib/invoice-utils";
 import { getLedgerLinesForInvoice, invoiceLineTotal, isInvoiceFullyPaid, isInvoicePaidByBalance, isInvoicedDebitLine, isToBeInvoicedLine, normalizeInvoiceId, sumInvoiceHistoryTotal, summarizeToBeInvoiced } from "@/lib/invoice-utils";
+import { loadInvoiceLockTargets } from "@/lib/record-lock";
 import type { Client, Invoice, LedgerEntry } from "@/lib/types";
 import { formatCurrency, formatDate, roundMoney } from "@/lib/utils";
 
 type InvoiceView = "outstanding" | "history";
 
 export default function InvoicingPage() {
+  const { acquireLocks, releaseLocks } = useRecordLocks();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
@@ -229,9 +232,13 @@ export default function InvoicingPage() {
 
   async function confirmDelete() {
     if (!deleteConfirm) return;
+    const { invoice } = deleteConfirm;
+    const targets = await loadInvoiceLockTargets(invoice);
+    const ok = await acquireLocks(targets);
+    if (!ok) return;
+
     setDeleting(true);
     const supabase = createClient();
-    const { invoice } = deleteConfirm;
 
     await supabase
       .from("ledger")
@@ -239,6 +246,7 @@ export default function InvoicingPage() {
       .eq("invoice_id", invoice.invoice_id);
 
     const { error } = await supabase.from("invoicing").delete().eq("id", invoice.id);
+    await releaseLocks(targets);
     setDeleting(false);
 
     if (error) {
@@ -250,13 +258,28 @@ export default function InvoicingPage() {
     loadData();
   }
 
+  async function startEdit(invoice: Invoice) {
+    const isPaid = invoicePaidById[normalizeInvoiceId(invoice.invoice_id)] ?? false;
+    if (isPaid) {
+      alert("This invoice is paid in full and cannot be edited.");
+      return;
+    }
+    const ok = await acquireLocks(await loadInvoiceLockTargets(invoice));
+    if (!ok) return;
+    setEditing(invoice);
+    setPrefillClientId(undefined);
+    setShowForm(true);
+  }
+
   function openNewInvoice() {
+    void releaseLocks();
     setEditing(null);
     setPrefillClientId(selectedClientId || undefined);
     setShowForm(true);
   }
 
   function closeForm() {
+    void releaseLocks();
     setShowForm(false);
     setEditing(null);
     setPrefillClientId(undefined);
@@ -288,13 +311,7 @@ export default function InvoicingPage() {
             actions: (
               <RowActions
                 onEdit={() => {
-                  if (isPaid) {
-                    alert("This invoice is paid in full and cannot be edited.");
-                    return;
-                  }
-                  setEditing(invoice);
-                  setPrefillClientId(undefined);
-                  setShowForm(true);
+                  void startEdit(invoice);
                 }}
                 onDelete={() => handleDeleteClick(invoice)}
                 editDisabled={isPaid}

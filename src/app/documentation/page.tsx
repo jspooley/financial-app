@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
+import { useRecordLocks } from "@/components/RecordLockProvider";
 import { Button } from "@/components/ui/Button";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -11,6 +12,7 @@ import {
   isDocumentationSchemaError,
   type AppDocumentationRow,
 } from "@/lib/app-documentation";
+import { documentationLockTargets } from "@/lib/record-lock";
 import { createClient } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
 
@@ -36,6 +38,7 @@ function isSameDocumentationPath(href: string) {
 }
 
 export default function DocumentationPage() {
+  const { acquireLocks } = useRecordLocks();
   const router = useRouter();
   const [drafts, setDrafts] = useState<DraftMap>(emptyDrafts);
   const [saved, setSaved] = useState<DraftMap>(emptyDrafts);
@@ -58,6 +61,7 @@ export default function DocumentationPage() {
   );
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
+  const docLockHeldRef = useRef(false);
 
   const loadDocumentation = useCallback(async () => {
     setLoading(true);
@@ -160,7 +164,16 @@ export default function DocumentationPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [pendingHref]);
 
-  function updateDraft(key: string, value: string) {
+  async function ensureDocumentationLock() {
+    if (docLockHeldRef.current) return true;
+    const ok = await acquireLocks(documentationLockTargets());
+    if (ok) docLockHeldRef.current = true;
+    return ok;
+  }
+
+  async function updateDraft(key: string, value: string) {
+    const ok = await ensureDocumentationLock();
+    if (!ok) return;
     setDrafts((current) => ({ ...current, [key]: value }));
     setSuccess(null);
   }
@@ -182,6 +195,12 @@ export default function DocumentationPage() {
     setError(null);
     setSuccess(null);
     setNeedsSetup(false);
+
+    const locked = await ensureDocumentationLock();
+    if (!locked) {
+      setSaving(false);
+      return;
+    }
 
     const supabase = createClient();
     const now = new Date().toISOString();

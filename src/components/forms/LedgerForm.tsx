@@ -105,16 +105,6 @@ const schema = z
         path: ["discount_percent"],
       });
     }
-    if (
-      values.wholesale_retail !== "service" &&
-      values.designer_cost <= 0
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Designer cost must be greater than 0",
-        path: ["designer_cost"],
-      });
-    }
   });
 
 type FormValues = z.infer<typeof schema>;
@@ -259,9 +249,6 @@ export function LedgerForm({
   const [saving, setSaving] = useState(false);
   const [pendingZeroDiscountValues, setPendingZeroDiscountValues] =
     useState<FormValues | null>(null);
-  const lineLocked = Boolean(
-    initial && (isLedgerLineFullyPaid(initial) || initial.paid)
-  );
   const {
     register,
     handleSubmit,
@@ -635,10 +622,6 @@ export function LedgerForm({
   }, [selectedClientId, setValue]);
 
   async function onSubmit(values: FormValues) {
-    if (initial && (isLedgerLineFullyPaid(initial) || Boolean(initial.paid))) {
-      setError("This line is paid in full and cannot be modified.");
-      return;
-    }
     const isNoTradeRetail =
       values.wholesale_retail === "retail" &&
       !(values.trade_partner_id ?? "").trim();
@@ -655,10 +638,6 @@ export function LedgerForm({
   }
 
   async function saveEntry(values: FormValues) {
-    if (initial && (isLedgerLineFullyPaid(initial) || Boolean(initial.paid))) {
-      setError("This line is paid in full and cannot be modified.");
-      return;
-    }
     setError(null);
     setNeedsQuantityColumn(false);
     setPendingZeroDiscountValues(null);
@@ -827,14 +806,6 @@ export function LedgerForm({
         {initial ? "Edit Ledger Entry" : "New Ledger Entry"}
       </h2>
 
-      {lineLocked && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
-          This line is paid in full and cannot be modified. Clear or adjust the
-          payment in Payments first if a correction is needed.
-        </div>
-      )}
-
-      <fieldset disabled={lineLocked} className="min-w-0 space-y-4">
       <div className="space-y-4">
         {/* Top: client/date/trade partner left, description + PO/wholesale-retail right */}
         <div className="grid gap-4 lg:grid-cols-2 lg:grid-rows-[auto_auto_auto_auto_auto_auto]">
@@ -1026,14 +997,13 @@ export function LedgerForm({
             control={control}
             name="designer_cost"
             label="Designer Cost"
-            required={!isService}
-            allowZero={isService}
+            allowZero
             hint={
               isService
                 ? "Optional. Use 0 when the service has no designer cost."
                 : hasTradePartner
-                  ? `From retail: retail × (1 − ${formatPercent(tradePartnerDiscount)}). Or enter designer cost to fill retail.`
-                  : "No trade partner: enter cost; markup % or retail sets the sell price."
+                  ? `From retail: retail × (1 − ${formatPercent(tradePartnerDiscount)}). Or enter 0 when there is no designer cost.`
+                  : "Enter cost, or 0 when there is no designer cost. Markup % or retail sets the sell price."
             }
             error={errors.designer_cost?.message}
             computedValue={
@@ -1285,7 +1255,6 @@ export function LedgerForm({
           </div>
         </div>
       </div>
-      </fieldset>
 
       {needsQuantityColumn ? (
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
@@ -1329,13 +1298,11 @@ NOTIFY pgrst, 'reload schema';`}
       )}
 
       <div className="flex flex-wrap gap-2">
-        {!lineLocked && (
-          <Button type="submit" loading={isSubmitting || saving}>
-            {initial ? "Save Changes" : "Create Entry"}
-          </Button>
-        )}
+        <Button type="submit" loading={isSubmitting || saving}>
+          {initial ? "Save Changes" : "Create Entry"}
+        </Button>
         <Button type="button" variant="secondary" onClick={onCancel}>
-          {lineLocked ? "Close" : "Cancel"}
+          Cancel
         </Button>
       </div>
 

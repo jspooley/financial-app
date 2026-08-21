@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { AppointmentForm } from "@/components/forms/AppointmentForm";
+import { useRecordLocks } from "@/components/RecordLockProvider";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -16,6 +17,7 @@ import { formatDateTime, toDateInputValue, toTimeInputValue } from "@/lib/utils"
 type AppointmentFilter = "all" | "pending" | "won" | "lost" | "proposal_sent";
 
 function AppointmentsPageContent() {
+  const { acquireLocks, releaseLocks } = useRecordLocks();
   const searchParams = useSearchParams();
   const filterParam = searchParams.get("status");
   const filter: AppointmentFilter =
@@ -87,10 +89,27 @@ function AppointmentsPageContent() {
     return appointments.filter(isAppointmentsBucket);
   }, [appointments, filter]);
 
+  function closeForm() {
+    void releaseLocks();
+    setShowForm(false);
+    setEditing(null);
+  }
+
+  async function startEdit(appointment: Appointment) {
+    const ok = await acquireLocks([{ table: "appointments", id: appointment.id }]);
+    if (!ok) return;
+    setEditing(appointment);
+    setShowForm(true);
+  }
+
   async function handleDelete(appointment: Appointment) {
     if (!confirm(`Delete appointment for "${appointment.client_name}"?`)) return;
+    const targets = [{ table: "appointments" as const, id: appointment.id }];
+    const ok = await acquireLocks(targets);
+    if (!ok) return;
     const supabase = createClient();
     const { error } = await supabase.from("appointments").delete().eq("id", appointment.id);
+    await releaseLocks(targets);
     if (error) {
       alert(error.message);
       return;
@@ -153,13 +172,9 @@ function AppointmentsPageContent() {
         <AppointmentForm
           key={editing?.id ?? "new"}
           initial={editing}
-          onCancel={() => {
-            setShowForm(false);
-            setEditing(null);
-          }}
+          onCancel={closeForm}
           onSuccess={() => {
-            setShowForm(false);
-            setEditing(null);
+            closeForm();
             loadAppointments();
           }}
         />
@@ -200,8 +215,7 @@ function AppointmentsPageContent() {
             actions: (
               <RowActions
                 onEdit={() => {
-                  setEditing(appointment);
-                  setShowForm(true);
+                  void startEdit(appointment);
                 }}
                 onDelete={() => handleDelete(appointment)}
               />

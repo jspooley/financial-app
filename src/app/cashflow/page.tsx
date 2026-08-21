@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ExpenseForm } from "@/components/forms/ExpenseForm";
 import { LedgerAccountForm } from "@/components/forms/LedgerAccountForm";
+import { useRecordLocks } from "@/components/RecordLockProvider";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -11,16 +12,18 @@ import { normalizeInvoiceId } from "@/lib/invoice-utils";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 import {
   COA_COGS_CATEGORY,
+  cashflowClassificationFlags,
   isCogsCoa,
+  isCashflowManagedEntry,
   isCashflowOperatingCoa,
   isInvoiceGoodsLine,
   isOperatingExpenseEntry,
+  isRecordedTransferCoa,
   isSalesIncomeCoa,
 } from "@/lib/coa";
 import { isCostCompanionRow } from "@/lib/cost-companions";
-import {
-  isPaymentCompanionRow,
-} from "@/lib/payment-companions";
+import { isPaymentCompanionRow } from "@/lib/payment-companions";
+import { loadLedgerLockTargets } from "@/lib/record-lock";
 import { createClient } from "@/lib/supabase/client";
 import {
   CASHFLOW_ACCOUNTS,
@@ -52,8 +55,22 @@ function monthKeyFromDate(value: string | null | undefined) {
   return date.length >= 7 ? date.slice(0, 7) : "";
 }
 
+/** Cash-basis amount: credits/deposits positive, debits/payments negative. */
+function signedCashAmount(debit: number, credit: number) {
+  return roundMoney(credit - debit);
+}
+
+function formatSignedCash(value: number) {
+  if (Math.abs(value) < 0.005) return "—";
+  return (
+    <span className={value < 0 ? "tabular-nums text-red-700" : "tabular-nums text-slate-900"}>
+      {formatCurrency(value)}
+    </span>
+  );
+}
+
 function isOperatingExpense(entry: LedgerEntry) {
-  return isOperatingExpenseEntry(entry);
+  return isCashflowManagedEntry(entry);
 }
 
 function isPaymentLine(entry: LedgerEntry) {
@@ -608,6 +625,29 @@ function buildCashflowDisplayItems(
   return items;
 }
 
+type BalanceSheetReviewKind =
+  | "Personal-use goods"
+  | "Personal-use companion"
+  | "300-series transfer / equity"
+  | "Unexpected";
+
+function balanceSheetReviewKind(
+  entry: LedgerEntry,
+  parentById: Map<string, LedgerEntry>
+): BalanceSheetReviewKind {
+  if (isInvoiceGoodsLine(entry)) return "Personal-use goods";
+  if (entry.source_ledger_id) {
+    const parent = parentById.get(entry.source_ledger_id);
+    if (parent && (isInvoiceGoodsLine(parent) || parent.balance_sheet)) {
+      return "Personal-use companion";
+    }
+  }
+  if (cashflowClassificationFlags(entry.coa_category ?? "").balance_sheet) {
+    return "300-series transfer / equity";
+  }
+  return "Unexpected";
+}
+
 /**
  * Personal-use goods (balance_sheet invoice lines) and their payment companions.
  * Cashflow Add Entry rows — including Owner's Contribution (300) equity — stay
@@ -673,17 +713,16 @@ function amountsForAccountFilter(
   // Pure debit rows (COGS / expenses) keep their amount whenever the row is
   // visible — including when pulled in as an invoice mate of a paid month.
   // Combined payment rows still hide debit outside the entry month.
+  const storedCredit = Number(entry.credit_amount ?? 0);
   const debitRaw =
     entryMonthMatches || paymentRaw <= 0 ? resolvedDebit : 0;
   const creditMonthMatches =
     paymentRaw > 0 && monthKeyFromDate(entry.date_paid)
       ? paidMonthMatches
       : entryMonthMatches;
-  const creditRaw = creditMonthMatches ? Number(entry.credit_amount ?? 0) : 0;
+  const creditRaw = creditMonthMatches ? storedCredit : 0;
   const showDesignerCost = designerCostRaw > 0;
   const showPayment = paymentRaw > 0;
-  const showDebit = debitRaw > 0;
-  const showCredit = creditRaw > 0;
 
   return {
     designerCost: designerCostRaw,
@@ -692,8 +731,8 @@ function amountsForAccountFilter(
     credit: creditRaw,
     showDesignerCost,
     showPayment,
-    showDebit,
-    showCredit,
+    displayDebit: resolvedDebit,
+    displayCredit: storedCredit,
   };
 }
 
@@ -798,6 +837,7 @@ function creditCardBalance(
 }
 
 export default function CashflowPage() {
+  const { acquireLocks, releaseLocks } = useRecordLocks();
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [chartOfAccounts, setChartOfAccounts] = useState<ChartOfAccount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -822,6 +862,7 @@ export default function CashflowPage() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     () => new Set()
   );
+  const [showBalanceSheetReview, setShowBalanceSheetReview] = useState(false);
 
   const loadEntries = useCallback(async () => {
     setLoading(true);
@@ -1084,6 +1125,29 @@ export default function CashflowPage() {
     sortBy,
   ]);
 
+  const balanceSheetReview = useMemo(() => {
+    const items = entries
+      .filter((entry) => Boolean(entry.balance_sheet))
+      .map((entry) => ({
+        entry,
+        kind: balanceSheetReviewKind(entry, parentById),
+      }))
+      .sort((a, b) => {
+        const unexpectedDelta =
+          Number(b.kind === "Unexpected") - Number(a.kind === "Unexpected");
+        if (unexpectedDelta !== 0) return unexpectedDelta;
+        const byDate = b.entry.entry_date.localeCompare(a.entry.entry_date);
+        if (byDate !== 0) return byDate;
+        return (a.entry.description ?? "").localeCompare(
+          b.entry.description ?? "",
+          undefined,
+          { sensitivity: "base" }
+        );
+      });
+    const unexpected = items.filter((item) => item.kind === "Unexpected");
+    return { items, unexpected };
+  }, [entries, parentById]);
+
   const accountBalances = useMemo(
     () => ({
       checking: checkingBalance(visibleEntries, {
@@ -1189,13 +1253,25 @@ export default function CashflowPage() {
   }
 
   function closeForms() {
+    void releaseLocks();
     setShowForm(false);
     setEditing(null);
     setEditingAccountEntries(null);
   }
 
-  function openAccountEditor(entries: LedgerEntry[]) {
+  async function startExpenseEdit(entry: LedgerEntry) {
+    const ok = await acquireLocks(await loadLedgerLockTargets(entry.id));
+    if (!ok) return;
+    setEditingAccountEntries(null);
+    setEditing(entry);
+    setShowForm(true);
+  }
+
+  async function openAccountEditor(entries: LedgerEntry[]) {
     if (entries.length === 0) return;
+    const targetLists = await Promise.all(entries.map((entry) => loadLedgerLockTargets(entry.id)));
+    const ok = await acquireLocks(targetLists.flat());
+    if (!ok) return;
     setEditingAccountEntries(entries);
     setEditing(entries[0]);
     setShowForm(true);
@@ -1205,7 +1281,7 @@ export default function CashflowPage() {
     <AppShell>
       <PageHeader
         title="Cashflow"
-        description="Track operating cashflow by department, account, and payments on the ledger."
+        description="Cash-basis register: deposits and credits are positive; payments and debits are negative."
         action={
           !showForm && (
             <Button
@@ -1223,9 +1299,10 @@ export default function CashflowPage() {
 
       {showForm ? (
         editingAccountEntries ||
-        (editing && !isOperatingExpenseEntry(editing)) ? (
+        (editing && !isCashflowManagedEntry(editing)) ? (
           <LedgerAccountForm
             entries={editingAccountEntries ?? (editing ? [editing] : [])}
+            chartOfAccounts={chartOfAccounts}
             onCancel={closeForms}
             onSuccess={() => {
               closeForms();
@@ -1302,6 +1379,84 @@ export default function CashflowPage() {
               </p>
             </div>
           </section>
+
+          {balanceSheetReview.items.length > 0 && (
+            <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-900">
+                    Balance Sheet items
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-600">
+                    {balanceSheetReview.items.length}{" "}
+                    {balanceSheetReview.items.length === 1 ? "row is" : "rows are"}{" "}
+                    marked Balance Sheet (excluded from P&amp;L). Personal-use goods
+                    and 300-series transfers/equity are expected.{" "}
+                    {balanceSheetReview.unexpected.length === 0
+                      ? "None look marked that way in error."
+                      : `${balanceSheetReview.unexpected.length} ${
+                          balanceSheetReview.unexpected.length === 1
+                            ? "row does not"
+                            : "rows do not"
+                        } match those categories — review those first. Saving a cashflow edit now resets the flag from CoA.`}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowBalanceSheetReview((current) => !current)
+                  }
+                  className="text-sm font-medium text-brand-700 hover:text-brand-900"
+                >
+                  {showBalanceSheetReview ? "Hide list" : "Show list"}
+                </button>
+              </div>
+              {showBalanceSheetReview && (
+                <div className="mt-4">
+                  <DataTable
+                    stickyHeader
+                    maxBodyHeight="24rem"
+                    mobileTitleKey="date"
+                    emptyMessage="No Balance Sheet rows."
+                    columns={[
+                      { key: "date", label: "Date" },
+                      { key: "kind", label: "Why marked" },
+                      { key: "coa", label: "CoA Category" },
+                      { key: "description", label: "Description" },
+                      { key: "purchaser", label: "Purchased By" },
+                      { key: "amount", label: "Amount" },
+                    ]}
+                    rows={balanceSheetReview.items.map(({ entry, kind }) => ({
+                      date: formatDate(entry.entry_date),
+                      kind:
+                        kind === "Unexpected" ? (
+                          <span className="font-medium text-red-700">
+                            {kind}
+                          </span>
+                        ) : (
+                          kind
+                        ),
+                      coa: entry.coa_category?.trim() || "—",
+                      description:
+                        entry.description?.trim() ||
+                        entry.clients?.name ||
+                        "—",
+                      purchaser: entry.purchaser,
+                      amount: formatSignedCash(
+                        signedCashAmount(
+                          Number(entry.debit_amount ?? 0),
+                          Number(entry.credit_amount ?? 0)
+                        )
+                      ),
+                    }))}
+                    rowKey={(_row, index) =>
+                      balanceSheetReview.items[index]?.entry.id ?? String(index)
+                    }
+                  />
+                </div>
+              )}
+            </section>
+          )}
 
           <div className="mb-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <div>
@@ -1473,8 +1628,7 @@ export default function CashflowPage() {
               { key: "account", label: "Account" },
               { key: "description", label: "Description" },
               { key: "coaCategory", label: "CoA Category" },
-              { key: "debit", label: "Debit" },
-              { key: "credit", label: "Credit" },
+              { key: "amount", label: "Amount" },
               { key: "invoiceId", label: "Invoice ID" },
               { key: "purchasedBy", label: "Purchased By" },
               { key: "paidTo", label: "Paid To" },
@@ -1499,7 +1653,9 @@ export default function CashflowPage() {
                         className="w-full min-h-[33px] px-3 py-1.5"
                         onClick={() => openAccountEditor(item.entries)}
                       >
-                        Edit Account
+                        {item.entries.every(isCashflowManagedEntry)
+                          ? "Edit Account / CoA"
+                          : "Edit Account"}
                       </Button>
                     </div>
                   ),
@@ -1516,8 +1672,9 @@ export default function CashflowPage() {
                   coaCategory: (
                     <span className="text-slate-700">{item.coaLabel}</span>
                   ),
-                  debit: item.debit > 0 ? formatCurrency(item.debit) : "—",
-                  credit: item.credit > 0 ? formatCurrency(item.credit) : "—",
+                  amount: formatSignedCash(
+                    signedCashAmount(item.debit, item.credit)
+                  ),
                   purchasedBy: item.purchasedBy,
                   paidTo: item.paidTo,
                   invoiceId: item.invoiceId || "—",
@@ -1539,9 +1696,7 @@ export default function CashflowPage() {
                     variant="secondary"
                     className="w-full min-h-[33px] px-3 py-1.5"
                     onClick={() => {
-                      setEditingAccountEntries(null);
-                      setEditing(entry);
-                      setShowForm(true);
+                      void startExpenseEdit(entry);
                     }}
                   >
                     Edit
@@ -1552,7 +1707,9 @@ export default function CashflowPage() {
                     className="w-full min-h-[33px] px-3 py-1.5"
                     onClick={() => openAccountEditor([entry])}
                   >
-                    Edit Account
+                    {isInvoiceGoodsLine(entry)
+                      ? "Edit Account / Purchaser"
+                      : "Edit Account"}
                   </Button>
                 ),
                 date: displayDate(entry),
@@ -1562,16 +1719,20 @@ export default function CashflowPage() {
                     {entry.coa_category ?? "—"}
                   </span>
                 ),
-                debit: amounts.showDebit
-                  ? formatCurrency(amounts.debit)
-                  : "—",
-                credit: amounts.showCredit
-                  ? formatCurrency(amounts.credit)
-                  : "—",
-                purchasedBy: amounts.showDesignerCost
-                  ? entry.purchaser ?? "—"
-                  : "—",
-                paidTo: amounts.showPayment ? entry.paid_to ?? "—" : "—",
+                amount: formatSignedCash(
+                  signedCashAmount(
+                    amounts.displayDebit,
+                    amounts.displayCredit
+                  )
+                ),
+                purchasedBy:
+                  amounts.showDesignerCost || isCostCompanionRow(entry)
+                    ? entry.purchaser ?? "—"
+                    : "—",
+                paidTo:
+                  amounts.showPayment || isRecordedTransferCoa(entry.coa_category)
+                    ? entry.paid_to ?? "—"
+                    : "—",
                 invoiceId: normalizeInvoiceId(entry.invoice_id) || "—",
                 description: (
                   <span className={isChild ? "block pl-5 text-slate-600" : ""}>

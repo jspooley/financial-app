@@ -4,9 +4,11 @@ import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { createClient } from "@/lib/supabase/client";
+import { useRecordLocks } from "@/components/RecordLockProvider";
 import { Button } from "@/components/ui/Button";
 import { InputField, SelectField } from "@/components/ui/FormFields";
+import { lockTarget } from "@/lib/record-lock";
+import { createClient } from "@/lib/supabase/client";
 
 const schema = z.object({
   from_room: z.string().min(1, "Select a room to rename"),
@@ -21,6 +23,7 @@ type FormValues = z.infer<typeof schema>;
 
 interface RenameRoomFormProps {
   rooms: string[];
+  items: Array<{ id: string; room: string }>;
   itemCounts: Record<string, number>;
   initialRoom?: string;
   onSuccess: (fromRoom: string, toRoom: string) => void;
@@ -29,11 +32,13 @@ interface RenameRoomFormProps {
 
 export function RenameRoomForm({
   rooms,
+  items,
   itemCounts,
   initialRoom = "",
   onSuccess,
   onCancel,
 }: RenameRoomFormProps) {
+  const { acquireLocks, releaseLocks } = useRecordLocks();
   const [error, setError] = useState<string | null>(null);
 
   const {
@@ -73,10 +78,21 @@ export function RenameRoomForm({
     }
 
     const supabase = createClient();
+    const affected = items.filter(
+      (item) => item.room === from || item.room === to
+    );
+    const targets = affected.map((item) => lockTarget("budget_items", item.id));
+    if (targets.length > 0) {
+      const locked = await acquireLocks(targets);
+      if (!locked) return;
+    }
+
     const { error: dbError } = await supabase
       .from("budget_items")
       .update({ room: to })
       .eq("room", from);
+
+    await releaseLocks(targets);
 
     if (dbError) {
       setError(dbError.message);

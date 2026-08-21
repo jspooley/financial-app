@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { useRecordLocks } from "@/components/RecordLockProvider";
 import { VarianceAcceptModal } from "@/components/payments/VarianceAcceptModal";
 import { Button } from "@/components/ui/Button";
 import { SelectField, editableControlClass, fieldClass, selectChevron, selectFieldClass } from "@/components/ui/FormFields";
@@ -22,6 +23,7 @@ import {
   normalizePoNumber,
 } from "@/lib/invoice-utils";
 import { normalizeLedgerRow, PAYMENTS_DB_SETUP_SQL, EXPENSE_DB_SETUP_SQL, LEDGER_VARIANCE_SETUP_SQL, VARIANCE_NOTES_MAX_LENGTH, type LedgerDbRow } from "@/lib/ledger-db";
+import { loadLedgerLockTargets } from "@/lib/record-lock";
 import {
   PAYMENT_TYPE_OPTIONS,
   type Client,
@@ -269,6 +271,7 @@ function parsePaymentsDbSetupError(message: string) {
 }
 
 export default function PaymentsPage() {
+  const { acquireLocks, releaseLocks } = useRecordLocks();
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [paidEntries, setPaidEntries] = useState<LedgerEntry[]>([]);
   const [invoicedDebits, setInvoicedDebits] = useState<LedgerEntry[]>([]);
@@ -761,7 +764,7 @@ export default function PaymentsPage() {
     });
   }
 
-  function handleAddPayment() {
+  async function handleAddPayment() {
     setError(null);
     setSuccess(null);
     if (!selectedClientId) {
@@ -776,6 +779,8 @@ export default function PaymentsPage() {
     const today = todayDateInputValue();
     const target =
       filteredEntries.find((entry) => !drafts[entry.id]?.editing) ?? filteredEntries[0];
+    const ok = await acquireLocks(await loadLedgerLockTargets(target.id));
+    if (!ok) return;
     const balance = getLedgerOutstandingBalance(target);
     const amountOwed = balance < 0 ? roundMoney(-balance) : 0;
     const targetDatePaid = toDateInputValue(target.date_paid) || today;
@@ -820,25 +825,34 @@ export default function PaymentsPage() {
     });
   }
 
-  function beginEditRow(entry: LedgerEntry) {
+  async function beginEditRow(entry: LedgerEntry) {
     setError(null);
     setSuccess(null);
     if (!selectedClientId) {
       setError("Select a client first.");
       return;
     }
+    const ok = await acquireLocks(await loadLedgerLockTargets(entry.id), {
+      mode: "add",
+    });
+    if (!ok) return;
     updateDraft(entry.id, beginEditingPayment(entry));
   }
 
-  function beginEditHistoryRow(entry: LedgerEntry) {
+  async function beginEditHistoryRow(entry: LedgerEntry) {
     setError(null);
     setSuccess(null);
+    const ok = await acquireLocks(await loadLedgerLockTargets(entry.id), {
+      mode: "add",
+    });
+    if (!ok) return;
     updateDraft(entry.id, beginEditingPayment(entry));
   }
 
   function cancelRowEdit(entry: LedgerEntry) {
     setError(null);
     resetDraftFromEntry(entry);
+    void loadLedgerLockTargets(entry.id).then((targets) => releaseLocks(targets));
   }
 
   async function handleDeleteEditing() {
@@ -895,6 +909,7 @@ export default function PaymentsPage() {
 
     setSaving(false);
     setSuccess(`Cleared ${editingEntries.length} item${editingEntries.length === 1 ? "" : "s"}.`);
+    await releaseLocks();
     await loadData();
   }
 
@@ -1053,6 +1068,7 @@ export default function PaymentsPage() {
     const ok = await persistPaymentDrafts(pending.rows, pending.decisions);
     if (!ok) return;
     setSuccess(pending.successMessage);
+    await releaseLocks();
     await loadData();
   }
 
@@ -1109,6 +1125,7 @@ export default function PaymentsPage() {
       const ok = await persistPaymentDrafts(rows, {});
       if (!ok) return;
       setSuccess(successMessage);
+      await releaseLocks();
       await loadData();
       return;
     }

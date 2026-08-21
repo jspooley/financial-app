@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
-import { isCashflowOperatingCoa, isCogsCoa, isOperatingExpenseCoa } from "@/lib/coa";
+import { collectClientPoOptions } from "@/lib/client-po-db";
+import { cashflowClassificationFlags, isRecordedTransferCoa } from "@/lib/coa";
+import { normalizeInvoiceId, poNumbersMatch } from "@/lib/invoice-utils";
 import {
   CASHFLOW_ACCOUNTS,
   CASHFLOW_DEPARTMENTS,
@@ -15,7 +17,6 @@ import {
 } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import {
-  CheckboxField,
   InputField,
   SelectField,
   TextareaField,
@@ -39,8 +40,8 @@ const schema = z
     account: z.enum(CASHFLOW_ACCOUNTS),
     designer: z.enum(["Jess", "Molly"]),
     coa_category: z.string().min(1, "Chart of Accounts category is required"),
-    expense: z.boolean(),
-    balance_sheet: z.boolean(),
+    invoice_id: z.string().optional(),
+    paid_to: z.enum(["", "Jess", "Molly"]),
   })
   .refine((values) => values.debit_amount > 0 || values.credit_amount > 0, {
     message: "Enter a debit amount, credit amount, or both",
@@ -49,6 +50,12 @@ const schema = z
 
 type FormInput = z.input<typeof schema>;
 type FormValues = z.output<typeof schema>;
+
+type InvoiceOptionRow = {
+  client_id: string;
+  po_number: string;
+  invoice_id: string;
+};
 
 interface ExpenseFormProps {
   initial?: LedgerEntry | null;
@@ -59,15 +66,15 @@ interface ExpenseFormProps {
   onDeleted?: () => void;
 }
 
-function defaultsForCoaCategory(coaCategory: string) {
-  const isCogs = isCogsCoa(coaCategory);
-  const isEquityOrTransfer = isCashflowOperatingCoa(coaCategory) && !isOperatingExpenseCoa(coaCategory);
-  return {
-    // Operating expenses (200-series) hit the P&L / register as cash out.
-    // 300-series equity / transfers default to Balance Sheet (still shown on Cashflow).
-    expense: !isCogs && !isEquityOrTransfer,
-    balance_sheet: isEquityOrTransfer,
-  };
+function uniqueInvoiceIds(rows: InvoiceOptionRow[], clientId: string, poNumber: string) {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    if (row.client_id !== clientId) continue;
+    if (!poNumbersMatch(row.po_number, poNumber)) continue;
+    const id = normalizeInvoiceId(row.invoice_id);
+    if (id) ids.add(id);
+  }
+  return [...ids].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
 export function ExpenseForm({
@@ -80,12 +87,10 @@ export function ExpenseForm({
 }: ExpenseFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const initialFlags = initial
-    ? {
-        expense: initial.expense,
-        balance_sheet: initial.balance_sheet,
-      }
-    : { expense: true, balance_sheet: false };
+  const [clients, setClients] = useState<Array<{ id: string; name: string }>>([]);
+  const [invoiceRows, setInvoiceRows] = useState<InvoiceOptionRow[]>([]);
+  const [clientId, setClientId] = useState("");
+  const [poNumber, setPoNumber] = useState("");
 
   const {
     register,
@@ -104,27 +109,86 @@ export function ExpenseForm({
       account: initial?.account ?? checkingAccountForPurchaser(defaultDesigner),
       designer: initial?.purchaser ?? defaultDesigner,
       coa_category: initial?.coa_category ?? "",
-      expense: initialFlags.expense,
-      balance_sheet: initialFlags.balance_sheet,
+      invoice_id: initial?.invoice_id ?? "",
+      paid_to:
+        initial?.paid_to === "Jess" || initial?.paid_to === "Molly"
+          ? initial.paid_to
+          : "",
     },
   });
 
-  const coaCategory = useWatch({ control, name: "coa_category" });
-  /**
-   * Defaults apply only when the category actually changes. Comparing against
-   * the last seen value (rather than a one-shot flag) keeps an edit from having
-   * its saved Expense / Balance Sheet flags overwritten on mount.
-   */
-  const lastCoaRef = useRef(initial?.coa_category ?? "");
+  const invoiceId = useWatch({ control, name: "invoice_id" }) ?? "";
+  const coaCategory = useWatch({ control, name: "coa_category" }) ?? "";
+  const showPaidTo = isRecordedTransferCoa(coaCategory);
 
   useEffect(() => {
-    if (!coaCategory) return;
-    if (coaCategory === lastCoaRef.current) return;
-    lastCoaRef.current = coaCategory;
-    const next = defaultsForCoaCategory(coaCategory);
-    setValue("expense", next.expense, { shouldValidate: true });
-    setValue("balance_sheet", next.balance_sheet, { shouldValidate: true });
-  }, [coaCategory, setValue]);
+    const supabase = createClient();
+    void Promise.all([
+      supabase.from("clients").select("id, name").order("name", { ascending: true }),
+      supabase.from("client_po_numbers").select("client_id, po_number"),
+      supabase.from("invoicing").select("client_id, po_number, invoice_id"),
+      supabase
+        .from("ledger")
+        .select("client_id, po_number, invoice_id")
+        .not("invoice_id", "is", null),
+    ]).then(([clientRes, poRes, invoiceRes, ledgerRes]) => {
+      setClients((clientRes.data ?? []) as Array<{ id: string; name: string }>);
+
+      const rows: InvoiceOptionRow[] = [];
+      for (const source of [poRes.data ?? [], invoiceRes.data ?? [], ledgerRes.data ?? []]) {
+        for (const row of source) {
+          const client = String(row.client_id ?? "");
+          const po = String(row.po_number ?? "").trim();
+          const invoice = normalizeInvoiceId(row.invoice_id as string | null);
+          if (!client) continue;
+          rows.push({
+            client_id: client,
+            po_number: po,
+            invoice_id: invoice,
+          });
+        }
+      }
+      setInvoiceRows(rows);
+
+      const existingInvoice = normalizeInvoiceId(initial?.invoice_id);
+      if (!existingInvoice) return;
+      const match = rows.find(
+        (row) => normalizeInvoiceId(row.invoice_id) === existingInvoice
+      );
+      if (match) {
+        setClientId(match.client_id);
+        setPoNumber(match.po_number);
+      }
+    });
+  }, [initial?.invoice_id]);
+
+  const poOptions = useMemo(() => {
+    if (!clientId) return [];
+    return collectClientPoOptions(
+      invoiceRows
+        .filter((row) => row.client_id === clientId)
+        .map((row) => row.po_number)
+    );
+  }, [clientId, invoiceRows]);
+
+  const invoiceOptions = useMemo(() => {
+    if (!clientId || !poNumber) return [];
+    const options = uniqueInvoiceIds(invoiceRows, clientId, poNumber);
+    const current = normalizeInvoiceId(invoiceId);
+    if (current && !options.includes(current)) options.unshift(current);
+    return options;
+  }, [clientId, poNumber, invoiceRows, invoiceId]);
+
+  function handleClientChange(nextClientId: string) {
+    setClientId(nextClientId);
+    setPoNumber("");
+    setValue("invoice_id", "");
+  }
+
+  function handlePoChange(nextPo: string) {
+    setPoNumber(nextPo);
+    setValue("invoice_id", "");
+  }
 
   async function onSubmit(values: FormValues) {
     setError(null);
@@ -142,9 +206,7 @@ export function ExpenseForm({
       account: values.account,
       purchaser: values.designer,
       coa_category: values.coa_category,
-      expense: values.expense,
-      balance_sheet: values.balance_sheet,
-      income_statement: !values.balance_sheet,
+      ...cashflowClassificationFlags(values.coa_category),
       credit_debit: debit >= credit ? ("debit" as const) : ("credit" as const),
       designer_cost: 0,
       quantity: 1,
@@ -157,6 +219,11 @@ export function ExpenseForm({
       client_id: null,
       po_number: null,
       expense_amount: 0,
+      invoice_id: values.invoice_id?.trim() || null,
+      paid_to:
+        values.paid_to === "Jess" || values.paid_to === "Molly"
+          ? values.paid_to
+          : null,
     };
 
     const { error: dbError } = initial
@@ -262,10 +329,68 @@ export function ExpenseForm({
             </option>
           ))}
         </SelectField>
-        <div className="flex flex-col justify-end gap-3 sm:flex-row sm:items-center sm:col-span-2">
-          <CheckboxField label="Expense" {...register("expense")} />
-          <CheckboxField label="Balance Sheet" {...register("balance_sheet")} />
-        </div>
+        <SelectField
+          label="Client"
+          value={clientId}
+          onChange={(event) => handleClientChange(event.target.value)}
+          hint="Optional. Choose a client to link this entry to a sales invoice."
+        >
+          <option value="">None</option>
+          {clients.map((client) => (
+            <option key={client.id} value={client.id}>
+              {client.name}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField
+          label="PO"
+          value={poNumber}
+          onChange={(event) => handlePoChange(event.target.value)}
+          hint={
+            clientId && poOptions.length === 0
+              ? "No POs for this client yet."
+              : "POs for the selected client."
+          }
+          disabled={!clientId}
+        >
+          <option value="">{clientId ? "Select PO..." : "Select a client first"}</option>
+          {poOptions.map((po) => (
+            <option key={po} value={po}>
+              {po}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField
+          label="Invoice"
+          error={errors.invoice_id?.message}
+          value={invoiceId}
+          onChange={(event) => setValue("invoice_id", event.target.value)}
+          hint={
+            poNumber && invoiceOptions.length === 0
+              ? "No invoices for this PO yet."
+              : "Invoices for the selected PO (for example MJ-CM-202607-1)."
+          }
+          disabled={!poNumber}
+        >
+          <option value="">{poNumber ? "None" : "Select a PO first"}</option>
+          {invoiceOptions.map((id) => (
+            <option key={id} value={id}>
+              {id}
+            </option>
+          ))}
+        </SelectField>
+        {showPaidTo ? (
+          <SelectField
+            label="Paid To"
+            error={errors.paid_to?.message}
+            hint="Who received this transfer. Required for True Up to count both partners."
+            {...register("paid_to")}
+          >
+            <option value="">Not tagged</option>
+            <option value="Jess">Jess</option>
+            <option value="Molly">Molly</option>
+          </SelectField>
+        ) : null}
         <InputField
           label="Debit Amount"
           type="number"

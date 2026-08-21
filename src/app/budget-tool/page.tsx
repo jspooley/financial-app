@@ -9,6 +9,7 @@ import {
   type BudgetItemFormDefaults,
 } from "@/components/forms/BudgetItemForm";
 import { RenameRoomForm } from "@/components/forms/RenameRoomForm";
+import { useRecordLocks } from "@/components/RecordLockProvider";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -21,6 +22,7 @@ import {
 } from "@/lib/budget-utils";
 import { createClient } from "@/lib/supabase/client";
 import { BUDGET_DB_SETUP_SQL } from "@/lib/budget-db";
+import { lockTarget } from "@/lib/record-lock";
 import { BUDGET_ROOM_OPTIONS, type BudgetItem, type Client, type ClientPoNumber } from "@/lib/types";
 import { selectFieldClass } from "@/components/ui/FormFields";
 import { formatCurrency } from "@/lib/utils";
@@ -208,6 +210,7 @@ function clearPlannerDraft() {
 }
 
 export default function BudgetToolPage() {
+  const { acquireLocks, releaseLocks } = useRecordLocks();
   const [items, setItems] = useState<BudgetItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -414,11 +417,23 @@ export default function BudgetToolPage() {
     setSelectedClientId(clientId);
   }, []);
 
-  const handleSelectedPoIdChange = useCallback((poId: string) => {
-    setSelectedPoId(poId);
-  }, []);
+  const handleSelectedPoIdChange = useCallback(
+    async (poId: string) => {
+      if (!poId) {
+        await releaseLocks();
+        setSelectedPoId("");
+        return true;
+      }
+      const ok = await acquireLocks([lockTarget("client_po_numbers", poId)]);
+      if (!ok) return false;
+      setSelectedPoId(poId);
+      return true;
+    },
+    [acquireLocks, releaseLocks]
+  );
 
   function closeItemForm() {
+    void releaseLocks();
     setShowForm(false);
     setShowRenameRoom(false);
     setEditing(null);
@@ -477,8 +492,10 @@ export default function BudgetToolPage() {
     setShowForm(true);
   }
 
-  function openEditForm(item: BudgetItem) {
+  async function openEditForm(item: BudgetItem) {
     rememberListScroll();
+    const ok = await acquireLocks([lockTarget("budget_items", item.id)]);
+    if (!ok) return;
     setEditing(item);
     setFormDefaults(null);
     setShowRenameRoom(false);
@@ -560,8 +577,12 @@ export default function BudgetToolPage() {
       });
       return;
     }
+    const targets = [lockTarget("budget_items", item.id)];
+    const ok = await acquireLocks(targets);
+    if (!ok) return;
     const supabase = createClient();
     const { error } = await supabase.from("budget_items").delete().eq("id", item.id);
+    await releaseLocks(targets);
     if (error) {
       restoreListScrollRef.current = false;
       alert(error.message);
@@ -595,7 +616,10 @@ export default function BudgetToolPage() {
           <button
             type="button"
             className={viewButtonClass(view === "items")}
-            onClick={() => setView("items")}
+            onClick={() => {
+              void releaseLocks();
+              setView("items");
+            }}
           >
             Manage Items
           </button>
@@ -712,6 +736,7 @@ export default function BudgetToolPage() {
       ) : showRenameRoom ? (
         <RenameRoomForm
           rooms={roomFilterOptions}
+          items={items}
           itemCounts={roomItemCounts}
           initialRoom={roomFilter}
           onCancel={closeItemForm}

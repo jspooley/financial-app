@@ -76,6 +76,7 @@ const cashflowHref = "/cashflow";
 const reconciliationHref = "/reconciliation";
 const salesUseTaxHref = "/sales-use-tax";
 const plReportHref = "/pl-report";
+const trueUpHref = "/true-up";
 const scheduleCHref = "/schedule-c";
 const bankCashflowHref = "/bank-cashflow";
 const documentationHref = "/documentation";
@@ -119,6 +120,14 @@ function ReportsBox({ pathname }: { pathname: string }) {
       >
         <span aria-hidden>📈</span>
         P&amp;L Report
+      </Link>
+      <Link
+        href={trueUpHref}
+        className={navLinkClass(pathname === trueUpHref)}
+        title="True Up Report"
+      >
+        <span aria-hidden>⚖️</span>
+        True Up Report
       </Link>
       <Link
         href={reconciliationHref}

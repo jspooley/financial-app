@@ -34,7 +34,7 @@ interface BudgetClientActionsProps {
   selectedClientId: string;
   selectedPoId: string;
   onSelectedClientIdChange: (clientId: string) => void;
-  onSelectedPoIdChange: (poId: string) => void;
+  onSelectedPoIdChange: (poId: string) => void | Promise<boolean | void>;
   onClientsUpdated: () => void;
   onLoadPlan: (
     state: BudgetPlannerState,
@@ -82,8 +82,9 @@ export function BudgetClientActions({
     setSuccess(null);
   }
 
-  function handlePoChange(poId: string) {
-    onSelectedPoIdChange(poId);
+  async function handlePoChange(poId: string) {
+    const allowed = await onSelectedPoIdChange(poId);
+    if (allowed === false) return;
     setError(null);
     setSuccess(null);
     const po = clientPos.find((row) => row.id === poId);

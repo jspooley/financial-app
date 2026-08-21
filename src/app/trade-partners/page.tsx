@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { TradePartnerForm } from "@/components/forms/TradePartnerForm";
+import { useRecordLocks } from "@/components/RecordLockProvider";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -39,6 +40,7 @@ function TradePartnerSummary({ partners }: { partners: TradePartner[] }) {
 }
 
 export default function TradePartnersPage() {
+  const { acquireLocks, releaseLocks } = useRecordLocks();
   const [partners, setPartners] = useState<TradePartner[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -66,13 +68,30 @@ export default function TradePartnersPage() {
     loadPartners();
   }, [loadPartners]);
 
+  function closeForm() {
+    void releaseLocks();
+    setShowForm(false);
+    setEditing(null);
+  }
+
+  async function startEdit(partner: TradePartner) {
+    const ok = await acquireLocks([{ table: "trade_partners", id: partner.id }]);
+    if (!ok) return;
+    setEditing(partner);
+    setShowForm(true);
+  }
+
   async function handleDelete(partner: TradePartner) {
     if (!confirm(`Delete trade partner "${partner.company_name}"?`)) return;
+    const targets = [{ table: "trade_partners" as const, id: partner.id }];
+    const ok = await acquireLocks(targets);
+    if (!ok) return;
     const supabase = createClient();
     const { error } = await supabase
       .from("trade_partners")
       .delete()
       .eq("id", partner.id);
+    await releaseLocks(targets);
     if (error) {
       alert(error.message);
       return;
@@ -102,13 +121,9 @@ export default function TradePartnersPage() {
       {showForm ? (
         <TradePartnerForm
           initial={editing}
-          onCancel={() => {
-            setShowForm(false);
-            setEditing(null);
-          }}
+          onCancel={closeForm}
           onSuccess={() => {
-            setShowForm(false);
-            setEditing(null);
+            closeForm();
             loadPartners();
           }}
         />
@@ -147,8 +162,7 @@ export default function TradePartnersPage() {
             actions: (
               <RowActions
                 onEdit={() => {
-                  setEditing(partner);
-                  setShowForm(true);
+                  void startEdit(partner);
                 }}
                 onDelete={() => handleDelete(partner)}
               />
