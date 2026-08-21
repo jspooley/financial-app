@@ -196,6 +196,12 @@ export function isLedgerLineFullyPaid(entry: LedgerAmountEntry) {
   return getLedgerUnderpaymentAmount(entry) < 0.005;
 }
 
+/** Debit goods/services line that has been paid — locked on the Ledger page. */
+export function isPaidLedgerRecord(entry: LedgerAmountEntry) {
+  if (entry.credit_debit !== "debit") return false;
+  return Boolean(entry.paid) || isLedgerLineFullyPaid(entry);
+}
+
 /** DB paid flag derived from balance math (set on Payments save and ledger edits). */
 export function deriveLedgerPaidFlag(entry: {
   credit_debit?: string | null;

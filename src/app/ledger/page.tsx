@@ -10,7 +10,13 @@ import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
-import { isToBeInvoicedLine, jobKeysByStatus, ledgerJobKey, normalizePoNumber } from "@/lib/invoice-utils";
+import {
+  isPaidLedgerRecord,
+  isToBeInvoicedLine,
+  jobKeysByStatus,
+  ledgerJobKey,
+  normalizePoNumber,
+} from "@/lib/invoice-utils";
 import { isInvoiceGoodsLine } from "@/lib/coa";
 import {
   isPaymentCompanionRow,
@@ -209,6 +215,10 @@ function LedgerPageContent() {
   }, []);
 
   async function handleDelete(entry: LedgerEntry) {
+    if (isPaidLedgerRecord(entry)) {
+      alert("This ledger entry is paid and cannot be deleted.");
+      return;
+    }
     if (!confirm("Delete this ledger entry?")) return;
     const targets = await loadLedgerLockTargets(entry.id);
     const ok = await acquireLocks(targets);
@@ -224,6 +234,10 @@ function LedgerPageContent() {
   }
 
   async function startEdit(entry: LedgerEntry) {
+    if (isPaidLedgerRecord(entry)) {
+      alert("This ledger entry is paid and cannot be edited.");
+      return;
+    }
     const ok = await acquireLocks(await loadLedgerLockTargets(entry.id));
     if (!ok) return;
     setEditing(entry);
@@ -237,10 +251,13 @@ function LedgerPageContent() {
   }
 
   function entryActions(entry: LedgerEntry) {
+    const paidLocked = isPaidLedgerRecord(entry);
     return (
       <RowActions
         onEdit={() => startEdit(entry)}
         onDelete={() => handleDelete(entry)}
+        editDisabled={paidLocked}
+        deleteDisabled={paidLocked}
       />
     );
   }

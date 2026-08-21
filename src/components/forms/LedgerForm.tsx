@@ -28,6 +28,7 @@ import {
 import {
   getLedgerOutstandingBalance,
   isLedgerLineFullyPaid,
+  isPaidLedgerRecord,
 } from "@/lib/invoice-utils";
 import {
   calculateCustomerPrice,
@@ -621,6 +622,8 @@ export function LedgerForm({
     previousClientIdRef.current = selectedClientId;
   }, [selectedClientId, setValue]);
 
+  const paidLocked = Boolean(initial && isPaidLedgerRecord(initial));
+
   async function onSubmit(values: FormValues) {
     const isNoTradeRetail =
       values.wholesale_retail === "retail" &&
@@ -638,6 +641,10 @@ export function LedgerForm({
   }
 
   async function saveEntry(values: FormValues) {
+    if (paidLocked) {
+      setError("This ledger entry is paid and cannot be edited.");
+      return;
+    }
     setError(null);
     setNeedsQuantityColumn(false);
     setPendingZeroDiscountValues(null);
@@ -805,6 +812,12 @@ export function LedgerForm({
       <h2 className="text-lg font-semibold text-slate-900">
         {initial ? "Edit Ledger Entry" : "New Ledger Entry"}
       </h2>
+      {paidLocked ? (
+        <p className="text-sm text-amber-800">
+          This ledger entry is paid and cannot be edited. Change payments on the
+          Payments page.
+        </p>
+      ) : null}
 
       <div className="space-y-4">
         {/* Top: client/date/trade partner left, description + PO/wholesale-retail right */}
@@ -1298,7 +1311,7 @@ NOTIFY pgrst, 'reload schema';`}
       )}
 
       <div className="flex flex-wrap gap-2">
-        <Button type="submit" loading={isSubmitting || saving}>
+        <Button type="submit" loading={isSubmitting || saving} disabled={paidLocked}>
           {initial ? "Save Changes" : "Create Entry"}
         </Button>
         <Button type="button" variant="secondary" onClick={onCancel}>
