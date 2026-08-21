@@ -93,7 +93,6 @@ export function buildPartnerTransferMatePayload(
     payment_type: null,
     payment_fee: 0,
     payment_amount: 0,
-    expense: false,
     expense_amount: 0,
     ...cashflowClassificationFlags(parent.coa_category ?? ""),
     variance_accepted: false,

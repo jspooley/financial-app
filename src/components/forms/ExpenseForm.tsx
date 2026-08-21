@@ -140,11 +140,22 @@ export function ExpenseForm({
       setClients((clientRes.data ?? []) as Array<{ id: string; name: string }>);
 
       const rows: InvoiceOptionRow[] = [];
-      for (const source of [poRes.data ?? [], invoiceRes.data ?? [], ledgerRes.data ?? []]) {
+      const sources: Array<
+        Array<{
+          client_id?: string | null;
+          po_number?: string | null;
+          invoice_id?: string | null;
+        }>
+      > = [
+        poRes.data ?? [],
+        invoiceRes.data ?? [],
+        ledgerRes.data ?? [],
+      ];
+      for (const source of sources) {
         for (const row of source) {
           const client = String(row.client_id ?? "");
           const po = String(row.po_number ?? "").trim();
-          const invoice = normalizeInvoiceId(row.invoice_id as string | null);
+          const invoice = normalizeInvoiceId(row.invoice_id ?? null);
           if (!client) continue;
           rows.push({
             client_id: client,
