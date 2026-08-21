@@ -13,15 +13,22 @@ import { normalizeLedgerRow } from "@/lib/ledger-db";
 import {
   COA_COGS_CATEGORY,
   cashflowClassificationFlags,
+  coaAccountNumber,
   isCogsCoa,
   isCashflowManagedEntry,
   isCashflowOperatingCoa,
   isInvoiceGoodsLine,
   isOperatingExpenseEntry,
+  isPartnerToPartnerTransferCoa,
   isRecordedTransferCoa,
   isSalesIncomeCoa,
 } from "@/lib/coa";
 import { isCostCompanionRow } from "@/lib/cost-companions";
+import {
+  isPartnerTransferMateRow,
+  isPartnerTransferParentRow,
+  mergePartnerTransferDisplayMates,
+} from "@/lib/partner-transfer";
 import { isPaymentCompanionRow } from "@/lib/payment-companions";
 import { loadLedgerLockTargets } from "@/lib/record-lock";
 import { createClient } from "@/lib/supabase/client";
@@ -132,6 +139,12 @@ function withInvoiceMates(
   };
 
   for (const entry of matched) {
+    if (
+      isPartnerTransferMateRow(entry) ||
+      isPartnerTransferParentRow(entry)
+    ) {
+      continue;
+    }
     const invoiceId = effectiveInvoiceId(entry, paymentInvoiceByParentId);
     if (invoiceId) addKey(`inv:${invoiceId.toLowerCase()}`);
     if (isPaymentCompanionRow(entry) && entry.source_ledger_id) {
@@ -147,6 +160,12 @@ function withInvoiceMates(
   const includedIds = new Set(matched.map((entry) => entry.id));
   const mates = pool.filter((entry) => {
     if (includedIds.has(entry.id)) return false;
+    if (
+      isPartnerTransferMateRow(entry) ||
+      isPartnerTransferParentRow(entry)
+    ) {
+      return false;
+    }
     const invoiceId = effectiveInvoiceId(entry, paymentInvoiceByParentId);
     if (invoiceId && mateKeys.has(`inv:${invoiceId.toLowerCase()}`)) return true;
     if (isPaymentCompanionRow(entry) && entry.source_ledger_id) {
@@ -574,6 +593,14 @@ function buildCashflowDisplayItems(
   const groupKeyFor = (entry: LedgerEntry): string | null => {
     const primary = primaryGroupKeyFor(entry);
     if (primary) return primary;
+    // Partner transfers post both checking sides; keep them as separate register
+    // lines so the pair does not collapse to a $0 description group.
+    if (
+      isPartnerTransferMateRow(entry) ||
+      isPartnerTransferParentRow(entry)
+    ) {
+      return null;
+    }
     const description = cashflowEntryDescriptionKey(entry, entryById)
       .trim()
       .toLowerCase();
@@ -743,6 +770,20 @@ function entryMatchesAccountFilter(
   const selected = new Set(accountFilter);
   return Boolean(
     entry.account && selected.has(entry.account as CashflowAccount)
+  );
+}
+
+function entryMatchesCoaFilter(
+  entry: LedgerEntry,
+  selectedCategories: string[]
+): boolean {
+  const category = entry.coa_category;
+  if (!category) return false;
+  if (selectedCategories.includes(category)) return true;
+  const number = coaAccountNumber(category);
+  if (number == null) return false;
+  return selectedCategories.some(
+    (selected) => coaAccountNumber(selected) === number
   );
 }
 
@@ -952,19 +993,24 @@ export default function CashflowPage() {
   const showAllAccounts = accountFilter.length === 0;
   const showAllCoaCategories = coaCategoryFilter.length === 0;
 
+  const registerEntries = useMemo(
+    () => mergePartnerTransferDisplayMates(entries),
+    [entries]
+  );
+
   const parentById = useMemo(() => {
     const map = new Map<string, LedgerEntry>();
-    for (const entry of entries) {
+    for (const entry of registerEntries) {
       map.set(entry.id, entry);
     }
     return map;
-  }, [entries]);
+  }, [registerEntries]);
 
   const visibleEntries = useMemo(() => {
     let result =
       monthFilter.length > 0
-        ? entriesMatchingMonthWithInvoiceMates(entries, monthFilter)
-        : entries;
+        ? entriesMatchingMonthWithInvoiceMates(registerEntries, monthFilter)
+        : registerEntries;
 
     result = result.filter(
       (entry) => !isExcludedPersonalUseCashflowRow(entry, parentById)
@@ -978,32 +1024,41 @@ export default function CashflowPage() {
         selectedInvoices.has(normalizeInvoiceId(entry.invoice_id).toLowerCase())
       );
     }
+
+    const partnerTransferCoaOnly =
+      !showAllCoaCategories &&
+      coaCategoryFilter.length > 0 &&
+      coaCategoryFilter.every((category) =>
+        isPartnerToPartnerTransferCoa(category)
+      );
+
+    // Filter CoA before account so 303/304 mates on the other checking account
+    // are not dropped before they can match Molly/Jess.
+    if (!showAllCoaCategories) {
+      result = result.filter((entry) =>
+        entryMatchesCoaFilter(entry, coaCategoryFilter)
+      );
+    }
     if (!showAllAccounts) {
-      const accountMatched = result.filter((entry) =>
+      result = result.filter((entry) =>
         entryMatchesAccountFilter(entry, accountFilter)
       );
-      // When grouping is on, pull in invoice mates from other accounts so the
-      // rollup can show the full invoice. When off, keep selected accounts only.
-      result = (
-        grouped
-          ? withInvoiceMates(accountMatched, result)
-          : accountMatched
-      ).filter((entry) => !isExcludedPersonalUseCashflowRow(entry, parentById));
     }
-    if (!showAllCoaCategories) {
-      const selected = new Set(coaCategoryFilter);
-      const coaMatched = result.filter(
-        (entry) =>
-          entry.coa_category != null && selected.has(entry.coa_category)
+    if (grouped && !partnerTransferCoaOnly) {
+      const matched = result;
+      const pool =
+        monthFilter.length > 0
+          ? entriesMatchingMonthWithInvoiceMates(registerEntries, monthFilter)
+          : registerEntries;
+      result = withInvoiceMates(matched, pool).filter(
+        (entry) => !isExcludedPersonalUseCashflowRow(entry, parentById)
       );
-      result = (
-        grouped
-          ? withInvoiceMates(coaMatched, result)
-          : coaMatched
-      ).filter((entry) => !isExcludedPersonalUseCashflowRow(entry, parentById));
-      // CoA mate expansion can reintroduce other accounts; re-apply account
-      // filter when grouping is off.
-      if (grouped === false && !showAllAccounts) {
+      if (!showAllCoaCategories) {
+        result = result.filter((entry) =>
+          entryMatchesCoaFilter(entry, coaCategoryFilter)
+        );
+      }
+      if (!showAllAccounts) {
         result = result.filter((entry) =>
           entryMatchesAccountFilter(entry, accountFilter)
         );
@@ -1113,7 +1168,7 @@ export default function CashflowPage() {
       return cashflowPaymentRank(a) - cashflowPaymentRank(b);
     });
   }, [
-    entries,
+    registerEntries,
     parentById,
     accountFilter,
     showAllAccounts,
@@ -1260,10 +1315,14 @@ export default function CashflowPage() {
   }
 
   async function startExpenseEdit(entry: LedgerEntry) {
-    const ok = await acquireLocks(await loadLedgerLockTargets(entry.id));
+    const parent =
+      isPartnerTransferMateRow(entry) && entry.source_ledger_id
+        ? entries.find((row) => row.id === entry.source_ledger_id) ?? entry
+        : entry;
+    const ok = await acquireLocks(await loadLedgerLockTargets(parent.id));
     if (!ok) return;
     setEditingAccountEntries(null);
-    setEditing(entry);
+    setEditing(parent);
     setShowForm(true);
   }
 
@@ -1604,10 +1663,9 @@ export default function CashflowPage() {
             {hasActiveListFilters && (
               <p className="border-t border-slate-100 pt-3 text-xs text-slate-500">
                 Checking and credit card balances above use the current filters
-                (selected accounts only). With Grouping on, the list can include
-                invoice mates from other accounts; with Grouping off, only the
-                selected accounts appear. Showing {displayItems.length} rows (
-                {visibleEntries.length}{" "}
+                (selected accounts only). 303/304 transfers show on both checking
+                registers: the sender as a deduction, the receiver as an addition.
+                Showing {displayItems.length} rows ({visibleEntries.length}{" "}
                 source {visibleEntries.length === 1 ? "entry" : "entries"}
                 {grouped && groupKeys.length > 0
                   ? `; ${groupKeys.length} grouped`
@@ -1683,7 +1741,8 @@ export default function CashflowPage() {
 
               const entry = item.entry;
               const isChild = item.kind === "child";
-              const isExpense = isOperatingExpense(entry);
+              const isExpense =
+                isOperatingExpense(entry) || isPartnerTransferMateRow(entry);
               const amounts = amountsForAccountFilter(
                 entry,
                 monthFilter,

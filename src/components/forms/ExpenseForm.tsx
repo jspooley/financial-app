@@ -8,6 +8,11 @@ import { createClient } from "@/lib/supabase/client";
 import { collectClientPoOptions } from "@/lib/client-po-db";
 import { cashflowClassificationFlags, isRecordedTransferCoa } from "@/lib/coa";
 import { normalizeInvoiceId, poNumbersMatch } from "@/lib/invoice-utils";
+import { normalizeLedgerRow } from "@/lib/ledger-db";
+import {
+  deletePartnerTransferMate,
+  syncPartnerTransferMate,
+} from "@/lib/partner-transfer";
 import {
   CASHFLOW_ACCOUNTS,
   CASHFLOW_DEPARTMENTS,
@@ -226,12 +231,25 @@ export function ExpenseForm({
           : null,
     };
 
-    const { error: dbError } = initial
-      ? await supabase.from("ledger").update(payload).eq("id", initial.id)
-      : await supabase.from("ledger").insert(payload);
+    const { data: saved, error: dbError } = initial
+      ? await supabase
+          .from("ledger")
+          .update(payload)
+          .eq("id", initial.id)
+          .select("*")
+          .single()
+      : await supabase.from("ledger").insert(payload).select("*").single();
 
     if (dbError) {
       setError(dbError.message);
+      return;
+    }
+
+    const mateError = saved
+      ? await syncPartnerTransferMate(supabase, normalizeLedgerRow(saved))
+      : null;
+    if (mateError) {
+      setError(mateError);
       return;
     }
 
@@ -246,6 +264,12 @@ export function ExpenseForm({
     setError(null);
     setDeleting(true);
     const supabase = createClient();
+    const mateError = await deletePartnerTransferMate(supabase, initial.id);
+    if (mateError) {
+      setDeleting(false);
+      setError(mateError);
+      return;
+    }
     const { error: dbError } = await supabase
       .from("ledger")
       .delete()
@@ -383,7 +407,7 @@ export function ExpenseForm({
           <SelectField
             label="Paid To"
             error={errors.paid_to?.message}
-            hint="Who received this transfer. Required for True Up to count both partners."
+            hint="Who received this transfer. Sending to the other partner also posts the matching amount on their checking account."
             {...register("paid_to")}
           >
             <option value="">Not tagged</option>

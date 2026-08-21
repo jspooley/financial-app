@@ -61,6 +61,16 @@ export function cashflowClassificationFlags(coaCategory: string) {
   };
 }
 
+/** 303/304 (or any CoA label that names both partners), e.g. Jess to Molly. */
+export function isPartnerToPartnerTransferCoa(
+  category: string | null | undefined
+) {
+  const n = coaAccountNumber(category);
+  if (n === 303 || n === 304) return true;
+  const label = (category ?? "").toLowerCase();
+  return label.includes("jess") && label.includes("molly");
+}
+
 /** Partner true-up transfers: 203 commissions/fees and 302–399 account transfers. */
 export function isRecordedTransferCoa(
   category: string | null | undefined

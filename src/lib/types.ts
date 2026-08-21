@@ -47,7 +47,13 @@ export const CASHFLOW_ACCOUNTS = [
 export type CashflowAccount = (typeof CASHFLOW_ACCOUNTS)[number];
 
 /** Companion rows split off a parent ledger line so each cost carries its own CoA. */
-export const COMPANION_KINDS = ["payment", "tax", "shipping", "fee"] as const;
+export const COMPANION_KINDS = [
+  "payment",
+  "tax",
+  "shipping",
+  "fee",
+  "transfer",
+] as const;
 
 export type CompanionKind = (typeof COMPANION_KINDS)[number];
 

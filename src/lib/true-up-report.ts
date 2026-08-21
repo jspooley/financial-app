@@ -5,6 +5,7 @@ import {
   isOperatingExpenseCoa,
   isOperatingExpenseEntry,
   isOwnerEquityCoa,
+  isPartnerToPartnerTransferCoa,
   isRecordedTransferCoa,
   isSalesIncomeCoa,
   isTaxesAndLicensesCoa,
@@ -143,12 +144,6 @@ export function partnerFromEntry(
 
 function otherPartner(party: Purchaser): Purchaser {
   return party === "Molly" ? "Jess" : "Molly";
-}
-
-/** CoA names that include both partners, e.g. "303 ... Molly To Jess". */
-function isPartnerToPartnerTransferCoa(category: string | null | undefined) {
-  const label = (category ?? "").toLowerCase();
-  return label.includes("jess") && label.includes("molly");
 }
 
 function invoiceKey(entry: Pick<LedgerEntry, "invoice_id">) {
