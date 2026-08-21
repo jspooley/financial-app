@@ -57,11 +57,11 @@ SELECT
   1,
   CASE
     WHEN COALESCE(p.debit_amount, 0) >= COALESCE(p.credit_amount, 0)
-      THEN 'credit'
-    ELSE 'debit'
+      THEN 'credit'::credit_debit_type
+    ELSE 'debit'::credit_debit_type
   END,
   p.description,
-  COALESCE(p.wholesale_retail, 'retail'),
+  COALESCE(p.wholesale_retail, 'retail'::wholesale_retail_type),
   NULL,
   0,
   0,
@@ -70,13 +70,16 @@ SELECT
   0,
   p.client_id,
   p.po_number,
-  CASE WHEN p.owner = 'Molly' THEN 'Jess' ELSE 'Molly' END,
+  CASE
+    WHEN p.owner = 'Molly'::purchaser_type THEN 'Jess'::purchaser_type
+    ELSE 'Molly'::purchaser_type
+  END,
   COALESCE(p.department, 'Interior Design'),
   p.coa_category,
   COALESCE(p.credit_amount, 0),
   COALESCE(p.debit_amount, 0),
   CASE
-    WHEN p.owner = 'Molly' THEN 'Checking - Jess'
+    WHEN p.owner = 'Molly'::purchaser_type THEN 'Checking - Jess'
     ELSE 'Checking - Molly'
   END,
   NULL,
@@ -101,10 +104,10 @@ FROM (
   SELECT
     ledger.*,
     CASE
-      WHEN COALESCE(ledger.account, '') ILIKE '%Molly%' THEN 'Molly'
-      WHEN COALESCE(ledger.account, '') ILIKE '%Jess%' THEN 'Jess'
-      WHEN ledger.purchaser = 'Molly' THEN 'Molly'
-      ELSE 'Jess'
+      WHEN COALESCE(ledger.account, '') ILIKE '%Molly%' THEN 'Molly'::purchaser_type
+      WHEN COALESCE(ledger.account, '') ILIKE '%Jess%' THEN 'Jess'::purchaser_type
+      WHEN ledger.purchaser = 'Molly'::purchaser_type THEN 'Molly'::purchaser_type
+      ELSE 'Jess'::purchaser_type
     END AS owner
   FROM ledger
   WHERE source_ledger_id IS NULL
@@ -116,7 +119,7 @@ WHERE (
       AND lower(COALESCE(p.coa_category, '')) LIKE '%molly%'
     )
     OR (
-      p.paid_to IN ('Jess', 'Molly')
+      p.paid_to IN ('Jess'::purchaser_type, 'Molly'::purchaser_type)
       AND p.paid_to IS DISTINCT FROM p.owner
     )
   )
