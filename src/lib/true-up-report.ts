@@ -38,14 +38,22 @@ export type TrueUpBlock = {
   discrepancy: PartnerAmounts;
 };
 
+export type TrueUpYtdTotals = {
+  required: PartnerAmounts;
+  recorded: PartnerAmounts;
+  discrepancy: PartnerAmounts;
+};
+
 export type TrueUpReport = {
   year: number;
   sales: TrueUpBlock[];
   expenses: TrueUpBlock[];
   untaggedTransfers: TrueUpUntaggedTransfer[];
-  ytdRequired: PartnerAmounts;
-  ytdRecorded: PartnerAmounts;
-  ytdDiscrepancy: PartnerAmounts;
+  ytdSales: TrueUpYtdTotals;
+  ytdExpenses: TrueUpYtdTotals;
+  ytdGrandTotal: TrueUpYtdTotals;
+  ytdJessToMolly: number;
+  ytdMollyToJess: number;
 };
 
 export type TrueUpUntaggedTransfer = {
@@ -583,6 +591,43 @@ function buildExpenseBlocks(
     );
 }
 
+function ytdTotalsFromBlocks(blocks: TrueUpBlock[]): TrueUpYtdTotals {
+  const required = sumPartnerAmounts(...blocks.map((block) => block.required));
+  const recorded = sumPartnerAmounts(...blocks.map((block) => block.recorded));
+  return {
+    required,
+    recorded,
+    discrepancy: subtractPartnerAmounts(required, recorded),
+  };
+}
+
+function recordedPartnerFlows(entries: LedgerEntry[], year: number) {
+  let jessToMolly = 0;
+  let mollyToJess = 0;
+  for (const entry of entries) {
+    if (!inYear(entry.entry_date, year) && !inYear(entry.date_paid, year)) {
+      continue;
+    }
+    if (entry.source_ledger_id) continue;
+    if (!isRecordedTransferCoa(entry.coa_category)) continue;
+    if (skipTrueUpShare(entry)) continue;
+    const counterparty = recordedTransferCounterparty(entry);
+    if (!counterparty) continue;
+    const amount = netCash(entry);
+    if (Math.abs(amount) < 0.005) continue;
+    const owner = partnerFromEntry(entry, "payer");
+    const from = amount < 0 ? owner : counterparty;
+    const to = amount < 0 ? counterparty : owner;
+    const moved = roundMoney(Math.abs(amount));
+    if (from === "Jess" && to === "Molly") jessToMolly += moved;
+    if (from === "Molly" && to === "Jess") mollyToJess += moved;
+  }
+  return {
+    jessToMolly: roundMoney(jessToMolly),
+    mollyToJess: roundMoney(mollyToJess),
+  };
+}
+
 export function buildTrueUpReport(
   entries: LedgerEntry[],
   year: number
@@ -590,22 +635,26 @@ export function buildTrueUpReport(
   const parentById = new Map(entries.map((entry) => [entry.id, entry]));
   const sales = buildSalesBlocks(entries, year, parentById);
   const expenses = buildExpenseBlocks(entries, year, parentById);
-  const ytdRequired = sumPartnerAmounts(
-    ...sales.map((block) => block.required),
-    ...expenses.map((block) => block.required)
-  );
-  const ytdRecorded = sumPartnerAmounts(
-    ...sales.map((block) => block.recorded),
-    ...expenses.map((block) => block.recorded)
-  );
+  const ytdSales = ytdTotalsFromBlocks(sales);
+  const ytdExpenses = ytdTotalsFromBlocks(expenses);
+  const flows = recordedPartnerFlows(entries, year);
 
   return {
     year,
     sales,
     expenses,
     untaggedTransfers: collectUntaggedTransfers(entries, year),
-    ytdRequired,
-    ytdRecorded,
-    ytdDiscrepancy: subtractPartnerAmounts(ytdRequired, ytdRecorded),
+    ytdSales,
+    ytdExpenses,
+    ytdGrandTotal: {
+      required: sumPartnerAmounts(ytdSales.required, ytdExpenses.required),
+      recorded: sumPartnerAmounts(ytdSales.recorded, ytdExpenses.recorded),
+      discrepancy: sumPartnerAmounts(
+        ytdSales.discrepancy,
+        ytdExpenses.discrepancy
+      ),
+    },
+    ytdJessToMolly: flows.jessToMolly,
+    ytdMollyToJess: flows.mollyToJess,
   };
 }

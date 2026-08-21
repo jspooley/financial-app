@@ -12,6 +12,7 @@ import {
   type PartnerAmounts,
   type TrueUpBlock,
   type TrueUpUntaggedTransfer,
+  type TrueUpYtdTotals,
 } from "@/lib/true-up-report";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
@@ -89,14 +90,57 @@ function DiscrepancyRow({
   );
 }
 
+function TransferYtdRows({
+  groupLabel,
+  totals,
+  extraLeading = 0,
+  grouped,
+}: {
+  groupLabel: string;
+  totals: TrueUpYtdTotals;
+  extraLeading?: number;
+  grouped?: boolean;
+}) {
+  const rowClass = grouped
+    ? "border-b border-slate-100 bg-slate-50"
+    : "border-b border-slate-100";
+  return (
+    <>
+      <tr className={rowClass}>
+        <td className="px-3 py-1.5 font-bold text-slate-900">{groupLabel}</td>
+        {Array.from({ length: extraLeading }, (_, index) => (
+          <td key={index} />
+        ))}
+        <td className="px-3 py-1.5 font-bold text-slate-900">
+          Required Transfer
+        </td>
+        <AmountCells amounts={totals.required} emphasize />
+      </tr>
+      <tr className="border-b border-slate-100">
+        <td />
+        {Array.from({ length: extraLeading }, (_, index) => (
+          <td key={index} />
+        ))}
+        <td className="px-3 py-1.5 font-bold text-slate-900">
+          Recorded Transfers
+        </td>
+        <AmountCells amounts={totals.recorded} emphasize />
+      </tr>
+      <DiscrepancyRow amounts={totals.discrepancy} leadingCells={1 + extraLeading} />
+    </>
+  );
+}
+
 function BlockTable({
   sectionLabel,
   secondaryHeader,
   blocks,
+  ytdTotals,
 }: {
   sectionLabel: string;
   secondaryHeader: string;
   blocks: TrueUpBlock[];
+  ytdTotals?: TrueUpYtdTotals;
 }) {
   if (blocks.length === 0) {
     return (
@@ -128,6 +172,19 @@ function BlockTable({
               showDivider={blockIndex > 0}
             />
           ))}
+          {ytdTotals ? (
+            <>
+              <tr>
+                <td colSpan={6} className="h-3 bg-white p-0" />
+              </tr>
+              <TransferYtdRows
+                groupLabel="YTD"
+                totals={ytdTotals}
+                extraLeading={1}
+                grouped
+              />
+            </>
+          ) : null}
         </tbody>
       </table>
     </div>
@@ -376,6 +433,7 @@ export default function TrueUpReportPage() {
               sectionLabel="Sales&Revenue"
               secondaryHeader="Invoice"
               blocks={report.sales}
+              ytdTotals={report.ytdSales}
             />
           </CollapsibleSection>
 
@@ -387,17 +445,37 @@ export default function TrueUpReportPage() {
               sectionLabel="Expenses"
               secondaryHeader="Date"
               blocks={report.expenses}
+              ytdTotals={report.ytdExpenses}
             />
           </CollapsibleSection>
 
           <section>
             <h2 className="mb-1 text-lg font-semibold text-slate-900">YTD</h2>
             <p className="mb-3 text-sm text-slate-600">
-              Only money between Jess and Molly. Required is the 50/50 split.
+              Year-to-date Required, Recorded, and Discrepancy for Goods and
+              Services and for Expenses, then Grand Total YTD for both.
               Recorded is 303/304 (or Paid To the other partner). Paying your
               own credit card or personal account is not included. Positive =
               received; negative = sent. Discrepancy is required minus recorded.
             </p>
+            <div className="mb-3 space-y-1 text-sm">
+              <p className="font-semibold text-slate-900">
+                Molly to Jess YTD {money(report.ytdMollyToJess)}
+                <span className="ml-2 font-normal text-slate-600">
+                  = total amount sent to Jess
+                </span>
+              </p>
+              <p className="font-semibold text-slate-900">
+                Jess to Molly YTD {money(report.ytdJessToMolly)}
+                <span className="ml-2 font-normal text-slate-600">
+                  = total amount sent to Molly
+                </span>
+              </p>
+              <p className="text-slate-600">
+                Recorded Transfers in the table is the net of those two (Jess to
+                Molly minus Molly to Jess), not the gross sent in one direction.
+              </p>
+            </div>
             <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
               <table className="min-w-full text-sm">
                 <thead>
@@ -410,21 +488,19 @@ export default function TrueUpReportPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-b border-slate-100">
-                    <td className="px-3 py-1.5 font-medium text-slate-900">YTD</td>
-                    <td className="px-3 py-1.5 font-bold text-slate-900">
-                      Required Transfer
-                    </td>
-                    <AmountCells amounts={report.ytdRequired} emphasize />
-                  </tr>
-                  <tr className="border-b border-slate-100">
-                    <td />
-                    <td className="px-3 py-1.5 font-bold text-slate-900">
-                      Recorded Transfers
-                    </td>
-                    <AmountCells amounts={report.ytdRecorded} emphasize />
-                  </tr>
-                  <DiscrepancyRow amounts={report.ytdDiscrepancy} leadingCells={1} />
+                  <TransferYtdRows
+                    groupLabel="Goods and Services"
+                    totals={report.ytdSales}
+                  />
+                  <TransferYtdRows
+                    groupLabel="Expenses"
+                    totals={report.ytdExpenses}
+                  />
+                  <TransferYtdRows
+                    groupLabel="Grand Total YTD"
+                    totals={report.ytdGrandTotal}
+                    grouped
+                  />
                 </tbody>
               </table>
             </div>
