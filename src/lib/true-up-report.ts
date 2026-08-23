@@ -76,6 +76,50 @@ export const TRUE_UP_INCOME_LABEL = "100 Sales Income";
 export const TRUE_UP_FEES_LABEL = "203 Commissions and Fees";
 export const TRUE_UP_TRANSFERS_LABEL = "302 Transfers between accounts";
 
+/**
+ * Categories and row types left out of the 50/50 true-up. Keep this in sync
+ * with skipTrueUpShare, isPersonalUseTrueUpEntry, and salesIncomePassThrough.
+ */
+export const TRUE_UP_EXCLUSIONS: { label: string; detail: string }[] = [
+  {
+    label: "300 / 310 Owner's contributions",
+    detail:
+      "Capital put into the business. Tracked on Debt Tracking, not split 50/50.",
+  },
+  {
+    label: "301 / 302 Owner's draws",
+    detail: "Taking profit out is equity, not a transfer to the other partner.",
+  },
+  {
+    label: "305 / 306 Business loan paybacks",
+    detail:
+      "Paying back a loan from an owner. Tracked on Debt Tracking, not a 50/50 share.",
+  },
+  {
+    label: "308 Reimburse personal credit card",
+    detail:
+      "Paying your own card from checking is not a partner-to-partner transfer.",
+  },
+  {
+    label: "214 Taxes and licenses",
+    detail: "Remitted to the state, not shared between partners.",
+  },
+  {
+    label: "400-series liabilities (S&U tax payable)",
+    detail: "Tax collected for the state. Cash moves through them, but they are not shared.",
+  },
+  {
+    label: "Personal-use goods (Balance Sheet invoice lines)",
+    detail:
+      "Invoice lines marked personal use, plus their payment and cost companions.",
+  },
+  {
+    label: "Tax, shipping, and payment fees on sales income",
+    detail:
+      "Stripped from 100 Sales Income as pass-through. They are not 50/50 profit.",
+  },
+];
+
 const ZERO: PartnerAmounts = { jess: 0, molly: 0 };
 
 export function emptyPartnerAmounts(): PartnerAmounts {

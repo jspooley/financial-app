@@ -9,6 +9,7 @@ import { fetchAllLedgerRows, normalizeLedgerRow } from "@/lib/ledger-db";
 import {
   buildTrueUpReport,
   partnerTotal,
+  TRUE_UP_EXCLUSIONS,
   type PartnerAmounts,
   type TrueUpBlock,
   type TrueUpUntaggedTransfer,
@@ -305,7 +306,7 @@ function UntaggedTransfersTable({ rows }: { rows: TrueUpUntaggedTransfer[] }) {
       <p className="mb-3 text-sm text-slate-600">
         Cashflow 203 / 303 / 304 partner-transfer rows with no Paid To and a CoA
         that does not name both partners. Set <strong>Paid To</strong> to Jess or
-        Molly, or use a CoA such as 304 Jess to Molly. 302 owner's draws, 306
+        Molly, or use a CoA such as 304 Jess to Molly. 302 owner draws, 306
         loan paybacks, and 308 personal-card refunds are not partner transfers
         and will not appear here.
       </p>
@@ -414,6 +415,25 @@ export default function TrueUpReportPage() {
           </SelectField>
         }
       />
+
+      <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 className="text-sm font-semibold text-slate-900">
+          Excluded from the true-up
+        </h2>
+        <p className="mt-1 text-sm text-slate-600">
+          These do not enter the 50/50 split. Partner transfers that do count
+          are 203 commissions/fees and 303/304 Jess↔Molly (or Paid To the other
+          partner).
+        </p>
+        <ul className="mt-3 space-y-2 text-sm text-slate-700">
+          {TRUE_UP_EXCLUSIONS.map((item) => (
+            <li key={item.label}>
+              <span className="font-medium text-slate-900">{item.label}.</span>{" "}
+              {item.detail}
+            </li>
+          ))}
+        </ul>
+      </section>
 
       {loadError ? (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">

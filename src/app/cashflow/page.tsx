@@ -26,7 +26,6 @@ import { isCostCompanionRow } from "@/lib/cost-companions";
 import {
   isCheckingAccount,
   matchingCheckingAccount,
-  matchingCreditCardAccount,
 } from "@/lib/account-move";
 import {
   personalCardReimbursementCategory,
