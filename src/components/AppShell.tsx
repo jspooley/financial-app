@@ -109,10 +109,10 @@ function ReportsBox({ pathname }: { pathname: string }) {
       <Link
         href={debtTrackingHref}
         className={navLinkClass(pathname === debtTrackingHref)}
-        title="Debt Tracking"
+        title="Business Debt"
       >
         <span aria-hidden>👛</span>
-        Debt Tracking
+        Business Debt
       </Link>
       <Link
         href={trueUpHref}

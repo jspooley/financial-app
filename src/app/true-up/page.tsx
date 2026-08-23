@@ -204,22 +204,31 @@ function CollapsibleSection({
   const [open, setOpen] = useState(false);
   return (
     <section>
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        className="mb-3 flex w-full items-start gap-2 rounded text-left hover:bg-slate-50"
+      >
+        <span
+          aria-hidden="true"
+          className="mt-0.5 flex size-7 shrink-0 items-center justify-center text-brand-700"
+        >
+          <span
+            className={`inline-block text-lg leading-none transition-transform ${
+              open ? "rotate-90" : ""
+            }`}
+          >
+            ▶
+          </span>
+        </span>
         <div className="min-w-0">
           <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
           {open ? (
             <p className="mt-1 text-sm text-slate-600">{description}</p>
           ) : null}
         </div>
-        <button
-          type="button"
-          onClick={() => setOpen((current) => !current)}
-          aria-expanded={open}
-          className="text-sm font-medium text-brand-700 hover:text-brand-900"
-        >
-          {open ? "Collapse" : "Expand"}
-        </button>
-      </div>
+      </button>
       {open ? children : null}
     </section>
   );
@@ -400,10 +409,11 @@ export default function TrueUpReportPage() {
     <AppShell>
       <PageHeader
         title="True Up Report"
-        description="Cash-basis 50/50 split between Jess and Molly. Deposits and money received are positive; payments and money sent are negative. If you send money to Molly, your column is negative and hers is positive. Discrepancy is required minus recorded transfers."
+        description="Cash-basis accounting (50/50 split between partners). Payments exchanged between partners show up on both partners reports with the appropriate positive/negative amounts."
         action={
           <SelectField
             label="Year"
+            className="min-w-32"
             value={String(year)}
             onChange={(event) => setYear(Number(event.target.value))}
           >
@@ -415,25 +425,6 @@ export default function TrueUpReportPage() {
           </SelectField>
         }
       />
-
-      <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="text-sm font-semibold text-slate-900">
-          Excluded from the true-up
-        </h2>
-        <p className="mt-1 text-sm text-slate-600">
-          These do not enter the 50/50 split. Partner transfers that do count
-          are 203 commissions/fees and 303/304 Jess↔Molly (or Paid To the other
-          partner).
-        </p>
-        <ul className="mt-3 space-y-2 text-sm text-slate-700">
-          {TRUE_UP_EXCLUSIONS.map((item) => (
-            <li key={item.label}>
-              <span className="font-medium text-slate-900">{item.label}.</span>{" "}
-              {item.detail}
-            </li>
-          ))}
-        </ul>
-      </section>
 
       {loadError ? (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
@@ -474,22 +465,15 @@ export default function TrueUpReportPage() {
             <p className="mb-3 text-sm text-slate-600">
               Year-to-date Required, Recorded, and Discrepancy for Goods and
               Services and for Expenses, then Grand Total YTD for both.
-              Recorded is 303/304 (or Paid To the other partner). Paying your
-              own credit card or personal account is not included. Positive =
-              received; negative = sent. Discrepancy is required minus recorded.
+              Positive = received; negative = sent. Discrepancy is required
+              minus recorded.
             </p>
             <div className="mb-3 space-y-1 text-sm">
               <p className="font-semibold text-slate-900">
-                Molly to Jess YTD {money(report.ytdMollyToJess)}
-                <span className="ml-2 font-normal text-slate-600">
-                  = total amount sent to Jess
-                </span>
+                Molly to Jes YTD = {money(report.ytdMollyToJess)}
               </p>
               <p className="font-semibold text-slate-900">
-                Jess to Molly YTD {money(report.ytdJessToMolly)}
-                <span className="ml-2 font-normal text-slate-600">
-                  = total amount sent to Molly
-                </span>
+                Jess to Molly YTD = {money(report.ytdJessToMolly)}
               </p>
               <p className="text-slate-600">
                 Recorded Transfers in the table is the net of those two (Jess to
@@ -527,6 +511,25 @@ export default function TrueUpReportPage() {
           </section>
 
           <UntaggedTransfersTable rows={report.untaggedTransfers} />
+
+          <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-sm font-semibold text-slate-900">
+              Excluded from the true-up
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              These do not enter the 50/50 split. Partner transfers that do count
+              are 203 commissions/fees and 303/304 Jess↔Molly (or Paid To the other
+              partner).
+            </p>
+            <ul className="mt-3 space-y-2 text-sm text-slate-700">
+              {TRUE_UP_EXCLUSIONS.map((item) => (
+                <li key={item.label}>
+                  <span className="font-medium text-slate-900">{item.label}.</span>{" "}
+                  {item.detail}
+                </li>
+              ))}
+            </ul>
+          </section>
         </div>
       )}
     </AppShell>

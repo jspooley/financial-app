@@ -339,7 +339,7 @@ export interface LedgerEntry {
   account: CashflowAccount | null;
   /** Original register if this row was moved (e.g. Checking → Credit Card). */
   moved_from_account: CashflowAccount | null;
-  /** Checking 308 that reimbursed this personal-card charge (1:1). */
+  /** Checking 308 that reimbursed this personal-card charge (one 308 can cover several charges). */
   reimbursed_by_ledger_id: string | null;
   /** charge = real CC purchase; reimbursement = checking 308 that was wrongly moved to CC. */
   personal_card_role: "charge" | "reimbursement" | null;

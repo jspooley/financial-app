@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { DataTable } from "@/components/ui/DataTable";
-import { SelectField } from "@/components/ui/FormFields";
+import { selectFieldClass } from "@/components/ui/FormFields";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { fetchAllLedgerRows, normalizeLedgerRow } from "@/lib/ledger-db";
 import {
@@ -16,7 +16,8 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 
 function moneyClass(value: number, emphasize = false) {
   const weight = emphasize ? "font-semibold" : "font-medium";
-  const color = value < 0 ? "text-red-700" : "text-slate-900";
+  const color =
+    value < 0 ? "text-red-700" : value > 0 ? "text-emerald-700" : "text-slate-900";
   return `${weight} ${color}`;
 }
 
@@ -140,25 +141,32 @@ export default function DebtTrackingPage() {
     [entries, partner]
   );
 
-  const whose = partner === "Both" ? "Jess and Molly" : partner;
+  const unreimbursedDisplay = -report.unreimbursedTotal;
+  const businessLoanDisplay = -report.capitalNet;
+  const netBusinessDebt = report.netBusinessDebt;
 
   return (
     <AppShell>
       <PageHeader
-        title="Debt Tracking"
-        description={`What the business still owes ${whose}: unreimbursed personal-card charges plus net capital in (contributions minus loan paybacks).`}
+        title="Business Debt"
+        description="Unreimbursed credit card charges plus remaining business loans."
         action={
-          <SelectField
-            label="Partner"
-            value={partner}
-            onChange={(event) =>
-              setPartner(event.target.value as PersonalFundsPartnerFilter)
-            }
-          >
-            <option value="Both">Jess and Molly</option>
-            <option value="Jess">Jess</option>
-            <option value="Molly">Molly</option>
-          </SelectField>
+          <label className="flex items-center gap-2">
+            <span className="whitespace-nowrap text-sm font-medium text-slate-700">
+              View
+            </span>
+            <select
+              className={`${selectFieldClass} w-auto min-w-40`}
+              value={partner}
+              onChange={(event) =>
+                setPartner(event.target.value as PersonalFundsPartnerFilter)
+              }
+            >
+              <option value="Both">Jess and Molly</option>
+              <option value="Jess">Jess</option>
+              <option value="Molly">Molly</option>
+            </select>
+          </label>
         }
       />
 
@@ -169,54 +177,43 @@ export default function DebtTrackingPage() {
       ) : null}
 
       {loading ? (
-        <p className="text-sm text-slate-500">Loading debt tracking report...</p>
+        <p className="text-sm text-slate-500">Loading business debt report...</p>
       ) : (
         <div className="space-y-8">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <SummaryCard
-              label="1. Unreimbursed card charges"
-              value={report.unreimbursedTotal}
-              hint="Personal credit-card purchases not linked to a checking 308."
+              label="Unreimbursed credit card charges"
+              value={unreimbursedDisplay}
             />
             <SummaryCard
-              label="Owner's contributions"
-              value={report.contributionTotal}
-              hint="300 Owner's Contribution - Jes and 310 Owner's Contribution - Molly."
+              label="Business Loan"
+              value={businessLoanDisplay}
+              hint="Owner contributions minus repayments to date"
             />
             <SummaryCard
-              label="Business loan paybacks"
-              value={report.loanPaybackTotal}
-              hint="306 Biz Loan Payback - Jess and 305 Biz Loan Payback - Molly."
-            />
-            <SummaryCard
-              label="Debt tracking"
-              value={report.personalFundsUsed}
-              hint="Unreimbursed card charges + (contributions − paybacks)."
+              label="Net Business Debt"
+              value={netBusinessDebt}
               emphasize
             />
           </div>
 
-          <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-            <span className="font-medium text-slate-900">2. Net capital in: </span>
-            {formatCurrency(report.contributionTotal)} contributions −{" "}
-            {formatCurrency(report.loanPaybackTotal)} loan paybacks ={" "}
-            <span className={moneyClass(report.capitalNet, true)}>
-              {formatCurrency(report.capitalNet)}
-            </span>
-            .
-          </p>
-
           <LinesTable
             title="Unreimbursed personal credit card charges"
-            hint="Card purchases still outstanding. On Cashflow, click Reimbursed when the house pays the card back."
-            lines={report.unreimbursedCardCharges}
+            hint="Business purchases on a personal card that checking has not reimbursed yet. On Cashflow, check the unpaid purchases, then Mark Items as Reimbursed."
+            lines={report.unreimbursedCardCharges.map((line) => ({
+              ...line,
+              amount: -line.amount,
+            }))}
             emptyMessage="No unreimbursed personal credit card charges for this partner."
           />
           <LinesTable
-            title="Owner's contributions"
+            title="Business Loan"
             hint="300 Owner's Contribution - Jes and 310 Owner's Contribution - Molly."
-            lines={report.contributions}
-            emptyMessage="No owner's contribution rows for this partner."
+            lines={report.contributions.map((line) => ({
+              ...line,
+              amount: -line.amount,
+            }))}
+            emptyMessage="No business loan rows for this partner."
           />
           <LinesTable
             title="Business loan paybacks"

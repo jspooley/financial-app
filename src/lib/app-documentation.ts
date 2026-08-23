@@ -10,7 +10,7 @@ export const DOCUMENTATION_SECTIONS = [
   { key: "chart-of-accounts", title: "Chart of Accounts" },
   { key: "cashflow", title: "Cashflow" },
   { key: "sales-use-tax", title: "Sales & Use Tax" },
-  { key: "debt-tracking", title: "Debt Tracking" },
+  { key: "debt-tracking", title: "Business Debt" },
   { key: "true-up", title: "True Up Report" },
   { key: "schedule-c", title: "Schedule C" },
   { key: "bank-cashflow", title: "Checking Reconciliation" },

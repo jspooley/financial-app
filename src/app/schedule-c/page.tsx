@@ -212,18 +212,26 @@ export default function ScheduleCPage() {
           <section className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {[
               ["Gross Receipts", totals.grossReceipts],
-              ["Cost of Goods Sold", totals.cogs],
-              ["Other Expenses", totals.otherExpenses],
+              ["Cost of Goods Sold", -totals.cogs],
+              ["Other Expenses", -totals.otherExpenses],
               ["Net Profit", totals.netProfit],
             ].map(([label, amount]) => (
               <div
                 key={String(label)}
                 className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
               >
-                <p className="text-xs uppercase tracking-wide text-slate-500">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-700">
                   {label}
                 </p>
-                <p className="mt-1 text-xl font-semibold text-slate-900">
+                <p
+                  className={`mt-1 text-xl font-semibold ${
+                    Number(amount) < 0
+                      ? "text-red-700"
+                      : Number(amount) > 0
+                        ? "text-emerald-700"
+                        : "text-slate-900"
+                  }`}
+                >
                   {formatCurrency(Number(amount))}
                 </p>
               </div>

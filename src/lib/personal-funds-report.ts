@@ -5,7 +5,7 @@ import {
 } from "@/lib/coa";
 import {
   cardReimburseNet,
-  isPersonalCardCharge,
+  isUnreimbursedBusinessPersonalCardCharge,
 } from "@/lib/card-reimbursement";
 import { partnerFromEntry } from "@/lib/true-up-report";
 import type { LedgerEntry, Purchaser } from "@/lib/types";
@@ -33,6 +33,8 @@ export type PersonalFundsReport = {
   loanPaybackTotal: number;
   capitalNet: number;
   personalFundsUsed: number;
+  /** Signed: unreimbursed (neg) + business loans (neg) + repayments (pos). */
+  netBusinessDebt: number;
 };
 
 function matchesPartner(
@@ -100,11 +102,11 @@ export function buildPersonalFundsReport(
   entries: LedgerEntry[],
   partner: PersonalFundsPartnerFilter = "Both"
 ): PersonalFundsReport {
+  const parentById = new Map(entries.map((entry) => [entry.id, entry]));
   const unreimbursedCardCharges = sortLines(
     entries
-      .filter(
-        (entry) =>
-          isPersonalCardCharge(entry) && !entry.reimbursed_by_ledger_id
+      .filter((entry) =>
+        isUnreimbursedBusinessPersonalCardCharge(entry, parentById)
       )
       .map((entry) =>
         lineFromEntry(
@@ -139,6 +141,9 @@ export function buildPersonalFundsReport(
   const contributionTotal = sumLines(contributions);
   const loanPaybackTotal = sumLines(loanPaybacks);
   const capitalNet = roundMoney(contributionTotal - loanPaybackTotal);
+  const netBusinessDebt = roundMoney(
+    -unreimbursedTotal - contributionTotal + loanPaybackTotal
+  );
 
   return {
     partner,
@@ -150,5 +155,11 @@ export function buildPersonalFundsReport(
     loanPaybackTotal,
     capitalNet,
     personalFundsUsed: roundMoney(unreimbursedTotal + capitalNet),
+    netBusinessDebt,
   };
+}
+
+/** Positive when the business owes; opposite sign of netBusinessDebt. */
+export function businessDebtCostFromReport(report: PersonalFundsReport) {
+  return roundMoney(-report.netBusinessDebt);
 }

@@ -16,6 +16,7 @@ import {
 } from "@/lib/partner-transfer";
 import {
   deleteCardReimburseMate,
+  isCheckingCardReimbursement,
   syncCardReimburseMate,
 } from "@/lib/card-reimbursement";
 import {
@@ -74,6 +75,7 @@ interface ExpenseFormProps {
   onSuccess: () => void;
   onCancel: () => void;
   onDeleted?: () => void;
+  onReassignCardCharges?: () => void;
 }
 
 function uniqueInvoiceIds(rows: InvoiceOptionRow[], clientId: string, poNumber: string) {
@@ -94,6 +96,7 @@ export function ExpenseForm({
   onSuccess,
   onCancel,
   onDeleted,
+  onReassignCardCharges,
 }: ExpenseFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -487,6 +490,28 @@ export function ExpenseForm({
         error={errors.description?.message}
         {...register("description")}
       />
+
+      {initial && isCheckingCardReimbursement(initial) && onReassignCardCharges ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3">
+          <p className="text-sm font-medium text-amber-950">
+            Card purchases on this repayment
+          </p>
+          <p className="mt-1 text-xs text-amber-900/80">
+            Choose which card purchases this checking 308 paid. Boxes start
+            unchecked. Check the same purchase to keep it, pick another, or
+            cancel the picker to leave the saved match.
+          </p>
+          <Button
+            type="button"
+            variant="secondary"
+            className="mt-3 min-h-[33px] px-3 py-1.5"
+            onClick={onReassignCardCharges}
+            disabled={isSubmitting || deleting}
+          >
+            Reassign Card Charges
+          </Button>
+        </div>
+      ) : null}
 
       {error && (
         <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">

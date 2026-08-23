@@ -23,13 +23,30 @@ import {
 } from "@/lib/payment-companions";
 import { formatCurrency, formatPercent, grossProfitGoalFromTradePartners } from "@/lib/utils";
 import type { TradePartner } from "@/lib/types";
+import {
+  buildPersonalFundsReport,
+  businessDebtCostFromReport,
+} from "@/lib/personal-funds-report";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-function PlAmountCell({ value, emphasize }: { value: number; emphasize?: boolean }) {
+function signedAmountClass(value: number, emphasize?: boolean) {
+  const weight = emphasize ? "font-semibold" : "";
+  const color =
+    value < 0 ? "text-red-700" : value > 0 ? "text-emerald-700" : "text-slate-800";
+  return `${weight} ${color}`.trim();
+}
+
+function PlAmountCell({
+  value,
+  emphasize,
+}: {
+  value: number;
+  emphasize?: boolean;
+}) {
   return (
-    <span className={emphasize ? "font-semibold text-slate-900" : "text-slate-800"}>
+    <span className={signedAmountClass(value, emphasize)}>
       {formatCurrency(value)}
     </span>
   );
@@ -37,7 +54,7 @@ function PlAmountCell({ value, emphasize }: { value: number; emphasize?: boolean
 
 function PlMarginCell({ value, emphasize }: { value: number; emphasize?: boolean }) {
   return (
-    <span className={emphasize ? "font-semibold text-brand-800" : "text-brand-700"}>
+    <span className={signedAmountClass(value, emphasize)}>
       {formatPercent(value)}
     </span>
   );
@@ -91,14 +108,14 @@ function PlMonthlyTable({ rows }: { rows: PlReportRow[] }) {
                 <div className="flex justify-between gap-3">
                   <dt className="text-slate-500">COGS</dt>
                   <dd>
-                    <PlAmountCell value={row.totals.cogs} emphasize={emphasize} />
+                    <PlAmountCell value={-row.totals.cogs} emphasize={emphasize} />
                   </dd>
                 </div>
                 <div className="flex justify-between gap-3">
                   <dt className="text-slate-500">Expenses</dt>
                   <dd>
                     <PlAmountCell
-                      value={row.totals.expenseAmount}
+                      value={-row.totals.expenseAmount}
                       emphasize={emphasize}
                     />
                   </dd>
@@ -170,11 +187,11 @@ function PlMonthlyTable({ rows }: { rows: PlReportRow[] }) {
                     <PlAmountCell value={row.totals.revenue} emphasize={emphasize} />
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <PlAmountCell value={row.totals.cogs} emphasize={emphasize} />
+                    <PlAmountCell value={-row.totals.cogs} emphasize={emphasize} />
                   </td>
                   <td className="px-4 py-3 text-right">
                     <PlAmountCell
-                      value={row.totals.expenseAmount}
+                      value={-row.totals.expenseAmount}
                       emphasize={emphasize}
                     />
                   </td>
@@ -236,7 +253,12 @@ export default async function PlReportPage() {
   );
 
   const ytdEntries = filterLedgerEntriesForYear(ledgerForPl, reportYear);
-  const ytdTotals = computePlTotals(ytdEntries, invoicedPoKeys);
+  const businessDebtReport = buildPersonalFundsReport(allLedgerEntries);
+  const ytdTotals = computePlTotals(
+    ytdEntries,
+    invoicedPoKeys,
+    businessDebtCostFromReport(businessDebtReport)
+  );
   const expenseEntries = filterPlExpenseEntries(ytdEntries).sort((a, b) =>
     b.entry_date.localeCompare(a.entry_date)
   );
@@ -272,20 +294,6 @@ export default async function PlReportPage() {
         <h2 className="text-lg font-semibold text-slate-900">
           Year to Date — {reportYear}
         </h2>
-        <p className="mt-1 text-sm text-slate-600">
-          <strong>Revenue</strong> = amount actually paid (payment amount; unpaid
-          invoices contribute $0). Wholesale S&U tax collected in that payment is
-          excluded (owed to the state).{" "}
-          <strong>Cost of goods sold</strong> = total designer cost.{" "}
-          <strong>Expenses</strong> = expense amount + shipping + fees + tax remittances.{" "}
-          <strong>Gross profit</strong> = revenue − COGS.{" "}
-          <strong>Net profit</strong> = revenue − (COGS + expenses).{" "}
-          <strong>Net profit margin</strong> = net profit ÷ revenue.{" "}
-          <strong>Gross profit goal</strong> = half of average trade partner discount.
-          Uninvoiced debit costs are included in cost of goods sold only. Accepted
-          underpayment variance detail is on the reconciliation report (not subtracted
-          again here, since uncollected sales were never counted as revenue).
-        </p>
         <div className="mt-4">
           <PlTotalsCards
             totals={ytdTotals}

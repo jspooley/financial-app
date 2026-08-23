@@ -84,7 +84,7 @@ export const TRUE_UP_EXCLUSIONS: { label: string; detail: string }[] = [
   {
     label: "300 / 310 Owner's contributions",
     detail:
-      "Capital put into the business. Tracked on Debt Tracking, not split 50/50.",
+      "Capital put into the business. Tracked on Business Debt, not split 50/50.",
   },
   {
     label: "301 / 302 Owner's draws",
@@ -93,7 +93,7 @@ export const TRUE_UP_EXCLUSIONS: { label: string; detail: string }[] = [
   {
     label: "305 / 306 Business loan paybacks",
     detail:
-      "Paying back a loan from an owner. Tracked on Debt Tracking, not a 50/50 share.",
+      "Paying back a loan from an owner. Tracked on Business Debt, not a 50/50 share.",
   },
   {
     label: "308 Reimburse personal credit card",

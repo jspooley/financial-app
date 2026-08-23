@@ -60,6 +60,8 @@ export type PlTotals = {
   grossProfitMargin: number;
   netProfit: number;
   netProfitMargin: number;
+  /** Signed outstanding business debt (negative when the business owes). */
+  businessDebt: number;
 };
 
 export type PlReportRow =
@@ -258,7 +260,8 @@ function sumPlExpenses(entries: LedgerPlEntry[]): number {
 
 export function computePlTotals(
   entries: LedgerPlEntry[],
-  invoicedPoKeys?: Set<string>
+  invoicedPoKeys?: Set<string>,
+  businessDebtCost = 0
 ): PlTotals {
   const plEntries = entriesForPlTotals(entries);
   const balances = sumLedgerCreditsAndDebits(plEntries, { invoicedPoKeys });
@@ -276,7 +279,8 @@ export function computePlTotals(
   // Cash-basis revenue: uncollected invoice write-offs are not booked as revenue,
   // so accepted underpayment variance is not subtracted again here.
   const varianceAmount = 0;
-  const netProfit = roundMoney(revenue - (cogs + expenseAmount));
+  const debtCost = roundMoney(businessDebtCost);
+  const netProfit = roundMoney(revenue - (cogs + expenseAmount + debtCost));
   const grossProfitMargin =
     revenue > 0 ? roundMoney((grossProfit / revenue) * 100) : 0;
   const netProfitMargin =
@@ -291,6 +295,7 @@ export function computePlTotals(
     grossProfitMargin,
     netProfit,
     netProfitMargin,
+    businessDebt: roundMoney(-debtCost),
   };
 }
 

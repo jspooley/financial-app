@@ -13,7 +13,11 @@ export function PageHeader({ title, description, action }: PageHeaderProps) {
           <p className="mt-1 text-sm text-slate-600">{description}</p>
         )}
       </div>
-      {action && <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">{action}</div>}
+      {action && (
+        <div className="flex w-full shrink-0 flex-wrap gap-2 sm:w-auto sm:justify-end">
+          {action}
+        </div>
+      )}
     </div>
   );
 }

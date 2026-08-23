@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { ExpenseForm } from "@/components/forms/ExpenseForm";
@@ -29,6 +30,7 @@ import {
 } from "@/lib/account-move";
 import {
   personalCardReimbursementCategory,
+  applyPaymentChargeAllocations,
   billCardChargeOnInvoice,
   canBillCardChargeOnInvoice,
   cardChargeOriginNote,
@@ -36,6 +38,7 @@ import {
   cardReimburseClusterRank,
   cardReimburseNet,
   chargeCandidatesForPayment,
+  chargesByPaymentId,
   cogsCategoryFromChart,
   deletePersonalCardCharge,
   duplicateCardChargeGroups,
@@ -47,16 +50,17 @@ import {
   linkCardChargeToReimbursement,
   mergeCardReimburseDisplayMates,
   needsPersonalCardIdentification,
-  outstandingPersonalCardTotal,
   persistAmountMatchedReimbursements,
   persistOldestFirstReimbursements,
   recodeCheckingPaymentToPersonalCardReimburse,
   proposeAmountMatchedReimbursements,
-  reimbursementByPaymentId,
+  remainingReimbursementAmount,
   reimbursementCandidatesForCharge,
   reimbursementStatus,
   unlinkCardChargeReimbursement,
   withCardReimburseCluster,
+  isUnreimbursedBusinessPersonalCardCharge,
+  createCheckingReimbursementForCharges,
 } from "@/lib/card-reimbursement";
 import {
   isPartnerTransferMateRow,
@@ -120,6 +124,30 @@ function reimbursementRowLabel(entry: LedgerEntry, extra?: string) {
   ];
   if (extra) parts.push(extra);
   return parts.filter(Boolean).join(" · ");
+}
+
+function chargeAssignmentDetails(entry: LedgerEntry) {
+  const description = (entry.description ?? "").trim() || "No description";
+  return {
+    date: formatDate(entry.entry_date),
+    amount: formatCurrency(Math.abs(cardReimburseNet(entry))),
+    account: entry.account ?? "—",
+    coa: entry.coa_category ?? "—",
+    description:
+      description.length > 72 ? `${description.slice(0, 72)}…` : description,
+  };
+}
+
+function todayIsoDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function reimbursementDescriptionForCharges(charges: LedgerEntry[]) {
+  if (charges.length === 1) {
+    const text = (charges[0]?.description ?? "").trim();
+    return text ? `Reimburse personal card: ${text}` : "Reimburse personal card";
+  }
+  return `Reimburse personal card (${charges.length} charges)`;
 }
 
 function accountMoveColumnError(message: string) {
@@ -355,11 +383,16 @@ function MultiSelectDropdown({
   return (
     <div className="text-sm">
       <span className="mb-1 block font-medium text-slate-900">{label}</span>
-      <details ref={detailsRef} className="relative">
+      <details ref={detailsRef} className="group relative">
         <summary className="flex w-full cursor-pointer list-none items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-700 marker:content-none">
           <span className="truncate">{summary}</span>
-          <span aria-hidden="true" className="ml-2 text-xs text-slate-500">
-            ▼
+          <span
+            aria-hidden="true"
+            className="ml-2 flex size-7 shrink-0 items-center justify-center text-brand-700"
+          >
+            <span className="inline-block text-lg leading-none transition-transform group-open:rotate-90">
+              ▶
+            </span>
           </span>
         </summary>
         <div className="absolute z-40 mt-1 max-h-72 min-w-full overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
@@ -453,10 +486,10 @@ function GroupExpandArrow({ expanded }: { expanded: boolean }) {
   return (
     <span
       aria-hidden="true"
-      className="flex size-7 shrink-0 items-center justify-center text-slate-500"
+      className="flex size-7 shrink-0 items-center justify-center text-brand-700"
     >
       <span
-        className={`inline-block text-[11px] leading-none transition-transform ${
+        className={`inline-block text-lg leading-none transition-transform ${
           expanded ? "rotate-90" : ""
         }`}
       >
@@ -867,9 +900,21 @@ export default function CashflowPage() {
   const [moveError, setMoveError] = useState<string | null>(null);
   const [linking, setLinking] = useState<
     | { kind: "charge"; entryId: string; selectedId: string }
-    | { kind: "payment"; entryId: string; selectedId: string }
+    | {
+        kind: "payment";
+        entryId: string;
+        selectedIds: string[];
+        savedChargeIds: string[];
+      }
     | null
   >(null);
+  const [selectedChargeIds, setSelectedChargeIds] = useState<string[]>([]);
+  const [payChargesDraft, setPayChargesDraft] = useState<{
+    chargeIds: string[];
+    entryDate: string;
+    description: string;
+    checkingAccount: CashflowAccount;
+  } | null>(null);
 
   const loadEntries = useCallback(async () => {
     setLoading(true);
@@ -994,8 +1039,7 @@ export default function CashflowPage() {
     const duplicateGroups = duplicateCardChargeGroups(registerEntries);
     return {
       byId,
-      chargeByPaymentId: reimbursementByPaymentId(registerEntries),
-      outstanding: outstandingPersonalCardTotal(registerEntries),
+      chargesByPaymentId: chargesByPaymentId(registerEntries),
       amountMatchPairs: proposeAmountMatchedReimbursements(registerEntries).length,
       duplicateGroups,
       duplicateChargeIds: new Set(
@@ -1029,9 +1073,33 @@ export default function CashflowPage() {
       source,
       candidates,
       selectedCandidate:
-        candidates.find((row) => row.charge.id === linking.selectedId) ?? null,
+        candidates.find((row) => row.charge.id === linking.selectedIds[0]) ??
+        null,
     };
   }, [linking, registerEntries]);
+
+  const selectedUnpaidCharges = useMemo(() => {
+    return selectedChargeIds
+      .map((id) => parentById.get(id))
+      .filter(
+        (entry): entry is LedgerEntry =>
+          Boolean(
+            entry &&
+              isUnreimbursedBusinessPersonalCardCharge(entry, parentById)
+          )
+      );
+  }, [selectedChargeIds, parentById]);
+
+  const selectedChargeTotal = useMemo(
+    () =>
+      roundMoney(
+        selectedUnpaidCharges.reduce(
+          (sum, entry) => sum + Math.abs(cardReimburseNet(entry)),
+          0
+        )
+      ),
+    [selectedUnpaidCharges]
+  );
 
   const needsIdentificationCount = useMemo(
     () => registerEntries.filter(needsPersonalCardIdentification).length,
@@ -1360,6 +1428,7 @@ export default function CashflowPage() {
     setShowForm(false);
     setEditing(null);
     setEditingAccountEntries(null);
+    setLinking(null);
   }
 
   async function startExpenseEdit(entry: LedgerEntry) {
@@ -1387,7 +1456,7 @@ export default function CashflowPage() {
   async function markMovedRowAsCharge(entry: LedgerEntry) {
     if (
       !confirm(
-        `Keep this row on ${entry.account} as a personal-card purchase? It can then pair 1:1 with a checking 308 reimbursement.`
+        `Keep this row on ${entry.account} as a personal-card purchase? It can then be linked to a checking 308 reimbursement.`
       )
     ) {
       return;
@@ -1438,10 +1507,13 @@ export default function CashflowPage() {
 
   function startLinkCharge(entry: LedgerEntry) {
     const candidates = reimbursementCandidatesForCharge(registerEntries, entry);
+    const chargeAmount = Math.abs(cardReimburseNet(entry));
     const preferred =
       candidates.find((row) => row.amountMatch && row.duplicateCharge) ??
-      candidates.find((row) => row.amountMatch && !row.linkedCharge) ??
-      candidates.find((row) => row.amountMatch) ??
+      candidates.find(
+        (row) => row.amountMatch && row.remaining + 0.005 >= chargeAmount
+      ) ??
+      candidates.find((row) => row.remaining + 0.005 >= chargeAmount) ??
       candidates[0];
     setMoveError(null);
     setLinking({
@@ -1452,91 +1524,197 @@ export default function CashflowPage() {
   }
 
   function startLinkPayment(entry: LedgerEntry) {
-    const candidates = chargeCandidatesForPayment(registerEntries, entry);
-    const preferred =
-      candidates.find((row) => row.amountMatch) ?? candidates[0];
+    const linked =
+      chargesByPaymentId(registerEntries).get(entry.id)?.map((row) => row.id) ??
+      [];
     setMoveError(null);
     setLinking({
       kind: "payment",
       entryId: entry.id,
-      selectedId: preferred?.charge.id ?? "",
+      selectedIds: [],
+      savedChargeIds: linked,
     });
   }
 
-  async function confirmReimbursementLink() {
-    if (!linking?.selectedId) return;
-    const charge =
-      linking.kind === "charge"
-        ? reimbursementMaps.byId.get(linking.entryId)
-        : reimbursementMaps.byId.get(linking.selectedId);
-    const payment =
-      linking.kind === "payment"
-        ? reimbursementMaps.byId.get(linking.entryId)
-        : reimbursementMaps.byId.get(linking.selectedId);
-    if (!charge || !payment) {
-      setMoveError("That row is no longer in the register. Refresh and try again.");
-      setLinking(null);
+  function toggleChargeToPay(chargeId: string) {
+    setSelectedChargeIds((current) =>
+      current.includes(chargeId)
+        ? current.filter((id) => id !== chargeId)
+        : [...current, chargeId]
+    );
+  }
+
+  function openPayChargesDraft() {
+    if (selectedUnpaidCharges.length === 0) {
+      setMoveError("Check the unpaid card purchases you want checking to repay.");
       return;
     }
-    const candidate =
-      linking.kind === "charge"
-        ? reimbursementCandidatesForCharge(registerEntries, charge).find(
-            (row) => row.payment.id === payment.id
-          )
-        : undefined;
-    if (candidate?.linkedCharge) {
-      const other = candidate.linkedCharge;
-      if (candidate.duplicateCharge) {
+    const checkingAccounts = [
+      ...new Set(
+        selectedUnpaidCharges
+          .map((row) => matchingCheckingAccount(row.account))
+          .filter((account): account is CashflowAccount => Boolean(account))
+      ),
+    ];
+    if (checkingAccounts.length !== 1) {
+      setMoveError(
+        "Pick charges on one partner's card at a time so the 308 hits the matching checking account."
+      );
+      return;
+    }
+    setMoveError(null);
+    setPayChargesDraft({
+      chargeIds: selectedUnpaidCharges.map((row) => row.id),
+      entryDate: todayIsoDate(),
+      description: reimbursementDescriptionForCharges(selectedUnpaidCharges),
+      checkingAccount: checkingAccounts[0],
+    });
+  }
+
+  async function confirmCreateCheckingReimbursement() {
+    if (!payChargesDraft) return;
+    const charges = payChargesDraft.chargeIds
+      .map((id) => parentById.get(id))
+      .filter((row): row is LedgerEntry => Boolean(row));
+    if (charges.length === 0) {
+      setMoveError("Those card purchases are no longer in the register. Refresh and try again.");
+      setPayChargesDraft(null);
+      return;
+    }
+    setMovingId("create-308");
+    setMoveError(null);
+    const lockLists = await Promise.all(
+      charges.map((row) => loadLedgerLockTargets(row.id))
+    );
+    const ok = await acquireLocks(lockLists.flat());
+    if (!ok) {
+      setMovingId(null);
+      return;
+    }
+    const supabase = createClient();
+    const result = await createCheckingReimbursementForCharges(
+      supabase,
+      charges,
+      registerEntries,
+      {
+        entryDate: payChargesDraft.entryDate,
+        description: payChargesDraft.description,
+        checkingAccount: payChargesDraft.checkingAccount,
+        coa308: personalCardReimbursementCategory(chartOfAccounts),
+      }
+    );
+    setMovingId(null);
+    if (!showForm) {
+      void releaseLocks();
+    }
+    if (result.error) {
+      setMoveError(accountMoveColumnError(result.error));
+      return;
+    }
+    setPayChargesDraft(null);
+    setSelectedChargeIds([]);
+    await loadEntries();
+  }
+
+  async function confirmReimbursementLink() {
+    if (linking?.kind === "charge") {
+      if (!linking.selectedId) return;
+      const charge = reimbursementMaps.byId.get(linking.entryId);
+      const payment = reimbursementMaps.byId.get(linking.selectedId);
+      if (!charge || !payment) {
+        setMoveError("That row is no longer in the register. Refresh and try again.");
+        setLinking(null);
+        return;
+      }
+      const candidate = reimbursementCandidatesForCharge(
+        registerEntries,
+        charge
+      ).find((row) => row.payment.id === payment.id);
+      if (
+        candidate &&
+        candidate.remaining + 0.005 < Math.abs(cardReimburseNet(charge))
+      ) {
+        setMoveError(
+          `This 308 only has ${formatCurrency(
+            candidate.remaining
+          )} left. Edit that 308 and use Reassign Card Charges, then uncheck something first.`
+        );
+        return;
+      }
+      if (candidate?.needsCoa308) {
         if (
           !confirm(
-            `This 308 already pays another card charge that looks like a duplicate of this one:\n${reimbursementRowLabel(
-              other
-            )}\n\nLinking only moves the 308 here. Nothing is deleted. Delete the extra card row yourself if it should not stay.`
+            "That checking row is not CoA 308. Change it to a personal-card reimbursement (308) and pair it with this charge?"
           )
         ) {
           return;
         }
-      } else if (
-        !confirm(
-          `This 308 currently reimburses another card charge (${formatDate(
-            other.entry_date
-          )} ${formatCurrency(
-            Math.abs(cardReimburseNet(other))
-          )}). Move the link here? The other card row stays.`
-        )
-      ) {
+      }
+      setMovingId(charge.id);
+      setMoveError(null);
+      const targetLists = await Promise.all([
+        loadLedgerLockTargets(charge.id),
+        loadLedgerLockTargets(payment.id),
+      ]);
+      const ok = await acquireLocks(targetLists.flat());
+      if (!ok) {
+        setMovingId(null);
         return;
       }
-    }
-    if (candidate?.needsCoa308) {
-      if (
-        !confirm(
-          "That checking row is not CoA 308. Change it to a personal-card reimbursement (308) and pair it with this charge?"
-        )
-      ) {
+      const supabase = createClient();
+      const error = await linkCardChargeToReimbursement(
+        supabase,
+        charge,
+        payment,
+        personalCardReimbursementCategory(chartOfAccounts),
+        registerEntries
+      );
+      setMovingId(null);
+      if (!showForm) {
+        void releaseLocks();
+      }
+      if (error) {
+        setMoveError(accountMoveColumnError(error));
         return;
       }
+      setLinking(null);
+      await loadEntries();
+      return;
     }
-    setMovingId(charge.id);
+
+    if (linking?.kind !== "payment") return;
+    const payment = reimbursementMaps.byId.get(linking.entryId);
+    if (!payment) {
+      setMoveError("That row is no longer in the register. Refresh and try again.");
+      setLinking(null);
+      return;
+    }
+    setMovingId(payment.id);
     setMoveError(null);
-    const targetLists = await Promise.all([
-      loadLedgerLockTargets(charge.id),
-      loadLedgerLockTargets(payment.id),
-    ]);
+    const linkedIds =
+      reimbursementMaps.chargesByPaymentId.get(payment.id)?.map((row) => row.id) ??
+      [];
+    const lockIds = [...new Set([payment.id, ...linkedIds, ...linking.selectedIds])];
+    const targetLists = await Promise.all(
+      lockIds.map((id) => loadLedgerLockTargets(id))
+    );
     const ok = await acquireLocks(targetLists.flat());
     if (!ok) {
       setMovingId(null);
       return;
     }
     const supabase = createClient();
-    const error = await linkCardChargeToReimbursement(
+    const error = await applyPaymentChargeAllocations(
       supabase,
-      charge,
       payment,
+      linking.selectedIds,
+      registerEntries,
       personalCardReimbursementCategory(chartOfAccounts)
     );
     setMovingId(null);
-    void releaseLocks();
+    if (!showForm) {
+      void releaseLocks();
+    }
     if (error) {
       setMoveError(accountMoveColumnError(error));
       return;
@@ -1548,7 +1726,7 @@ export default function CashflowPage() {
   async function unlinkCharge(entry: LedgerEntry) {
     if (
       !confirm(
-        "Mark this card charge outstanding? It unpairs the checking reimbursement. The checking row stays; the charge goes back to Outstanding."
+        "Unlink this card charge from the checking 308? The checking row stays. The charge becomes unpaid."
       )
     ) {
       return;
@@ -1676,7 +1854,7 @@ export default function CashflowPage() {
       !confirm(
         `Link ${count} outstanding card charge${
           count === 1 ? "" : "s"
-        } to unmatched 308s with the same amount (1:1, oldest first within each amount)?`
+        } to 308s with the same leftover amount (oldest first)?`
       )
     ) {
       return;
@@ -1713,6 +1891,471 @@ export default function CashflowPage() {
         }
       />
 
+      {moveError && showForm ? (
+        <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          {moveError}
+        </p>
+      ) : null}
+
+      {linking && linkingPanel && typeof document !== "undefined"
+        ? createPortal(
+        <div
+          className="fixed inset-0 z-[100] flex items-end justify-center bg-black/40 p-4 sm:items-center"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setLinking(null);
+          }}
+        >
+        <div
+          className="max-h-[85dvh] w-full max-w-lg overflow-y-auto rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950 shadow-lg"
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <p className="font-medium">
+            {linkingPanel.kind === "charge"
+              ? "Which checking repayment paid this card purchase?"
+              : "Which card purchases did this checking repayment pay?"}
+          </p>
+          <p className="mt-1 text-xs text-amber-900/80">
+            {linkingPanel.kind === "charge"
+              ? "Pick the Checking 308 (personal-card refund), not a 302 owner's draw and not the Credit Card “Pays the card back” line. That card credit is already the companion of the checking 308."
+              : "Check each card purchase this transfer paid. Uncheck to mark a purchase unpaid. The total cannot exceed this 308."}
+          </p>
+          {linkingPanel.source ? (
+            <p className="mt-2 rounded border border-amber-200 bg-white px-2 py-1.5 text-xs text-amber-950">
+              <span className="font-semibold">This checking repayment: </span>
+              {reimbursementRowLabel(linkingPanel.source)}
+            </p>
+          ) : (
+            <p className="mt-1 text-xs">
+              That row is not in the current list. Clear filters or cancel.
+            </p>
+          )}
+          {moveError ? (
+            <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-800">
+              {moveError}
+            </p>
+          ) : null}
+          {linkingPanel.candidates.length === 0 ? (
+            <p className="mt-2 text-xs">
+              {linkingPanel.kind === "charge"
+                ? "No checking 308s are available to link. Enter the repayment on checking as CoA 308 (not 302 owner's draw or 306 loan payback). If it is already tied to another card charge, pick that 308 if it still has room."
+                : "No outstanding card charges are available to link, and none are on this 308 yet."}
+            </p>
+          ) : linkingPanel.kind === "charge" ? (
+            <label className="mt-3 block text-xs font-medium">
+              Checking reimbursement
+              <select
+                value={linking.kind === "charge" ? linking.selectedId : ""}
+                onChange={(event) =>
+                  setLinking((current) =>
+                    current?.kind === "charge"
+                      ? { ...current, selectedId: event.target.value }
+                      : current
+                  )
+                }
+                className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900"
+              >
+                {linkingPanel.candidates.map((row) => {
+                  const chargeAmount = linkingPanel.source
+                    ? Math.abs(cardReimburseNet(linkingPanel.source))
+                    : 0;
+                  const tooSmall = row.remaining + 0.005 < chargeAmount;
+                  return (
+                    <option
+                      key={row.payment.id}
+                      value={row.payment.id}
+                      disabled={tooSmall}
+                    >
+                      {reimbursementRowLabel(
+                        row.payment,
+                        [
+                          row.amountMatch ? "amount match" : null,
+                          row.hasCardPaydown
+                            ? "this is the 308 for the card pay-down"
+                            : null,
+                          row.remaining >= 0.005
+                            ? `${formatCurrency(row.remaining)} left`
+                            : "fully allocated",
+                          tooSmall ? "does not fit this charge" : null,
+                          row.needsCoa308 ? "will become 308" : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                      )}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+          ) : linking.kind === "payment" ? (
+            <div className="mt-3 space-y-3">
+              {(() => {
+                const paymentAmount = linkingPanel.source
+                  ? Math.abs(cardReimburseNet(linkingPanel.source))
+                  : 0;
+                const leftover = linkingPanel.source
+                  ? remainingReimbursementAmount(
+                      linkingPanel.source,
+                      registerEntries,
+                      { selectedChargeIds: linking.selectedIds }
+                    )
+                  : 0;
+                return (
+                  <>
+              <p className="text-xs text-amber-900/80">
+                {`This 308 is ${formatCurrency(paymentAmount)}. ${formatCurrency(leftover)} left if you Save with the boxes below.`}
+              </p>
+              <p className="text-xs text-amber-900/80">
+                Nothing is checked yet. Check the purchase this repayment
+                paid, or Cancel to leave the saved match as-is.
+              </p>
+              {(["saved", "available"] as const).map((section) => {
+                const savedIds = new Set(linking.savedChargeIds);
+                const rows = linkingPanel.candidates.filter((row) => {
+                  const saved = savedIds.has(row.charge.id);
+                  return section === "saved" ? saved : !saved;
+                });
+                return (
+                  <div key={section} className="space-y-1.5">
+                    <p className="text-xs font-semibold text-amber-950">
+                      {section === "saved"
+                        ? "Currently saved on this repayment"
+                        : "Other card purchases"}
+                    </p>
+                    {rows.length === 0 ? (
+                      <p className="text-xs text-amber-900/70">
+                        {section === "saved"
+                          ? "Nothing is saved on this 308 yet."
+                          : "No other unpaid purchases."}
+                      </p>
+                    ) : (
+                      rows.map((row) => {
+                        const checked = linking.selectedIds.includes(
+                          row.charge.id
+                        );
+                        const chargeAmount = Math.abs(
+                          cardReimburseNet(row.charge)
+                        );
+                        const tooLargeForPayment =
+                          !checked && chargeAmount > paymentAmount + 0.005;
+                        const needsRoom =
+                          !checked &&
+                          !tooLargeForPayment &&
+                          leftover + 0.005 < chargeAmount;
+                        const disabled = tooLargeForPayment || needsRoom;
+                        const details = chargeAssignmentDetails(row.charge);
+                        return (
+                          <label
+                            key={row.charge.id}
+                            className={`flex cursor-pointer items-start gap-2 rounded border px-2 py-1.5 text-xs ${
+                              checked
+                                ? "border-brand-200 bg-white"
+                                : disabled
+                                  ? "border-transparent opacity-60"
+                                  : "border-transparent hover:bg-amber-100"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="mt-0.5 size-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500"
+                              checked={checked}
+                              disabled={disabled}
+                              onChange={() => {
+                                setLinking((current) => {
+                                  if (current?.kind !== "payment") {
+                                    return current;
+                                  }
+                                  const selected = current.selectedIds.includes(
+                                    row.charge.id
+                                  )
+                                    ? current.selectedIds.filter(
+                                        (id) => id !== row.charge.id
+                                      )
+                                    : [
+                                        ...current.selectedIds,
+                                        row.charge.id,
+                                      ];
+                                  return {
+                                    ...current,
+                                    selectedIds: selected,
+                                  };
+                                });
+                              }}
+                            />
+                            <span className="min-w-0">
+                              {checked ? (
+                                <span className="mb-0.5 block font-semibold text-brand-800">
+                                  Will save as assigned
+                                </span>
+                              ) : linking.savedChargeIds.includes(
+                                  row.charge.id
+                                ) ? (
+                                <span className="mb-0.5 block font-semibold text-amber-900">
+                                  Currently saved — check to keep
+                                </span>
+                              ) : null}
+                              <span className="block font-medium text-slate-900">
+                                {details.account}
+                              </span>
+                              <span className="block text-slate-700">
+                                {details.coa} · {details.amount} ·{" "}
+                                {details.date}
+                              </span>
+                              <span className="block text-slate-600">
+                                {details.description}
+                              </span>
+                              {!row.sameOwner ? (
+                                <span className="block text-amber-800">
+                                  Other owner
+                                </span>
+                              ) : null}
+                              {tooLargeForPayment ? (
+                                <span className="block text-amber-800">
+                                  Too large for this {formatCurrency(paymentAmount)} repayment
+                                </span>
+                              ) : needsRoom ? (
+                                <span className="block text-amber-800">
+                                  Uncheck a checked purchase first ({formatCurrency(leftover)} left)
+                                </span>
+                              ) : null}
+                            </span>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                );
+              })}
+                  </>
+                );
+              })()}
+            </div>
+          ) : null}
+          {linkingPanel.kind === "charge" &&
+          linkingPanel.selectedCandidate?.duplicateCharge ? (
+            <div className="mt-3 rounded-md border border-amber-300 bg-white px-3 py-2 text-xs text-slate-800">
+              <p className="font-medium text-amber-950">
+                These two card charges look like the same purchase. Nothing
+                is deleted unless you choose one below.
+              </p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <div className="rounded border border-slate-200 p-2">
+                  <p className="font-semibold">This charge</p>
+                  <p className="mt-1">
+                    {linkingPanel.source
+                      ? reimbursementRowLabel(linkingPanel.source)
+                      : "—"}
+                  </p>
+                  {linkingPanel.source ? (
+                    <p className="mt-1 text-slate-500">
+                      {cardChargeOriginNote(linkingPanel.source)}
+                    </p>
+                  ) : null}
+                  {linkingPanel.source ? (
+                    <Button
+                      variant="secondary"
+                      className="mt-2 min-h-[33px] w-full px-3 py-1.5"
+                      disabled={Boolean(movingId)}
+                      onClick={() => {
+                        void deleteCardChargeRow(linkingPanel.source!);
+                      }}
+                    >
+                      Delete this card row
+                    </Button>
+                  ) : null}
+                </div>
+                <div className="rounded border border-slate-200 p-2">
+                  <p className="font-semibold">Already linked card row</p>
+                  <p className="mt-1">
+                    {reimbursementRowLabel(
+                      linkingPanel.selectedCandidate.duplicateCharge
+                    )}
+                  </p>
+                  <p className="mt-1 text-slate-500">
+                    {cardChargeOriginNote(
+                      linkingPanel.selectedCandidate.duplicateCharge
+                    )}
+                  </p>
+                  <Button
+                    variant="secondary"
+                    className="mt-2 min-h-[33px] w-full px-3 py-1.5"
+                    disabled={Boolean(movingId)}
+                    onClick={() => {
+                      void deleteCardChargeRow(
+                        linkingPanel.selectedCandidate!.duplicateCharge!
+                      );
+                    }}
+                  >
+                    Delete the other card row
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              className="min-h-[33px] px-3 py-1.5"
+              disabled={
+                (linking.kind === "charge" && !linking.selectedId) ||
+                (linking.kind === "payment" &&
+                  linking.selectedIds.length === 0) ||
+                linkingPanel.candidates.length === 0 ||
+                Boolean(movingId)
+              }
+              onClick={() => {
+                void confirmReimbursementLink();
+              }}
+            >
+              {movingId ? "Saving..." : "Save"}
+            </Button>
+            <Button
+              variant="secondary"
+              className="min-h-[33px] px-3 py-1.5"
+              disabled={Boolean(movingId)}
+              onClick={() => setLinking(null)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+        </div>,
+          document.body
+        )
+      : null}
+
+      {payChargesDraft && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[100] flex items-end justify-center bg-black/40 p-4 sm:items-center"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) setPayChargesDraft(null);
+              }}
+            >
+              <div
+                className="max-h-[85dvh] w-full max-w-lg overflow-y-auto rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950 shadow-lg"
+                onMouseDown={(event) => event.stopPropagation()}
+              >
+                <p className="font-medium">Create checking 308 from selected charges</p>
+                <p className="mt-1 text-xs text-amber-900/80">
+                  Checking will record a 308 for this total and attach the
+                  checked purchases. Change the date if the transfer already
+                  happened on another day.
+                </p>
+                <p className="mt-2 rounded border border-amber-200 bg-white px-2 py-1.5 text-xs text-amber-950">
+                  <span className="font-semibold">Total: </span>
+                  {formatCurrency(selectedChargeTotal)} ·{" "}
+                  {selectedUnpaidCharges.length} charge
+                  {selectedUnpaidCharges.length === 1 ? "" : "s"}
+                </p>
+                <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs">
+                  {selectedUnpaidCharges.map((charge) => {
+                    const details = chargeAssignmentDetails(charge);
+                    return (
+                      <li key={charge.id} className="rounded border border-amber-100 bg-white px-2 py-1">
+                        <span className="block font-medium text-slate-900">
+                          {details.account}
+                        </span>
+                        <span className="block text-slate-700">
+                          {details.coa} · {details.amount} · {details.date}
+                        </span>
+                        <span className="block text-slate-600">
+                          {details.description}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <label className="mt-3 block text-xs font-medium">
+                  Date checking paid
+                  <input
+                    type="date"
+                    value={payChargesDraft.entryDate}
+                    onChange={(event) =>
+                      setPayChargesDraft((current) =>
+                        current
+                          ? { ...current, entryDate: event.target.value }
+                          : current
+                      )
+                    }
+                    className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900"
+                  />
+                </label>
+                <label className="mt-3 block text-xs font-medium">
+                  Checking account
+                  <select
+                    value={payChargesDraft.checkingAccount}
+                    onChange={(event) =>
+                      setPayChargesDraft((current) =>
+                        current
+                          ? {
+                              ...current,
+                              checkingAccount: event.target
+                                .value as CashflowAccount,
+                            }
+                          : current
+                      )
+                    }
+                    className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900"
+                  >
+                    {CASHFLOW_ACCOUNTS.filter((account) =>
+                      isCheckingAccount(account)
+                    ).map((account) => (
+                      <option key={account} value={account}>
+                        {account}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="mt-3 block text-xs font-medium">
+                  Description
+                  <textarea
+                    rows={2}
+                    value={payChargesDraft.description}
+                    onChange={(event) =>
+                      setPayChargesDraft((current) =>
+                        current
+                          ? { ...current, description: event.target.value }
+                          : current
+                      )
+                    }
+                    className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900"
+                  />
+                </label>
+                {moveError ? (
+                  <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-800">
+                    {moveError}
+                  </p>
+                ) : null}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    className="min-h-[33px] px-3 py-1.5"
+                    disabled={
+                      Boolean(movingId) ||
+                      selectedUnpaidCharges.length === 0 ||
+                      !payChargesDraft.entryDate
+                    }
+                    onClick={() => {
+                      void confirmCreateCheckingReimbursement();
+                    }}
+                  >
+                    {movingId === "create-308"
+                      ? "Saving..."
+                      : "Mark Items as Reimbursed"}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="min-h-[33px] px-3 py-1.5"
+                    disabled={Boolean(movingId)}
+                    onClick={() => setPayChargesDraft(null)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+
       {showForm ? (
         editingAccountEntries ||
         (editing && !isCashflowManagedEntry(editing)) ? (
@@ -1739,6 +2382,11 @@ export default function CashflowPage() {
               closeForms();
               loadEntries();
             }}
+            onReassignCardCharges={
+              editing && isCheckingCardReimbursement(editing)
+                ? () => startLinkPayment(editing)
+                : undefined
+            }
           />
         )
       ) : loading ? (
@@ -1764,7 +2412,7 @@ export default function CashflowPage() {
               className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-brand-200 hover:shadow-md"
             >
               <p className="text-xs uppercase tracking-wide text-slate-500">
-                Checking Balance
+                Cash Balance (Bank Statement)
               </p>
               <p className="mt-1 text-2xl font-bold text-brand-800">
                 {formatCurrency(accountBalances.checking)}
@@ -1788,16 +2436,9 @@ export default function CashflowPage() {
                 Amount owed (debits − credits)
                 {hasActiveListFilters ? " (current filters)" : ""}
               </p>
-              {reimbursementMaps.outstanding > 0 ||
-              reimbursementMaps.amountMatchPairs > 0 ||
+              {reimbursementMaps.amountMatchPairs > 0 ||
               reimbursementFilter !== "all" ? (
                 <div className="mt-2 space-y-2">
-                  {reimbursementMaps.outstanding > 0 ? (
-                    <p className="text-xs font-medium text-amber-800">
-                      Unreimbursed personal-card charges:{" "}
-                      {formatCurrency(reimbursementMaps.outstanding)}
-                    </p>
-                  ) : null}
                   {reimbursementFilter !== "all" ||
                   reimbursementMaps.amountMatchPairs > 0 ? (
                     <div className="flex flex-wrap gap-2">
@@ -2076,184 +2717,38 @@ export default function CashflowPage() {
             )}
           </div>
 
-          {moveError ? (
+          {moveError && !payChargesDraft ? (
             <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
               {moveError}
             </p>
           ) : null}
 
-          {linking && linkingPanel ? (
+          {selectedUnpaidCharges.length > 0 ? (
             <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
-              <p className="font-medium">
-                {linkingPanel.kind === "charge"
-                  ? "Link a checking 308 to this card charge"
-                  : "Link a card charge to this 308"}
-              </p>
-              <p className="mt-1 text-xs text-amber-900/80">
-                {linkingPanel.kind === "charge"
-                  ? "Pick the Checking 308 (personal-card refund), not a 302 owner's draw and not the Credit Card “Pays the card back” line. That card credit is already the companion of the checking 308."
-                  : null}
-              </p>
-              {linkingPanel.source ? (
-                <p className="mt-1 text-xs text-amber-900/80">
-                  {reimbursementRowLabel(linkingPanel.source)}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p>
+                  {selectedUnpaidCharges.length} purchase
+                  {selectedUnpaidCharges.length === 1 ? "" : "s"} selected ·{" "}
+                  <span className="font-semibold">
+                    {formatCurrency(selectedChargeTotal)}
+                  </span>
                 </p>
-              ) : (
-                <p className="mt-1 text-xs">
-                  That row is not in the current list. Clear filters or cancel.
-                </p>
-              )}
-              {linkingPanel.candidates.length === 0 ? (
-                <p className="mt-2 text-xs">
-                  {linkingPanel.kind === "charge"
-                    ? "No checking 308s are available to link. Enter the repayment on checking as CoA 308 (not 302 owner's draw or 306 loan payback). If it is already tied to another card charge, pick that 308 to reassign it."
-                    : "No outstanding card charges are available to link."}
-                </p>
-              ) : (
-                <label className="mt-3 block text-xs font-medium">
-                  {linkingPanel.kind === "charge"
-                    ? "Checking reimbursement"
-                    : "Card charge"}
-                  <select
-                    value={linking.selectedId}
-                    onChange={(event) =>
-                      setLinking((current) =>
-                        current
-                          ? { ...current, selectedId: event.target.value }
-                          : current
-                      )
-                    }
-                    className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900"
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    className="min-h-[33px] px-3 py-1.5"
+                    onClick={openPayChargesDraft}
                   >
-                    {linkingPanel.kind === "charge"
-                      ? linkingPanel.candidates.map((row) => (
-                          <option key={row.payment.id} value={row.payment.id}>
-                            {reimbursementRowLabel(
-                              row.payment,
-                              [
-                                row.amountMatch ? "amount match" : null,
-                                row.hasCardPaydown
-                                  ? "this is the 308 for the card pay-down"
-                                  : null,
-                                row.duplicateCharge
-                                  ? "possible duplicate — you choose what to delete"
-                                  : row.linkedCharge
-                                    ? "already linked — reassign"
-                                    : "unmatched",
-                                row.needsCoa308 ? "will become 308" : null,
-                              ]
-                                .filter(Boolean)
-                                .join(" · ")
-                            )}
-                          </option>
-                        ))
-                      : linkingPanel.candidates.map((row) => (
-                          <option key={row.charge.id} value={row.charge.id}>
-                            {reimbursementRowLabel(
-                              row.charge,
-                              [
-                                row.amountMatch ? "amount match" : null,
-                                row.sameOwner ? null : "other owner",
-                              ]
-                                .filter(Boolean)
-                                .join(" · ")
-                            )}
-                          </option>
-                        ))}
-                  </select>
-                </label>
-              )}
-              {linkingPanel.kind === "charge" &&
-              linkingPanel.selectedCandidate?.linkedCharge ? (
-                <div className="mt-3 rounded-md border border-amber-300 bg-white px-3 py-2 text-xs text-slate-800">
-                  {linkingPanel.selectedCandidate.duplicateCharge ? (
-                    <p className="font-medium text-amber-950">
-                      These two card charges look like the same purchase. Nothing
-                      is deleted unless you choose one below.
-                    </p>
-                  ) : (
-                    <p className="font-medium text-amber-950">
-                      This 308 already pays another card charge. Linking moves
-                      the 308 here; the other card row stays unless you delete
-                      it.
-                    </p>
-                  )}
-                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                    <div className="rounded border border-slate-200 p-2">
-                      <p className="font-semibold">This charge</p>
-                      <p className="mt-1">
-                        {linkingPanel.source
-                          ? reimbursementRowLabel(linkingPanel.source)
-                          : "—"}
-                      </p>
-                      {linkingPanel.source ? (
-                        <p className="mt-1 text-slate-500">
-                          {cardChargeOriginNote(linkingPanel.source)}
-                        </p>
-                      ) : null}
-                      {linkingPanel.source ? (
-                        <Button
-                          variant="secondary"
-                          className="mt-2 min-h-[33px] w-full px-3 py-1.5"
-                          disabled={Boolean(movingId)}
-                          onClick={() => {
-                            void deleteCardChargeRow(linkingPanel.source!);
-                          }}
-                        >
-                          Delete this card row
-                        </Button>
-                      ) : null}
-                    </div>
-                    <div className="rounded border border-slate-200 p-2">
-                      <p className="font-semibold">Already linked card row</p>
-                      <p className="mt-1">
-                        {reimbursementRowLabel(
-                          linkingPanel.selectedCandidate.linkedCharge
-                        )}
-                      </p>
-                      <p className="mt-1 text-slate-500">
-                        {cardChargeOriginNote(
-                          linkingPanel.selectedCandidate.linkedCharge
-                        )}
-                      </p>
-                      <Button
-                        variant="secondary"
-                        className="mt-2 min-h-[33px] w-full px-3 py-1.5"
-                        disabled={Boolean(movingId)}
-                        onClick={() => {
-                          void deleteCardChargeRow(
-                            linkingPanel.selectedCandidate!.linkedCharge!
-                          );
-                        }}
-                      >
-                        Delete the other card row
-                      </Button>
-                    </div>
-                  </div>
+                    Mark Items as Reimbursed
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="min-h-[33px] px-3 py-1.5"
+                    onClick={() => setSelectedChargeIds([])}
+                  >
+                    Clear
+                  </Button>
                 </div>
-              ) : null}
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button
-                  className="min-h-[33px] px-3 py-1.5"
-                  disabled={
-                    !linking.selectedId ||
-                    linkingPanel.candidates.length === 0 ||
-                    Boolean(movingId)
-                  }
-                  onClick={() => {
-                    void confirmReimbursementLink();
-                  }}
-                >
-                  {movingId ? "Linking..." : "Link these"}
-                </Button>
-                <Button
-                  variant="secondary"
-                  className="min-h-[33px] px-3 py-1.5"
-                  disabled={Boolean(movingId)}
-                  onClick={() => setLinking(null)}
-                >
-                  Cancel
-                </Button>
               </div>
             </div>
           ) : null}
@@ -2277,11 +2772,11 @@ export default function CashflowPage() {
               { key: "description", label: "Description" },
               { key: "coaCategory", label: "CoA Category" },
               { key: "amount", label: "Amount" },
+              { key: "reimbursed", label: "Reimbursed" },
               { key: "invoiceId", label: "Invoice ID" },
               { key: "purchasedBy", label: "Purchased By" },
               { key: "paidTo", label: "Paid To" },
               { key: "department", label: "Department" },
-              { key: "reimbursed", label: "Reimbursed" },
             ]}
             rows={displayItems.map((item) => {
               if (item.kind === "group") {
@@ -2376,7 +2871,7 @@ export default function CashflowPage() {
                       </Button>
                     )}
                     {isCheckingAccount(entry.account) &&
-                    reimbursementMaps.chargeByPaymentId.has(entry.id) &&
+                    reimbursementMaps.chargesByPaymentId.has(entry.id) &&
                     !isPersonalCardReimbursementCoa(entry.coa_category) ? (
                       <Button
                         variant="secondary"
@@ -2417,30 +2912,6 @@ export default function CashflowPage() {
                         </Button>
                       </>
                     ) : null}
-                    {isPersonalCardCharge(entry) &&
-                    !entry.reimbursed_by_ledger_id ? (
-                      <Button
-                        variant="secondary"
-                        className="w-full min-h-[33px] px-3 py-1.5"
-                        disabled={movingId === entry.id}
-                        onClick={() => startLinkCharge(entry)}
-                      >
-                        Reimbursed
-                      </Button>
-                    ) : null}
-                    {isPersonalCardCharge(entry) &&
-                    entry.reimbursed_by_ledger_id ? (
-                      <Button
-                        variant="secondary"
-                        className="w-full min-h-[33px] px-3 py-1.5"
-                        disabled={movingId === entry.id}
-                        onClick={() => {
-                          void unlinkCharge(entry);
-                        }}
-                      >
-                        Outstanding
-                      </Button>
-                    ) : null}
                     {canBillCardChargeOnInvoice(entry) ? (
                       <Button
                         variant="secondary"
@@ -2467,17 +2938,6 @@ export default function CashflowPage() {
                         {movingId === entry.id
                           ? "Deleting..."
                           : "Delete card row"}
-                      </Button>
-                    ) : null}
-                    {isCheckingCardReimbursement(entry) &&
-                    !reimbursementMaps.chargeByPaymentId.has(entry.id) ? (
-                      <Button
-                        variant="secondary"
-                        className="w-full min-h-[33px] px-3 py-1.5"
-                        disabled={movingId === entry.id}
-                        onClick={() => startLinkPayment(entry)}
-                      >
-                        Link charge
                       </Button>
                     ) : null}
                   </div>
@@ -2516,7 +2976,7 @@ export default function CashflowPage() {
                       </span>
                     ) : null}
                     {isCheckingAccount(entry.account) &&
-                    reimbursementMaps.chargeByPaymentId.has(entry.id) &&
+                    reimbursementMaps.chargesByPaymentId.has(entry.id) &&
                     !isPersonalCardReimbursementCoa(entry.coa_category) ? (
                       <span className="mt-0.5 block text-xs font-medium text-amber-800">
                         Linked card refund — change CoA to 308
@@ -2554,7 +3014,7 @@ export default function CashflowPage() {
                   const status = reimbursementStatus(
                     entry,
                     reimbursementMaps.byId,
-                    reimbursementMaps.chargeByPaymentId
+                    reimbursementMaps.chargesByPaymentId
                   );
                   if (status.kind === "needs-identification") {
                     return (
@@ -2574,19 +3034,45 @@ export default function CashflowPage() {
                     );
                   }
                   if (status.kind === "charge-outstanding") {
-                    return reimbursementMaps.duplicateChargeIds.has(entry.id) ? (
-                      <span className="text-xs font-medium text-amber-900">
-                        Possible duplicate · {cardChargeOriginNote(entry)}
+                    const canSelect = isUnreimbursedBusinessPersonalCardCharge(
+                      entry,
+                      parentById
+                    );
+                    return (
+                      <span>
+                        {canSelect ? (
+                          <label className="flex cursor-pointer items-start gap-2">
+                            <input
+                              type="checkbox"
+                              className="mt-0.5 size-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500"
+                              checked={selectedChargeIds.includes(entry.id)}
+                              onChange={() => toggleChargeToPay(entry.id)}
+                            />
+                            <span>
+                              <span className="block font-medium text-amber-800">
+                                Unpaid
+                              </span>
+                              <span className="mt-0.5 block text-xs text-slate-500">
+                                Check to include in a 308
+                              </span>
+                            </span>
+                          </label>
+                        ) : (
+                          <span className="font-medium text-amber-800">Unpaid</span>
+                        )}
+                        {reimbursementMaps.duplicateChargeIds.has(entry.id) ? (
+                          <span className="mt-0.5 block text-xs text-amber-900">
+                            Possible duplicate · {cardChargeOriginNote(entry)}
+                          </span>
+                        ) : null}
                       </span>
-                    ) : (
-                      "—"
                     );
                   }
                   if (status.kind === "charge-reimbursed") {
                     return (
                       <span>
-                        <span className="text-xs text-slate-500">
-                          {coaAccountNumber(status.payment.coa_category) ?? 308}{" "}
+                        <span className="text-xs text-slate-700">
+                          Paid · {coaAccountNumber(status.payment.coa_category) ?? 308}{" "}
                           {formatDate(status.payment.entry_date)}
                           {status.mismatch ? " · amount differs" : ""}
                         </span>
@@ -2606,12 +3092,24 @@ export default function CashflowPage() {
                     );
                   }
                   if (status.kind === "payment-matched") {
+                    const chargeCount = status.charges.length;
+                    const dates = status.charges
+                      .slice(0, 3)
+                      .map((row) => formatDate(row.entry_date));
+                    const extra =
+                      chargeCount > 3 ? ` +${chargeCount - 3} more` : "";
                     return (
                       <span>
-                        <span className="text-slate-700">Pays card charge</span>
+                        <span className="text-slate-700">
+                          Pays {chargeCount} card charge{chargeCount === 1 ? "" : "s"}
+                        </span>
                         <span className="mt-0.5 block text-xs text-slate-500">
-                          {formatDate(status.charge.entry_date)}
-                          {status.mismatch ? " · amount differs" : ""}
+                          {dates.join(", ")}{extra}
+                          {status.remaining >= 0.005
+                            ? ` · ${formatCurrency(status.remaining)} left`
+                            : status.remaining < -0.005
+                              ? " · over allocated"
+                              : ""}
                         </span>
                       </span>
                     );
