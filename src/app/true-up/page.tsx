@@ -303,11 +303,11 @@ function UntaggedTransfersTable({ rows }: { rows: TrueUpUntaggedTransfer[] }) {
         Untagged transfers ({rows.length})
       </h2>
       <p className="mb-3 text-sm text-slate-600">
-        Cashflow 203 / 302–399 rows with no Paid To and a CoA that does not
-        name both partners. Set <strong>Paid To</strong> to Jess or Molly, or
-        use a CoA such as 304 Jess to Molly. Paying your own credit card or
-        personal account (Paid To is the same person) is tagged and will not
-        appear here.
+        Cashflow 203 / 303 / 304 partner-transfer rows with no Paid To and a CoA
+        that does not name both partners. Set <strong>Paid To</strong> to Jess or
+        Molly, or use a CoA such as 304 Jess to Molly. 302 owner's draws, 306
+        loan paybacks, and 308 personal-card refunds are not partner transfers
+        and will not appear here.
       </p>
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
           <table className="min-w-full text-sm">

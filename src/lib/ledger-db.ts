@@ -138,6 +138,13 @@ export function normalizeLedgerRow(
     department: (r.department as LedgerEntry["department"] | null) ?? "Interior Design",
     expense_type: (r.expense_type as LedgerEntry["expense_type"]) ?? null,
     account: (r.account as LedgerEntry["account"]) ?? null,
+    moved_from_account:
+      (r.moved_from_account as LedgerEntry["moved_from_account"]) ?? null,
+    reimbursed_by_ledger_id: (r.reimbursed_by_ledger_id as string | null) ?? null,
+    personal_card_role:
+      r.personal_card_role === "charge" || r.personal_card_role === "reimbursement"
+        ? r.personal_card_role
+        : null,
     coa_category: ((r.coa_category as string | null) ?? "").trim() || null,
     source_ledger_id: (r.source_ledger_id as string | null) ?? null,
     companion_kind:

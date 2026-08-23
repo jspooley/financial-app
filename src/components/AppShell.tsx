@@ -73,12 +73,11 @@ function TradeAccountBox({
 }
 
 const cashflowHref = "/cashflow";
-const reconciliationHref = "/reconciliation";
 const salesUseTaxHref = "/sales-use-tax";
 const plReportHref = "/pl-report";
 const trueUpHref = "/true-up";
 const scheduleCHref = "/schedule-c";
-const bankCashflowHref = "/bank-cashflow";
+const debtTrackingHref = "/debt-tracking";
 const documentationHref = "/documentation";
 
 function ReportsBox({ pathname }: { pathname: string }) {
@@ -91,19 +90,13 @@ function ReportsBox({ pathname }: { pathname: string }) {
       </div>
       <Link
         href={cashflowHref}
-        className={navLinkClass(pathname === cashflowHref)}
+        className={navLinkClass(
+          pathname === cashflowHref || pathname === "/bank-cashflow"
+        )}
         title="Cashflow"
       >
         <span aria-hidden>💸</span>
         Cashflow
-      </Link>
-      <Link
-        href={bankCashflowHref}
-        className={navLinkClass(pathname === bankCashflowHref)}
-        title="Bank vs Cashflow Comparison"
-      >
-        <span aria-hidden>🏦</span>
-        Bank vs CF
       </Link>
       <Link
         href={salesUseTaxHref}
@@ -114,12 +107,12 @@ function ReportsBox({ pathname }: { pathname: string }) {
         Sales &amp; Use Tax
       </Link>
       <Link
-        href={plReportHref}
-        className={navLinkClass(pathname === plReportHref)}
-        title="P&L Report"
+        href={debtTrackingHref}
+        className={navLinkClass(pathname === debtTrackingHref)}
+        title="Debt Tracking"
       >
-        <span aria-hidden>📈</span>
-        P&amp;L Report
+        <span aria-hidden>👛</span>
+        Debt Tracking
       </Link>
       <Link
         href={trueUpHref}
@@ -130,20 +123,22 @@ function ReportsBox({ pathname }: { pathname: string }) {
         True Up Report
       </Link>
       <Link
-        href={reconciliationHref}
-        className={navLinkClass(pathname === reconciliationHref)}
-        title="Reconciliation Report"
-      >
-        <span aria-hidden>📋</span>
-        Reconciliation
-      </Link>
-      <Link
         href={scheduleCHref}
         className={navLinkClass(pathname === scheduleCHref)}
         title="Schedule C Report"
       >
         <span aria-hidden>🗂️</span>
         Schedule C
+      </Link>
+      <Link
+        href={plReportHref}
+        className={navLinkClass(
+          pathname === plReportHref || pathname === "/reconciliation"
+        )}
+        title="P&L Report"
+      >
+        <span aria-hidden>📈</span>
+        P&amp;L Report
       </Link>
     </div>
   );

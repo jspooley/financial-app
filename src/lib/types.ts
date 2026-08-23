@@ -53,6 +53,7 @@ export const COMPANION_KINDS = [
   "shipping",
   "fee",
   "transfer",
+  "card_reimburse",
 ] as const;
 
 export type CompanionKind = (typeof COMPANION_KINDS)[number];
@@ -76,6 +77,9 @@ export type LedgerInsert = {
   department?: CashflowDepartment | null;
   expense_type?: CashflowExpenseType | null;
   account?: CashflowAccount | null;
+  moved_from_account?: CashflowAccount | null;
+  reimbursed_by_ledger_id?: string | null;
+  personal_card_role?: "charge" | "reimbursement" | null;
   coa_category?: string | null;
   source_ledger_id?: string | null;
   companion_kind?: CompanionKind | null;
@@ -333,6 +337,12 @@ export interface LedgerEntry {
   department: CashflowDepartment;
   expense_type: CashflowExpenseType | null;
   account: CashflowAccount | null;
+  /** Original register if this row was moved (e.g. Checking → Credit Card). */
+  moved_from_account: CashflowAccount | null;
+  /** Checking 308 that reimbursed this personal-card charge (1:1). */
+  reimbursed_by_ledger_id: string | null;
+  /** charge = real CC purchase; reimbursement = checking 308 that was wrongly moved to CC. */
+  personal_card_role: "charge" | "reimbursement" | null;
   coa_category: string | null;
   source_ledger_id: string | null;
   companion_kind: CompanionKind | null;

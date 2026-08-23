@@ -334,7 +334,7 @@ export default function ReconciliationPage() {
   return (
     <AppShell>
       <PageHeader
-        title="Reconciliation Report"
+        title="P&L Recon"
         description="Compare total amount invoiced, payments, and revenue totals and find mismatches."
         action={
           <div className="flex flex-wrap gap-2">

@@ -7,12 +7,17 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
 import { collectClientPoOptions } from "@/lib/client-po-db";
 import { cashflowClassificationFlags, isRecordedTransferCoa } from "@/lib/coa";
+import { accountMoveFields, personalCardRoleFields } from "@/lib/account-move";
 import { normalizeInvoiceId, poNumbersMatch } from "@/lib/invoice-utils";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 import {
   deletePartnerTransferMate,
   syncPartnerTransferMate,
 } from "@/lib/partner-transfer";
+import {
+  deleteCardReimburseMate,
+  syncCardReimburseMate,
+} from "@/lib/card-reimbursement";
 import {
   CASHFLOW_ACCOUNTS,
   CASHFLOW_DEPARTMENTS,
@@ -74,8 +79,8 @@ interface ExpenseFormProps {
 function uniqueInvoiceIds(rows: InvoiceOptionRow[], clientId: string, poNumber: string) {
   const ids = new Set<string>();
   for (const row of rows) {
-    if (row.client_id !== clientId) continue;
-    if (!poNumbersMatch(row.po_number, poNumber)) continue;
+    if (clientId && row.client_id !== clientId) continue;
+    if (poNumber && !poNumbersMatch(row.po_number, poNumber)) continue;
     const id = normalizeInvoiceId(row.invoice_id);
     if (id) ids.add(id);
   }
@@ -156,7 +161,7 @@ export function ExpenseForm({
           const client = String(row.client_id ?? "");
           const po = String(row.po_number ?? "").trim();
           const invoice = normalizeInvoiceId(row.invoice_id ?? null);
-          if (!client) continue;
+          if (!invoice && !client) continue;
           rows.push({
             client_id: client,
             po_number: po,
@@ -188,7 +193,6 @@ export function ExpenseForm({
   }, [clientId, invoiceRows]);
 
   const invoiceOptions = useMemo(() => {
-    if (!clientId || !poNumber) return [];
     const options = uniqueInvoiceIds(invoiceRows, clientId, poNumber);
     const current = normalizeInvoiceId(invoiceId);
     if (current && !options.includes(current)) options.unshift(current);
@@ -219,7 +223,12 @@ export function ExpenseForm({
       description: values.description?.trim() || null,
       debit_amount: debit,
       credit_amount: credit,
-      account: values.account,
+      ...(initial
+        ? {
+            ...accountMoveFields(initial, values.account),
+            ...personalCardRoleFields(initial, values.account),
+          }
+        : { account: values.account }),
       purchaser: values.designer,
       coa_category: values.coa_category,
       ...cashflowClassificationFlags(values.coa_category),
@@ -263,6 +272,13 @@ export function ExpenseForm({
       setError(mateError);
       return;
     }
+    const cardMateError = saved
+      ? await syncCardReimburseMate(supabase, normalizeLedgerRow(saved))
+      : null;
+    if (cardMateError) {
+      setError(cardMateError);
+      return;
+    }
 
     onSuccess();
   }
@@ -279,6 +295,12 @@ export function ExpenseForm({
     if (mateError) {
       setDeleting(false);
       setError(mateError);
+      return;
+    }
+    const cardMateError = await deleteCardReimburseMate(supabase, initial.id);
+    if (cardMateError) {
+      setDeleting(false);
+      setError(cardMateError);
       return;
     }
     const { error: dbError } = await supabase
@@ -400,14 +422,9 @@ export function ExpenseForm({
           error={errors.invoice_id?.message}
           value={invoiceId}
           onChange={(event) => setValue("invoice_id", event.target.value)}
-          hint={
-            poNumber && invoiceOptions.length === 0
-              ? "No invoices for this PO yet."
-              : "Invoices for the selected PO (for example MJ-CM-202607-1)."
-          }
-          disabled={!poNumber}
+          hint="Optional. Link this cashflow row to a sales invoice (for example MJ-WD-202608-1). Client and PO can narrow the list."
         >
-          <option value="">{poNumber ? "None" : "Select a PO first"}</option>
+          <option value="">None</option>
           {invoiceOptions.map((id) => (
             <option key={id} value={id}>
               {id}

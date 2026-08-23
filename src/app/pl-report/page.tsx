@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { BalanceSheetItems } from "@/components/pl-report/BalanceSheetItems";
 import {
   PlTotalsCards,
   type PlExpenseDetailRow,
 } from "@/components/pl-report/PlTotalsCards";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
+  buildBalanceSheetReview,
   buildPlMonthlyRows,
   computePlTotals,
   filterLedgerEntriesForYear,
@@ -257,6 +259,7 @@ export default async function PlReportPage() {
   });
   const partners = (tradePartners ?? []) as TradePartner[];
   const grossProfitGoal = grossProfitGoalFromTradePartners(partners);
+  const balanceSheetReview = buildBalanceSheetReview(allLedgerEntries);
 
   return (
     <AppShell>
@@ -305,6 +308,8 @@ export default async function PlReportPage() {
           </span>
         </p>
       </section>
+
+      <BalanceSheetItems items={balanceSheetReview.items} />
 
       <section className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
         <h2 className="text-lg font-semibold text-slate-900">Monthly Breakdown</h2>

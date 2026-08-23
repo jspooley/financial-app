@@ -377,9 +377,22 @@ export default function PaymentsPage() {
       (entry) => !isLedgerLineFullyPaid(entry)
     );
     // Include variance-only / expense write-offs (cash settled may be $0).
+    // Also keep other lines on those invoices visible — a new goods line on a
+    // write-off invoice is still unpaid, so it would otherwise vanish from this list.
+    const settledInvoiceIds = new Set(
+      allInvoicedDebits
+        .filter(
+          (entry) =>
+            isLedgerLineFullyPaid(entry) || ledgerLineAmountSettled(entry) > 0
+        )
+        .map((entry) => normalizeInvoiceId(entry.invoice_id))
+        .filter(Boolean)
+    );
     const paymentHistory = allInvoicedDebits.filter(
       (entry) =>
-        isLedgerLineFullyPaid(entry) || ledgerLineAmountSettled(entry) > 0
+        isLedgerLineFullyPaid(entry) ||
+        ledgerLineAmountSettled(entry) > 0 ||
+        settledInvoiceIds.has(normalizeInvoiceId(entry.invoice_id))
     );
 
     if (unpaidDebits.length === 0) {

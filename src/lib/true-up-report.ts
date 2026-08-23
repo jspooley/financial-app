@@ -1,11 +1,13 @@
 import {
   coaAccountNumber,
+  isBusinessLoanPaybackCoa,
   isInvoiceGoodsLine,
   isLiabilityCoa,
   isOperatingExpenseCoa,
   isOperatingExpenseEntry,
   isOwnerEquityCoa,
   isPartnerToPartnerTransferCoa,
+  isPersonalCardReimbursementCoa,
   isRecordedTransferCoa,
   isSalesIncomeCoa,
   isTaxesAndLicensesCoa,
@@ -328,6 +330,8 @@ function isPersonalUseTrueUpEntry(
 function skipTrueUpShare(entry: LedgerEntry) {
   return (
     isOwnerEquityCoa(entry.coa_category) ||
+    isPersonalCardReimbursementCoa(entry.coa_category) ||
+    isBusinessLoanPaybackCoa(entry.coa_category) ||
     isTaxesAndLicensesCoa(entry.coa_category) ||
     isLiabilityCoa(entry.coa_category)
   );

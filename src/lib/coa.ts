@@ -1,10 +1,22 @@
-import type { LedgerEntry } from "./types";
+import type { LedgerEntry, Purchaser } from "./types";
 
 export const COA_SALES_INCOME_CATEGORY = "100 Sales Income";
 export const COA_COGS_CATEGORY = "101 COGS";
 export const COA_FEES_CATEGORY = "203 commissions and fees";
-export const COA_TRANSFERS_CATEGORY =
-  "302 Transfers between accounts (paying a credit card bill)";
+export const COA_OWNERS_CONTRIBUTION_CATEGORY =
+  "300 Owner's Contribution - Jes";
+export const COA_OWNERS_CONTRIBUTION_MOLLY_CATEGORY =
+  "310 Owner's Contribution - Molly";
+export const COA_OWNERS_DRAW_CATEGORY =
+  "302 Owner's Draws (transfer profit)";
+export const COA_BUSINESS_LOAN_PAYBACK_MOLLY_CATEGORY =
+  "305 Biz Loan Payback - Molly";
+export const COA_BUSINESS_LOAN_PAYBACK_CATEGORY =
+  "306 Biz Loan Payback - Jess";
+export const COA_PERSONAL_CARD_REIMBURSE_CATEGORY =
+  "308 Reimburse personal credit card";
+/** @deprecated Use COA_PERSONAL_CARD_REIMBURSE_CATEGORY — 302 is owner's draw. */
+export const COA_TRANSFERS_CATEGORY = COA_PERSONAL_CARD_REIMBURSE_CATEGORY;
 export const COA_SU_TAX_PAYABLE_CATEGORY = "400 Sales & Use Tax Payable";
 
 /** Leading account number from a CoA label, e.g. "210 Office Expense" → 210. */
@@ -71,18 +83,70 @@ export function isPartnerToPartnerTransferCoa(
   return label.includes("jess") && label.includes("molly");
 }
 
-/** Partner true-up transfers: 203 commissions/fees and 302–399 account transfers. */
+/** 300 Jess / 310 Molly — owner puts personal cash into the business. */
+export function isOwnerContributionCoa(
+  category: string | null | undefined
+): boolean {
+  const n = coaAccountNumber(category);
+  return n === 300 || n === 310;
+}
+
+/** 302 — take profit out as an owner's draw. Not a card reimbursement. */
+export function isOwnersDrawCoa(category: string | null | undefined): boolean {
+  return coaAccountNumber(category) === 302;
+}
+
+/** 305 Molly / 306 Jess — pay back a business loan. */
+export function isBusinessLoanPaybackCoa(
+  category: string | null | undefined
+): boolean {
+  const n = coaAccountNumber(category);
+  return n === 305 || n === 306;
+}
+
+/**
+ * Partner encoded on owner capital CoAs:
+ * 300 contribution and 306 loan payback = Jess;
+ * 310 contribution and 305 loan payback = Molly.
+ */
+export function partnerFromOwnerCapitalCoa(
+  category: string | null | undefined
+): Purchaser | null {
+  const n = coaAccountNumber(category);
+  if (n === 300 || n === 306) return "Jess";
+  if (n === 310 || n === 305) return "Molly";
+  return null;
+}
+
+/** 308 — repay a personal credit card from checking. */
+export function isPersonalCardReimbursementCoa(
+  category: string | null | undefined
+): boolean {
+  return coaAccountNumber(category) === 308;
+}
+
+/**
+ * Partner true-up transfers: 203 commissions/fees and 303/304 partner-to-partner.
+ * 300/310 contributions, 302 draws, 305/306 loan paybacks, and 308 card refunds
+ * are not 50/50 partner transfers.
+ */
 export function isRecordedTransferCoa(
   category: string | null | undefined
 ): boolean {
   const n = coaAccountNumber(category);
-  return n === 203 || (n != null && n >= 302 && n < 400);
+  if (n === 203) return true;
+  if (isPartnerToPartnerTransferCoa(category)) return true;
+  if (isOwnerContributionCoa(category)) return false;
+  if (isOwnersDrawCoa(category)) return false;
+  if (isBusinessLoanPaybackCoa(category)) return false;
+  if (isPersonalCardReimbursementCoa(category)) return false;
+  return n != null && n >= 305 && n < 400;
 }
 
-/** 300 Owner's Contribution and 301 Owner's Draws — equity, not a 50/50 share. */
+/** 300/310 contribution, 301/302 owner's draws — equity, not a 50/50 share. */
 export function isOwnerEquityCoa(category: string | null | undefined): boolean {
   const n = coaAccountNumber(category);
-  return n === 300 || n === 301;
+  return n === 300 || n === 301 || n === 302 || n === 310;
 }
 
 /** 214 Taxes and licenses — remitted to the state, not a 50/50 partner share. */
@@ -115,12 +179,19 @@ type CoaKindFields = Pick<
 >;
 
 /**
- * Goods / services invoice lines — classified from ledger relationship/data,
- * not CoA. Changing CoA (e.g. 101 → 302) must not hide these from Ledger /
- * Invoicing / Payments.
+ * Goods / services invoice lines — billed to a client on Invoicing.
+ * Cashflow 200–399 rows (including 308 personal-card refunds) can keep an
+ * invoice ID for true-up without becoming a $0 customer line.
+ * A real goods line recoded to a 300s CoA still counts if it has designer cost.
  */
 export function isInvoiceGoodsLine(entry: CoaKindFields): boolean {
   if (entry.source_ledger_id) return false;
+  if (
+    isCashflowOperatingCoa(entry.coa_category) &&
+    Number(entry.designer_cost ?? 0) <= 0
+  ) {
+    return false;
+  }
   if (entry.client_id) return true;
   if (Number(entry.designer_cost ?? 0) > 0) return true;
   if (entry.invoiced) return true;

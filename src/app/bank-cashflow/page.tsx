@@ -149,7 +149,7 @@ export default function BankCashflowComparisonPage() {
   return (
     <AppShell>
       <PageHeader
-        title="Bank vs Cashflow Comparison"
+        title="Checking Reconciliation"
         description="Paste transactions (and optional ending balances) from your bank and from Cashflow, then run a comparison to surface differences."
         action={
           <div className="flex flex-wrap gap-2">

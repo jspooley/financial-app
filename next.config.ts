@@ -23,6 +23,16 @@ const nextConfig: NextConfig = {
         destination: "/payments",
         permanent: true,
       },
+      {
+        source: "/personal-funds",
+        destination: "/debt-tracking",
+        permanent: true,
+      },
+      {
+        source: "/biz-debt",
+        destination: "/debt-tracking",
+        permanent: true,
+      },
     ];
   },
 };

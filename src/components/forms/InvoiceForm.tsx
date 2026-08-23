@@ -259,7 +259,9 @@ export function InvoiceForm({
       .then(({ data }) => {
         if (cancelled) return;
         setCurrentInvoiceLines(
-          (data ?? []).map((row) => normalizeLedgerRow(row) as InvoiceLineItem)
+          (data ?? [])
+            .map((row) => normalizeLedgerRow(row) as InvoiceLineItem)
+            .filter(isInvoiceGoodsLine)
         );
         setLoadingCurrentInvoiceLines(false);
       });

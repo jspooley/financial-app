@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { ExpenseForm } from "@/components/forms/ExpenseForm";
 import { LedgerAccountForm } from "@/components/forms/LedgerAccountForm";
@@ -11,8 +12,6 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { normalizeInvoiceId } from "@/lib/invoice-utils";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 import {
-  COA_COGS_CATEGORY,
-  cashflowClassificationFlags,
   coaAccountNumber,
   isCogsCoa,
   isCashflowManagedEntry,
@@ -20,10 +19,46 @@ import {
   isInvoiceGoodsLine,
   isOperatingExpenseEntry,
   isPartnerToPartnerTransferCoa,
-  isRecordedTransferCoa,
+  isPersonalCardReimbursementCoa,
   isSalesIncomeCoa,
 } from "@/lib/coa";
 import { isCostCompanionRow } from "@/lib/cost-companions";
+import {
+  isCheckingAccount,
+  matchingCheckingAccount,
+  matchingCreditCardAccount,
+} from "@/lib/account-move";
+import {
+  personalCardReimbursementCategory,
+  billCardChargeOnInvoice,
+  canBillCardChargeOnInvoice,
+  cardChargeOriginNote,
+  cardReimburseClusterParentId,
+  cardReimburseClusterRank,
+  cardReimburseNet,
+  chargeCandidatesForPayment,
+  cogsCategoryFromChart,
+  deletePersonalCardCharge,
+  duplicateCardChargeGroups,
+  identifyMovedRowAsCharge,
+  identifyMovedRowAsReimbursement,
+  isCardReimburseMateRow,
+  isCheckingCardReimbursement,
+  isPersonalCardCharge,
+  linkCardChargeToReimbursement,
+  mergeCardReimburseDisplayMates,
+  needsPersonalCardIdentification,
+  outstandingPersonalCardTotal,
+  persistAmountMatchedReimbursements,
+  persistOldestFirstReimbursements,
+  recodeCheckingPaymentToPersonalCardReimburse,
+  proposeAmountMatchedReimbursements,
+  reimbursementByPaymentId,
+  reimbursementCandidatesForCharge,
+  reimbursementStatus,
+  unlinkCardChargeReimbursement,
+  withCardReimburseCluster,
+} from "@/lib/card-reimbursement";
 import {
   isPartnerTransferMateRow,
   isPartnerTransferParentRow,
@@ -36,7 +71,6 @@ import {
   CASHFLOW_ACCOUNTS,
   type CashflowAccount,
   type ChartOfAccount,
-  type CompanionKind,
   type LedgerEntry,
   type Purchaser,
 } from "@/lib/types";
@@ -74,6 +108,36 @@ function formatSignedCash(value: number) {
       {formatCurrency(value)}
     </span>
   );
+}
+
+function reimbursementRowLabel(entry: LedgerEntry, extra?: string) {
+  const amount = formatCurrency(Math.abs(cardReimburseNet(entry)));
+  const description = (entry.description ?? "").trim() || "No description";
+  const parts = [
+    formatDate(entry.entry_date),
+    amount,
+    entry.account ?? "",
+    description.length > 48 ? `${description.slice(0, 48)}…` : description,
+  ];
+  if (extra) parts.push(extra);
+  return parts.filter(Boolean).join(" · ");
+}
+
+function accountMoveColumnError(message: string) {
+  if (message.toLowerCase().includes("column")) {
+    return "Run migrations 071–074 in Supabase (moved_from_account, reimbursed_by_ledger_id, personal_card_role, CoA 306/308), then try again.";
+  }
+  return message;
+}
+
+function reimbursementSetRole(
+  entry: LedgerEntry
+): "purchase" | "card-paydown" | null {
+  if (isCardReimburseMateRow(entry)) return "card-paydown";
+  if (isPersonalCardCharge(entry) && entry.reimbursed_by_ledger_id) {
+    return "purchase";
+  }
+  return null;
 }
 
 function isOperatingExpense(entry: LedgerEntry) {
@@ -252,32 +316,6 @@ function buildPaymentInvoiceByParentId(entries: LedgerEntry[]) {
   return map;
 }
 
-function uniqueOrDash(values: Array<string | null | undefined>) {
-  const unique = [
-    ...new Set(
-      values
-        .map((value) => (typeof value === "string" ? value.trim() : ""))
-        .filter(Boolean)
-    ),
-  ];
-  if (unique.length === 0) return "—";
-  if (unique.length === 1) return unique[0];
-  return "Multiple";
-}
-
-/** Join unique ledger descriptions for rollup rows (never collapse to "Multiple"). */
-function joinedDescriptions(values: Array<string | null | undefined>) {
-  const unique = [
-    ...new Set(
-      values
-        .map((value) => (typeof value === "string" ? value.trim() : ""))
-        .filter(Boolean)
-    ),
-  ];
-  if (unique.length === 0) return "—";
-  return unique.join("; ");
-}
-
 function MultiSelectDropdown({
   label,
   allLabel,
@@ -355,324 +393,240 @@ function MultiSelectDropdown({
   );
 }
 
-type CashflowGroupType = "sales-income" | "cogs" | "purchase" | "description";
+type CashflowGroupField =
+  | "coa"
+  | "invoice"
+  | "paidTo"
+  | "purchasedBy"
+  | "department"
+  | "description";
 
-type CashflowGroup = {
-  kind: "group";
-  key: string;
-  groupType: CashflowGroupType;
-  invoiceId: string;
-  entries: LedgerEntry[];
-  date: string;
-  account: string;
-  title: string;
-  subtitle: string;
-  coaLabel: string;
-  debit: number;
-  credit: number;
-  paidTo: string;
-  purchasedBy: string;
+type CashflowGroupLevel = CashflowGroupField | "none";
+
+const CASHFLOW_GROUP_FIELDS: { value: CashflowGroupField; label: string }[] = [
+  { value: "coa", label: "COA Category" },
+  { value: "invoice", label: "Invoice ID" },
+  { value: "paidTo", label: "Paid To" },
+  { value: "purchasedBy", label: "Purchased By" },
+  { value: "department", label: "Department" },
+  { value: "description", label: "Description" },
+];
+
+const DEFAULT_CASHFLOW_GROUP_LEVELS: [
+  CashflowGroupLevel,
+  CashflowGroupLevel,
+  CashflowGroupLevel,
+] = ["none", "none", "none"];
+
+function activeGroupLevels(
+  levels: readonly CashflowGroupLevel[]
+): CashflowGroupField[] {
+  const active: CashflowGroupField[] = [];
+  for (const field of levels) {
+    if (field === "none") break;
+    active.push(field);
+  }
+  return active;
+}
+
+type CashflowGroupContext = {
+  paymentInvoiceByParentId: Map<string, string>;
+  parentById: Map<string, LedgerEntry>;
+  monthFilter: string[];
+  accountFilter: CashflowAccount[];
+  showAllAccounts: boolean;
 };
 
 type CashflowDisplayItem =
-  | { kind: "entry"; entry: LedgerEntry }
-  | { kind: "child"; entry: LedgerEntry; groupKey: string }
-  | CashflowGroup;
+  | {
+      kind: "group";
+      key: string;
+      level: number;
+      field: CashflowGroupField;
+      label: string;
+      entries: LedgerEntry[];
+      debit: number;
+      credit: number;
+    }
+  | { kind: "entry"; entry: LedgerEntry; level: number };
 
-const COMPANION_LABELS: Record<string, string> = {
-  tax: "tax",
-  shipping: "shipping",
-  fee: "payment fee",
-};
-
-function purchaseGroupSubtitle(group: LedgerEntry[]) {
-  const kinds = [
-    ...new Set(
-      group
-        .map((entry) => entry.companion_kind)
-        .filter((kind): kind is CompanionKind => Boolean(kind))
-        .map((kind) => COMPANION_LABELS[kind] ?? kind)
-    ),
-  ];
-  return kinds.length
-    ? `Goods + ${kinds.join(", ")}`
-    : `${group.length} lines`;
+function GroupExpandArrow({ expanded }: { expanded: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="flex size-7 shrink-0 items-center justify-center text-slate-500"
+    >
+      <span
+        className={`inline-block text-[11px] leading-none transition-transform ${
+          expanded ? "rotate-90" : ""
+        }`}
+      >
+        ▶
+      </span>
+    </span>
+  );
 }
 
-function groupTypeFromKey(key: string): CashflowGroupType {
-  if (key.startsWith("sales:")) return "sales-income";
-  if (key.startsWith("cogs:")) return "cogs";
-  if (key.startsWith("desc:") || key.startsWith("linked:")) return "description";
-  return "purchase";
+function cashflowCoaLabel(entry: Pick<LedgerEntry, "coa_category">) {
+  return entry.coa_category?.trim() || "Uncategorized";
 }
 
-function buildCashflowGroup(
-  key: string,
-  groupType: CashflowGroupType,
-  group: LedgerEntry[],
-  monthFilter: string[],
-  accountFilter: CashflowAccount[],
-  showAllAccounts: boolean,
-  paymentInvoiceByParentId: Map<string, string> = new Map(),
-  parentById: Map<string, LedgerEntry> = new Map()
-): CashflowGroup {
+function compareCoaLabels(a: string, b: string) {
+  if (a === "Uncategorized" && b !== "Uncategorized") return 1;
+  if (b === "Uncategorized" && a !== "Uncategorized") return -1;
+  const na = coaAccountNumber(a);
+  const nb = coaAccountNumber(b);
+  if (na != null && nb != null && na !== nb) return na - nb;
+  if (na != null && nb == null) return -1;
+  if (na == null && nb != null) return 1;
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+}
+
+function groupValueForField(
+  entry: LedgerEntry,
+  field: CashflowGroupField,
+  ctx: CashflowGroupContext
+) {
+  switch (field) {
+    case "coa":
+      return cashflowCoaLabel(entry);
+    case "invoice":
+      return (
+        effectiveInvoiceId(entry, ctx.paymentInvoiceByParentId) || "No invoice"
+      );
+    case "paidTo":
+      return entry.paid_to?.trim() || "—";
+    case "purchasedBy":
+      return entry.purchaser?.trim() || "—";
+    case "department":
+      return entry.department?.trim() || "—";
+    case "description":
+      return cashflowEntryDescriptionKey(entry, ctx.parentById) || "—";
+  }
+}
+
+function compareGroupLabels(
+  field: CashflowGroupField,
+  a: string,
+  b: string
+) {
+  const aBlank = a === "—" || a === "No invoice";
+  const bBlank = b === "—" || b === "No invoice";
+  if (aBlank !== bBlank) return aBlank ? 1 : -1;
+  if (field === "coa") return compareCoaLabels(a, b);
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+}
+
+function groupPathKey(
+  parentKey: string,
+  field: CashflowGroupField,
+  label: string
+) {
+  const segment = `${field}:${label}`;
+  return parentKey ? `${parentKey}\u001f${segment}` : segment;
+}
+
+function bucketEntries(
+  entries: LedgerEntry[],
+  field: CashflowGroupField,
+  ctx: CashflowGroupContext
+) {
+  const buckets = new Map<string, LedgerEntry[]>();
+  for (const entry of entries) {
+    const label = groupValueForField(entry, field, ctx);
+    const members = buckets.get(label) ?? [];
+    members.push(entry);
+    buckets.set(label, members);
+  }
+  return [...buckets.entries()].sort((a, b) =>
+    compareGroupLabels(field, a[0], b[0])
+  );
+}
+
+function outlineGroupTotals(
+  entries: LedgerEntry[],
+  ctx: CashflowGroupContext
+) {
   let debit = 0;
   let credit = 0;
-  const dates: string[] = [];
-  for (const entry of group) {
+  for (const entry of entries) {
     const amounts = amountsForAccountFilter(
       entry,
-      monthFilter,
-      accountFilter,
-      showAllAccounts
+      ctx.monthFilter,
+      ctx.accountFilter,
+      ctx.showAllAccounts
     );
     debit += amounts.debit;
     credit += amounts.credit;
-    dates.push(cashflowEntryDate(entry));
   }
-  dates.sort((a, b) => b.localeCompare(a));
-
-  const invoiceId =
-    normalizeInvoiceId(
-      group.find((entry) => normalizeInvoiceId(entry.invoice_id))?.invoice_id
-    ) ||
-    group
-      .map((entry) => effectiveInvoiceId(entry, paymentInvoiceByParentId))
-      .find(Boolean) ||
-    "";
-  const parent = group.find((entry) => !entry.source_ledger_id) ?? group[0];
-  const companionCount = group.filter((entry) => isCostCompanionRow(entry)).length;
-  const descriptionSources =
-    groupType === "cogs"
-      ? group.filter((entry) => !entry.source_ledger_id)
-      : group;
-  const descriptionTitle = joinedDescriptions(
-    descriptionSources.map(
-      (entry) => cashflowEntryDescriptionKey(entry, parentById) || null
-    )
-  );
-
-  return {
-    kind: "group",
-    key,
-    groupType,
-    invoiceId,
-    entries: group,
-    date: dates[0] ? formatDate(dates[0]) : "—",
-    account: uniqueOrDash(group.map((entry) => entry.account)),
-    title:
-      groupType === "sales-income" ||
-      groupType === "cogs" ||
-      groupType === "description"
-        ? descriptionTitle
-        : parent.description?.trim() || parent.clients?.name || "Purchase",
-    subtitle:
-      groupType === "sales-income"
-        ? `${group.length} payments`
-        : groupType === "cogs"
-          ? companionCount > 0
-            ? `${group.length - companionCount} goods + ${companionCount} companion${companionCount === 1 ? "" : "s"}`
-            : `${group.length} goods lines`
-          : groupType === "description"
-            ? `${group.length} lines`
-            : purchaseGroupSubtitle(group),
-    coaLabel:
-      groupType === "cogs"
-        ? COA_COGS_CATEGORY
-        : uniqueOrDash(group.map((entry) => entry.coa_category)),
-    debit: roundMoney(debit),
-    credit: roundMoney(credit),
-    paidTo: uniqueOrDash(group.map((entry) => entry.paid_to)),
-    purchasedBy: uniqueOrDash(group.map((entry) => entry.purchaser)),
-  };
+  return { debit: roundMoney(debit), credit: roundMoney(credit) };
 }
 
-/**
- * Collapsible register rows. Sales Income credits and 101 COGS goods (plus their
- * shipping/fee companions) each collapse by invoice ID into separate summary
- * rows. Goods without an invoice still collapse with their companions as a
- * purchase group. Expanding a group re-lists its members underneath.
- */
-function buildCashflowDisplayItems(
+function buildCashflowOutlineItems(
   entries: LedgerEntry[],
-  monthFilter: string[],
-  accountFilter: CashflowAccount[],
-  showAllAccounts: boolean,
-  grouped: boolean,
-  expandedGroups: Set<string>
+  levels: CashflowGroupField[],
+  expandedGroups: Set<string>,
+  ctx: CashflowGroupContext,
+  parentKey = "",
+  depth = 0
 ): CashflowDisplayItem[] {
-  if (!grouped) {
-    return entries.map((entry) => ({ kind: "entry" as const, entry }));
+  if (depth >= levels.length) {
+    return entries.map((entry) => ({
+      kind: "entry" as const,
+      entry,
+      level: depth,
+    }));
   }
 
-  const visibleIds = new Set(entries.map((entry) => entry.id));
-  const entryById = new Map(entries.map((entry) => [entry.id, entry]));
-  const paymentInvoiceByParentId = buildPaymentInvoiceByParentId(entries);
-
-  const salesCountByInvoice = new Map<string, number>();
-  for (const entry of entries) {
-    if (!isSalesIncomeCredit(entry)) continue;
-    const invoiceId = normalizeInvoiceId(entry.invoice_id);
-    if (!invoiceId) continue;
-    salesCountByInvoice.set(
-      invoiceId,
-      (salesCountByInvoice.get(invoiceId) ?? 0) + 1
-    );
-  }
-
-  const cogsCountByInvoice = new Map<string, number>();
-  for (const entry of entries) {
-    if (!isCogsGoodsParent(entry)) continue;
-    const invoiceId = effectiveInvoiceId(entry, paymentInvoiceByParentId);
-    if (!invoiceId) continue;
-    cogsCountByInvoice.set(
-      invoiceId,
-      (cogsCountByInvoice.get(invoiceId) ?? 0) + 1
-    );
-  }
-
-  const parentsWithCompanions = new Set<string>();
-  for (const entry of entries) {
-    if (!isCostCompanionRow(entry)) continue;
-    const parentId = entry.source_ledger_id;
-    if (parentId && visibleIds.has(parentId)) parentsWithCompanions.add(parentId);
-  }
-
-  const cogsInvoiceKeyForParent = (parent: LedgerEntry): string | null => {
-    if (!isCogsGoodsParent(parent)) return null;
-    const invoiceId = effectiveInvoiceId(parent, paymentInvoiceByParentId);
-    // Roll up whenever this invoice has COGS — including a single goods line —
-    // so it can sit next to the matching Sales Income rollup.
-    if (!invoiceId || (cogsCountByInvoice.get(invoiceId) ?? 0) < 1) return null;
-    return `cogs:${invoiceId}`;
-  };
-
-  /** Invoice / purchase rollups — description grouping is a fallback after these. */
-  const primaryGroupKeyFor = (entry: LedgerEntry): string | null => {
-    if (isCostCompanionRow(entry)) {
-      const parentId = entry.source_ledger_id;
-      if (!parentId || !parentsWithCompanions.has(parentId)) return null;
-      const parent = entryById.get(parentId);
-      if (parent) {
-        const cogsKey = cogsInvoiceKeyForParent(parent);
-        if (cogsKey) return cogsKey;
-      }
-      return `purchase:${parentId}`;
-    }
-
-    const cogsKey = cogsInvoiceKeyForParent(entry);
-    if (cogsKey) return cogsKey;
-
-    if (parentsWithCompanions.has(entry.id)) return `purchase:${entry.id}`;
-
-    // Personal-use S&U tax lives on the S&U report; remittances are entered
-    // manually via Add Entry on Cashflow — do not group payment leftovers here.
-    if (isSalesIncomeCredit(entry)) {
-      const invoiceId = normalizeInvoiceId(entry.invoice_id);
-      // Match COGS: roll up any invoiced sales credit so it can sit beside COGS.
-      if (invoiceId && (salesCountByInvoice.get(invoiceId) ?? 0) >= 1) {
-        return `sales:${invoiceId}`;
-      }
-    }
-    return null;
-  };
-
-  const descriptionCounts = new Map<string, number>();
-  for (const entry of entries) {
-    if (primaryGroupKeyFor(entry)) continue;
-    const description = cashflowEntryDescriptionKey(entry, entryById)
-      .trim()
-      .toLowerCase();
-    if (!description) continue;
-    descriptionCounts.set(
-      description,
-      (descriptionCounts.get(description) ?? 0) + 1
-    );
-  }
-
-  const groupKeyFor = (entry: LedgerEntry): string | null => {
-    const primary = primaryGroupKeyFor(entry);
-    if (primary) return primary;
-    // Partner transfers post both checking sides; keep them as separate register
-    // lines so the pair does not collapse to a $0 description group.
-    if (
-      isPartnerTransferMateRow(entry) ||
-      isPartnerTransferParentRow(entry)
-    ) {
-      return null;
-    }
-    const description = cashflowEntryDescriptionKey(entry, entryById)
-      .trim()
-      .toLowerCase();
-    if (description && (descriptionCounts.get(description) ?? 0) >= 2) {
-      return `desc:${description}`;
-    }
-    return null;
-  };
-
-  const membersByKey = new Map<string, LedgerEntry[]>();
-  for (const entry of entries) {
-    const key = groupKeyFor(entry);
-    if (!key) continue;
-    const members = membersByKey.get(key) ?? [];
-    members.push(entry);
-    membersByKey.set(key, members);
-  }
-
+  const field = levels[depth];
   const items: CashflowDisplayItem[] = [];
-  const emitted = new Set<string>();
-  for (const entry of entries) {
-    const key = groupKeyFor(entry);
-    if (!key) {
-      items.push({ kind: "entry", entry });
-      continue;
-    }
-    if (emitted.has(key)) continue;
-    emitted.add(key);
-
-    const members = membersByKey.get(key) ?? [entry];
-    items.push(
-      buildCashflowGroup(
-        key,
-        groupTypeFromKey(key),
-        members,
-        monthFilter,
-        accountFilter,
-        showAllAccounts,
-        paymentInvoiceByParentId,
-        entryById
-      )
-    );
+  for (const [label, members] of bucketEntries(entries, field, ctx)) {
+    const key = groupPathKey(parentKey, field, label);
+    const totals = outlineGroupTotals(members, ctx);
+    items.push({
+      kind: "group",
+      key,
+      level: depth,
+      field,
+      label,
+      entries: members,
+      debit: totals.debit,
+      credit: totals.credit,
+    });
     if (expandedGroups.has(key)) {
-      for (const member of members) {
-        items.push({ kind: "child", entry: member, groupKey: key });
-      }
+      items.push(
+        ...buildCashflowOutlineItems(
+          members,
+          levels,
+          expandedGroups,
+          ctx,
+          key,
+          depth + 1
+        )
+      );
     }
   }
   return items;
 }
 
-type BalanceSheetReviewKind =
-  | "Personal-use goods"
-  | "Personal-use companion"
-  | "300-series transfer / equity"
-  | "Unexpected";
-
-function balanceSheetReviewKind(
-  entry: LedgerEntry,
-  parentById: Map<string, LedgerEntry>
-): BalanceSheetReviewKind {
-  if (isInvoiceGoodsLine(entry)) return "Personal-use goods";
-  if (entry.source_ledger_id) {
-    const parent = parentById.get(entry.source_ledger_id);
-    if (parent && (isInvoiceGoodsLine(parent) || parent.balance_sheet)) {
-      return "Personal-use companion";
-    }
+function collectOutlineGroupKeys(
+  entries: LedgerEntry[],
+  levels: CashflowGroupField[],
+  ctx: CashflowGroupContext,
+  parentKey = "",
+  depth = 0
+): string[] {
+  if (depth >= levels.length) return [];
+  const field = levels[depth];
+  const keys: string[] = [];
+  for (const [label, members] of bucketEntries(entries, field, ctx)) {
+    const key = groupPathKey(parentKey, field, label);
+    keys.push(
+      key,
+      ...collectOutlineGroupKeys(members, levels, ctx, key, depth + 1)
+    );
   }
-  if (cashflowClassificationFlags(entry.coa_category ?? "").balance_sheet) {
-    return "300-series transfer / equity";
-  }
-  return "Unexpected";
+  return keys;
 }
 
 /**
@@ -777,6 +731,7 @@ function entryMatchesCoaFilter(
   entry: LedgerEntry,
   selectedCategories: string[]
 ): boolean {
+  if (isCardReimburseMateRow(entry)) return false;
   const category = entry.coa_category;
   if (!category) return false;
   if (selectedCategories.includes(category)) return true;
@@ -892,18 +847,30 @@ export default function CashflowPage() {
   const [defaultDesigner, setDefaultDesigner] = useState<Purchaser>("Jess");
   /** Empty = show all accounts; otherwise match any selected account. */
   const [accountFilter, setAccountFilter] = useState<CashflowAccount[]>([]);
+  const [showCardPaydowns, setShowCardPaydowns] = useState(false);
   /** Empty = all months; otherwise YYYY-MM. */
   const [monthFilter, setMonthFilter] = useState<string[]>([]);
   /** Empty = all invoices; otherwise match any selected invoice ID. */
   const [invoiceFilter, setInvoiceFilter] = useState<string[]>([]);
   /** Empty = all CoA categories; otherwise match any selected category. */
   const [coaCategoryFilter, setCoaCategoryFilter] = useState<string[]>([]);
+  const [reimbursementFilter, setReimbursementFilter] = useState<
+    "all" | "needs-id" | "duplicates"
+  >("all");
   const [sortBy, setSortBy] = useState<"date" | "description">("date");
-  const [grouped, setGrouped] = useState(true);
+  const [groupLevels, setGroupLevels] = useState<
+    [CashflowGroupLevel, CashflowGroupLevel, CashflowGroupLevel]
+  >(DEFAULT_CASHFLOW_GROUP_LEVELS);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
     () => new Set()
   );
-  const [showBalanceSheetReview, setShowBalanceSheetReview] = useState(false);
+  const [movingId, setMovingId] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [linking, setLinking] = useState<
+    | { kind: "charge"; entryId: string; selectedId: string }
+    | { kind: "payment"; entryId: string; selectedId: string }
+    | null
+  >(null);
 
   const loadEntries = useCallback(async () => {
     setLoading(true);
@@ -929,7 +896,23 @@ export default function CashflowPage() {
       setLoadError(error.message);
       setEntries([]);
     } else {
-      setEntries((data ?? []).map((row) => normalizeLedgerRow(row)));
+      let rows = (data ?? []).map((row) => normalizeLedgerRow(row));
+      const match = await persistOldestFirstReimbursements(supabase, rows);
+      if (match.error) {
+        const missing = match.error.toLowerCase().includes("column");
+        if (!missing) setLoadError(match.error);
+      } else if (match.updated > 0) {
+        const { data: again, error: againError } = await supabase
+          .from("ledger")
+          .select("*, clients(name)")
+          .order("entry_date", { ascending: false })
+          .order("created_at", { ascending: false })
+          .limit(10000);
+        if (!againError) {
+          rows = (again ?? []).map((row) => normalizeLedgerRow(row));
+        }
+      }
+      setEntries(rows);
     }
     setChartOfAccounts(chartData ?? []);
     if (chartError) {
@@ -994,7 +977,8 @@ export default function CashflowPage() {
   const showAllCoaCategories = coaCategoryFilter.length === 0;
 
   const registerEntries = useMemo(
-    () => mergePartnerTransferDisplayMates(entries),
+    () =>
+      mergeCardReimburseDisplayMates(mergePartnerTransferDisplayMates(entries)),
     [entries]
   );
 
@@ -1005,6 +989,55 @@ export default function CashflowPage() {
     }
     return map;
   }, [registerEntries]);
+
+  const reimbursementMaps = useMemo(() => {
+    const byId = new Map(registerEntries.map((entry) => [entry.id, entry]));
+    const duplicateGroups = duplicateCardChargeGroups(registerEntries);
+    return {
+      byId,
+      chargeByPaymentId: reimbursementByPaymentId(registerEntries),
+      outstanding: outstandingPersonalCardTotal(registerEntries),
+      amountMatchPairs: proposeAmountMatchedReimbursements(registerEntries).length,
+      duplicateGroups,
+      duplicateChargeIds: new Set(
+        duplicateGroups.flatMap((group) => group.charges.map((row) => row.id))
+      ),
+    };
+  }, [registerEntries]);
+
+  const linkingPanel = useMemo(() => {
+    if (!linking) return null;
+    const source =
+      registerEntries.find((entry) => entry.id === linking.entryId) ?? null;
+    if (linking.kind === "charge") {
+      const candidates = source
+        ? reimbursementCandidatesForCharge(registerEntries, source)
+        : [];
+      return {
+        kind: "charge" as const,
+        source,
+        candidates,
+        selectedCandidate:
+          candidates.find((row) => row.payment.id === linking.selectedId) ??
+          null,
+      };
+    }
+    const candidates = source
+      ? chargeCandidatesForPayment(registerEntries, source)
+      : [];
+    return {
+      kind: "payment" as const,
+      source,
+      candidates,
+      selectedCandidate:
+        candidates.find((row) => row.charge.id === linking.selectedId) ?? null,
+    };
+  }, [linking, registerEntries]);
+
+  const needsIdentificationCount = useMemo(
+    () => registerEntries.filter(needsPersonalCardIdentification).length,
+    [registerEntries]
+  );
 
   const visibleEntries = useMemo(() => {
     let result =
@@ -1044,7 +1077,7 @@ export default function CashflowPage() {
         entryMatchesAccountFilter(entry, accountFilter)
       );
     }
-    if (grouped && !partnerTransferCoaOnly) {
+    if (!partnerTransferCoaOnly) {
       const matched = result;
       const pool =
         monthFilter.length > 0
@@ -1065,12 +1098,20 @@ export default function CashflowPage() {
       }
     }
 
+    if (showAllCoaCategories) {
+      result = withCardReimburseCluster(result, registerEntries).filter(
+        (entry) => !isExcludedPersonalUseCashflowRow(entry, parentById)
+      );
+    }
+
     // Cluster invoice mates (and payment→goods parent links) by the latest date
     // in the set so Sales Income credits sit next to related COGS debits even
     // when purchase entry_date is earlier than date_paid.
     const paymentInvoiceByParentId = buildPaymentInvoiceByParentId(result);
     const clusterDateByKey = new Map<string, string>();
     const clusterKeyFor = (entry: LedgerEntry): string | null => {
+      const reimburseParent = cardReimburseClusterParentId(entry);
+      if (reimburseParent) return `reimburse:${reimburseParent}`;
       const invoiceId = effectiveInvoiceId(entry, paymentInvoiceByParentId);
       if (invoiceId) return `inv:${invoiceId.toLowerCase()}`;
       if (isPaymentCompanionRow(entry) && entry.source_ledger_id) {
@@ -1120,6 +1161,17 @@ export default function CashflowPage() {
       return 2;
     };
 
+    if (reimbursementFilter === "needs-id") {
+      result = result.filter(needsPersonalCardIdentification);
+    } else if (reimbursementFilter === "duplicates") {
+      const duplicateIds = new Set(
+        reimbursementMaps.duplicateGroups.flatMap((group) =>
+          group.charges.map((row) => row.id)
+        )
+      );
+      result = result.filter((entry) => duplicateIds.has(entry.id));
+    }
+
     return [...result].sort((a, b) => {
       if (sortBy === "description") {
         const byDescription = cashflowEntryDescriptionKey(a, parentById).localeCompare(
@@ -1132,30 +1184,22 @@ export default function CashflowPage() {
         const byDate = sortDate(b).localeCompare(sortDate(a));
         if (byDate !== 0) return byDate;
 
-        if (!grouped) {
-          const byCreated = (b.created_at ?? "").localeCompare(a.created_at ?? "");
-          if (byCreated !== 0) return byCreated;
-          return b.id.localeCompare(a.id);
-        }
-
         return cashflowPaymentRank(a) - cashflowPaymentRank(b);
       }
 
       const byClusterDate = sortDate(b).localeCompare(sortDate(a));
       if (byClusterDate !== 0) return byClusterDate;
 
-      // Ungrouped: keep same-date rows newest-entered first.
-      if (!grouped) {
-        const byCreated = (b.created_at ?? "").localeCompare(a.created_at ?? "");
-        if (byCreated !== 0) return byCreated;
-        return b.id.localeCompare(a.id);
-      }
-
       const keyA = clusterKeyFor(a);
       const keyB = clusterKeyFor(b);
       if (keyA && keyA === keyB) {
-        const byCoa = invoiceCoaRank(a) - invoiceCoaRank(b);
-        if (byCoa !== 0) return byCoa;
+        if (keyA.startsWith("reimburse:")) {
+          const byRole = cardReimburseClusterRank(a) - cardReimburseClusterRank(b);
+          if (byRole !== 0) return byRole;
+        } else {
+          const byCoa = invoiceCoaRank(a) - invoiceCoaRank(b);
+          if (byCoa !== 0) return byCoa;
+        }
       }
 
       const byDescription = cashflowEntryDescriptionKey(a, parentById).localeCompare(
@@ -1176,32 +1220,20 @@ export default function CashflowPage() {
     invoiceFilter,
     coaCategoryFilter,
     showAllCoaCategories,
-    grouped,
+    reimbursementFilter,
+    reimbursementMaps,
     sortBy,
   ]);
 
-  const balanceSheetReview = useMemo(() => {
-    const items = entries
-      .filter((entry) => Boolean(entry.balance_sheet))
-      .map((entry) => ({
-        entry,
-        kind: balanceSheetReviewKind(entry, parentById),
-      }))
-      .sort((a, b) => {
-        const unexpectedDelta =
-          Number(b.kind === "Unexpected") - Number(a.kind === "Unexpected");
-        if (unexpectedDelta !== 0) return unexpectedDelta;
-        const byDate = b.entry.entry_date.localeCompare(a.entry.entry_date);
-        if (byDate !== 0) return byDate;
-        return (a.entry.description ?? "").localeCompare(
-          b.entry.description ?? "",
-          undefined,
-          { sensitivity: "base" }
-        );
-      });
-    const unexpected = items.filter((item) => item.kind === "Unexpected");
-    return { items, unexpected };
-  }, [entries, parentById]);
+  const listEntries = useMemo(
+    () =>
+      showCardPaydowns
+        ? visibleEntries
+        : visibleEntries.filter((entry) => !isCardReimburseMateRow(entry)),
+    [visibleEntries, showCardPaydowns]
+  );
+
+  const hiddenCardPaydownCount = visibleEntries.length - listEntries.length;
 
   const accountBalances = useMemo(
     () => ({
@@ -1230,34 +1262,36 @@ export default function CashflowPage() {
     ]
   );
 
-  const displayItems = useMemo(
-    () =>
-      buildCashflowDisplayItems(
-        visibleEntries,
-        monthFilter,
-        accountFilter,
-        showAllAccounts,
-        grouped,
-        expandedGroups
-      ),
-    [
-      visibleEntries,
+  const outlineContext = useMemo(
+    () => ({
+      paymentInvoiceByParentId: buildPaymentInvoiceByParentId(listEntries),
+      parentById,
       monthFilter,
       accountFilter,
       showAllAccounts,
-      grouped,
-      expandedGroups,
-    ]
+    }),
+    [listEntries, parentById, monthFilter, accountFilter, showAllAccounts]
   );
 
-  const groupKeys = useMemo(
+  const outlineLevels = useMemo(
+    () => activeGroupLevels(groupLevels),
+    [groupLevels]
+  );
+
+  const displayItems = useMemo(
     () =>
-      displayItems
-        .filter((item): item is Extract<CashflowDisplayItem, { kind: "group" }> =>
-          item.kind === "group"
-        )
-        .map((item) => item.key),
-    [displayItems]
+      buildCashflowOutlineItems(
+        listEntries,
+        outlineLevels,
+        expandedGroups,
+        outlineContext
+      ),
+    [listEntries, outlineLevels, expandedGroups, outlineContext]
+  );
+
+  const allGroupKeys = useMemo(
+    () => collectOutlineGroupKeys(listEntries, outlineLevels, outlineContext),
+    [listEntries, outlineLevels, outlineContext]
   );
 
   function toggleGroup(key: string) {
@@ -1269,11 +1303,26 @@ export default function CashflowPage() {
     });
   }
 
+  function setGroupLevel(index: number, field: CashflowGroupLevel) {
+    setGroupLevels((current) => {
+      const next = [...current] as typeof current;
+      next[index] = field;
+      if (index === 0 && field === "none") {
+        next[1] = "none";
+        next[2] = "none";
+      }
+      if (index === 1 && field === "none") next[2] = "none";
+      return next;
+    });
+    setExpandedGroups(new Set());
+  }
+
   const hasActiveListFilters =
     !showAllAccounts ||
     monthFilter.length > 0 ||
     invoiceFilter.length > 0 ||
-    !showAllCoaCategories;
+    !showAllCoaCategories ||
+    reimbursementFilter !== "all";
 
   function toggleAccountFilter(account: CashflowAccount) {
     setAccountFilter((current) =>
@@ -1334,6 +1383,315 @@ export default function CashflowPage() {
     setEditingAccountEntries(entries);
     setEditing(entries[0]);
     setShowForm(true);
+  }
+
+  async function markMovedRowAsCharge(entry: LedgerEntry) {
+    if (
+      !confirm(
+        `Keep this row on ${entry.account} as a personal-card purchase? It can then pair 1:1 with a checking 308 reimbursement.`
+      )
+    ) {
+      return;
+    }
+    setMoveError(null);
+    setMovingId(entry.id);
+    const supabase = createClient();
+    const error = await identifyMovedRowAsCharge(supabase, entry);
+    setMovingId(null);
+    if (error) {
+      setMoveError(
+        error.toLowerCase().includes("column")
+          ? "Run migration 073_personal_card_role.sql in Supabase, then try again."
+          : error
+      );
+      return;
+    }
+    await loadEntries();
+  }
+
+  async function markMovedRowAsReimbursement(entry: LedgerEntry) {
+    const checking =
+      matchingCheckingAccount(entry.account) ?? entry.moved_from_account;
+    const card = entry.account;
+    const coa308 = personalCardReimbursementCategory(chartOfAccounts);
+    if (
+      !confirm(
+        `This was a checking reimbursement, not a card purchase.\n\nIt will move back to ${checking} as ${coa308}, a matching charge will be added on ${card}, and the two will be paired.`
+      )
+    ) {
+      return;
+    }
+    setMoveError(null);
+    setMovingId(entry.id);
+    const supabase = createClient();
+    const error = await identifyMovedRowAsReimbursement(supabase, entry, coa308);
+    setMovingId(null);
+    if (error) {
+      setMoveError(
+        error.toLowerCase().includes("column")
+          ? "Run migration 073_personal_card_role.sql in Supabase, then try again."
+          : error
+      );
+      return;
+    }
+    await loadEntries();
+  }
+
+  function startLinkCharge(entry: LedgerEntry) {
+    const candidates = reimbursementCandidatesForCharge(registerEntries, entry);
+    const preferred =
+      candidates.find((row) => row.amountMatch && row.duplicateCharge) ??
+      candidates.find((row) => row.amountMatch && !row.linkedCharge) ??
+      candidates.find((row) => row.amountMatch) ??
+      candidates[0];
+    setMoveError(null);
+    setLinking({
+      kind: "charge",
+      entryId: entry.id,
+      selectedId: preferred?.payment.id ?? "",
+    });
+  }
+
+  function startLinkPayment(entry: LedgerEntry) {
+    const candidates = chargeCandidatesForPayment(registerEntries, entry);
+    const preferred =
+      candidates.find((row) => row.amountMatch) ?? candidates[0];
+    setMoveError(null);
+    setLinking({
+      kind: "payment",
+      entryId: entry.id,
+      selectedId: preferred?.charge.id ?? "",
+    });
+  }
+
+  async function confirmReimbursementLink() {
+    if (!linking?.selectedId) return;
+    const charge =
+      linking.kind === "charge"
+        ? reimbursementMaps.byId.get(linking.entryId)
+        : reimbursementMaps.byId.get(linking.selectedId);
+    const payment =
+      linking.kind === "payment"
+        ? reimbursementMaps.byId.get(linking.entryId)
+        : reimbursementMaps.byId.get(linking.selectedId);
+    if (!charge || !payment) {
+      setMoveError("That row is no longer in the register. Refresh and try again.");
+      setLinking(null);
+      return;
+    }
+    const candidate =
+      linking.kind === "charge"
+        ? reimbursementCandidatesForCharge(registerEntries, charge).find(
+            (row) => row.payment.id === payment.id
+          )
+        : undefined;
+    if (candidate?.linkedCharge) {
+      const other = candidate.linkedCharge;
+      if (candidate.duplicateCharge) {
+        if (
+          !confirm(
+            `This 308 already pays another card charge that looks like a duplicate of this one:\n${reimbursementRowLabel(
+              other
+            )}\n\nLinking only moves the 308 here. Nothing is deleted. Delete the extra card row yourself if it should not stay.`
+          )
+        ) {
+          return;
+        }
+      } else if (
+        !confirm(
+          `This 308 currently reimburses another card charge (${formatDate(
+            other.entry_date
+          )} ${formatCurrency(
+            Math.abs(cardReimburseNet(other))
+          )}). Move the link here? The other card row stays.`
+        )
+      ) {
+        return;
+      }
+    }
+    if (candidate?.needsCoa308) {
+      if (
+        !confirm(
+          "That checking row is not CoA 308. Change it to a personal-card reimbursement (308) and pair it with this charge?"
+        )
+      ) {
+        return;
+      }
+    }
+    setMovingId(charge.id);
+    setMoveError(null);
+    const targetLists = await Promise.all([
+      loadLedgerLockTargets(charge.id),
+      loadLedgerLockTargets(payment.id),
+    ]);
+    const ok = await acquireLocks(targetLists.flat());
+    if (!ok) {
+      setMovingId(null);
+      return;
+    }
+    const supabase = createClient();
+    const error = await linkCardChargeToReimbursement(
+      supabase,
+      charge,
+      payment,
+      personalCardReimbursementCategory(chartOfAccounts)
+    );
+    setMovingId(null);
+    void releaseLocks();
+    if (error) {
+      setMoveError(accountMoveColumnError(error));
+      return;
+    }
+    setLinking(null);
+    await loadEntries();
+  }
+
+  async function unlinkCharge(entry: LedgerEntry) {
+    if (
+      !confirm(
+        "Mark this card charge outstanding? It unpairs the checking reimbursement. The checking row stays; the charge goes back to Outstanding."
+      )
+    ) {
+      return;
+    }
+    setMovingId(entry.id);
+    setMoveError(null);
+    const supabase = createClient();
+    const error = await unlinkCardChargeReimbursement(supabase, entry);
+    setMovingId(null);
+    if (error) {
+      setMoveError(accountMoveColumnError(error));
+      return;
+    }
+    await loadEntries();
+  }
+
+  async function recodePaymentTo308(entry: LedgerEntry) {
+    if (
+      !confirm(
+        `Change this checking row from ${entry.coa_category ?? "its current CoA"} to 308 (reimburse personal credit card)? It stays on checking and stays linked to the card charge.`
+      )
+    ) {
+      return;
+    }
+    setMovingId(entry.id);
+    setMoveError(null);
+    const ok = await acquireLocks(await loadLedgerLockTargets(entry.id));
+    if (!ok) {
+      setMovingId(null);
+      return;
+    }
+    const supabase = createClient();
+    const error = await recodeCheckingPaymentToPersonalCardReimburse(
+      supabase,
+      entry,
+      personalCardReimbursementCategory(chartOfAccounts)
+    );
+    setMovingId(null);
+    void releaseLocks();
+    if (error) {
+      setMoveError(accountMoveColumnError(error));
+      return;
+    }
+    await loadEntries();
+  }
+
+  async function billChargeAsCogs(entry: LedgerEntry) {
+    const invoiceId = normalizeInvoiceId(entry.invoice_id);
+    if (
+      !confirm(
+        `Turn this card purchase into a 101 COGS line on ${invoiceId}?\n\nIt stays on ${entry.account ?? "the card"} and stays linked to the checking 308. Do not add a second Goods and Services row.`
+      )
+    ) {
+      return;
+    }
+    setMovingId(entry.id);
+    setMoveError(null);
+    const ok = await acquireLocks(await loadLedgerLockTargets(entry.id));
+    if (!ok) {
+      setMovingId(null);
+      return;
+    }
+    const supabase = createClient();
+    const error = await billCardChargeOnInvoice(
+      supabase,
+      entry,
+      cogsCategoryFromChart(chartOfAccounts)
+    );
+    setMovingId(null);
+    void releaseLocks();
+    if (error) {
+      setMoveError(accountMoveColumnError(error));
+      return;
+    }
+    await loadEntries();
+  }
+
+  async function deleteCardChargeRow(entry: LedgerEntry) {
+    if (isInvoiceGoodsLine(entry)) {
+      setMoveError(
+        "That row is an invoice goods line (101 COGS), not the extra reimbursement charge. Keep it. Delete the extra card charge instead: Edit on that row, then Delete."
+      );
+      return;
+    }
+    if (
+      !confirm(
+        `Delete this card row?\n${reimbursementRowLabel(entry)}\n${cardChargeOriginNote(
+          entry
+        )}.\n\nThe checking 308 is not deleted.`
+      )
+    ) {
+      return;
+    }
+    setMovingId(entry.id);
+    setMoveError(null);
+    const targetLists = await loadLedgerLockTargets(entry.id);
+    const ok = await acquireLocks(targetLists);
+    if (!ok) {
+      setMovingId(null);
+      setMoveError(
+        "Could not delete: the row is locked or edit locking is not set up. Close any lock message, then try again. You can also click Edit on that row and delete it from the form."
+      );
+      return;
+    }
+    const supabase = createClient();
+    const error = await deletePersonalCardCharge(supabase, entry, entries);
+    setMovingId(null);
+    void releaseLocks();
+    if (error) {
+      setMoveError(accountMoveColumnError(error));
+      return;
+    }
+    setLinking((current) => {
+      if (!current) return current;
+      if (current.entryId === entry.id) return null;
+      return current;
+    });
+    await loadEntries();
+  }
+
+  async function pairMatchingAmounts() {
+    const count = reimbursementMaps.amountMatchPairs;
+    if (count === 0) return;
+    if (
+      !confirm(
+        `Link ${count} outstanding card charge${
+          count === 1 ? "" : "s"
+        } to unmatched 308s with the same amount (1:1, oldest first within each amount)?`
+      )
+    ) {
+      return;
+    }
+    setMoveError(null);
+    setMovingId("pair-amounts");
+    const supabase = createClient();
+    const result = await persistAmountMatchedReimbursements(supabase, entries);
+    setMovingId(null);
+    if (result.error) {
+      setMoveError(accountMoveColumnError(result.error));
+      return;
+    }
+    await loadEntries();
   }
 
   return (
@@ -1402,7 +1760,10 @@ export default function CashflowPage() {
       ) : (
         <>
           <section className="mb-6 grid gap-3 sm:grid-cols-2 lg:max-w-3xl lg:grid-cols-3">
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <Link
+              href="/bank-cashflow"
+              className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-brand-200 hover:shadow-md"
+            >
               <p className="text-xs uppercase tracking-wide text-slate-500">
                 Checking Balance
               </p>
@@ -1413,7 +1774,10 @@ export default function CashflowPage() {
                 Credits − debits
                 {hasActiveListFilters ? " (current filters)" : ""}
               </p>
-            </div>
+              <p className="mt-2 text-xs font-medium text-brand-700">
+                Checking Reconciliation →
+              </p>
+            </Link>
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <p className="text-xs uppercase tracking-wide text-slate-500">
                 Credit Card Balance
@@ -1425,6 +1789,46 @@ export default function CashflowPage() {
                 Amount owed (debits − credits)
                 {hasActiveListFilters ? " (current filters)" : ""}
               </p>
+              {reimbursementMaps.outstanding > 0 ||
+              reimbursementMaps.amountMatchPairs > 0 ||
+              reimbursementFilter !== "all" ? (
+                <div className="mt-2 space-y-2">
+                  {reimbursementMaps.outstanding > 0 ? (
+                    <p className="text-xs font-medium text-amber-800">
+                      Unreimbursed personal-card charges:{" "}
+                      {formatCurrency(reimbursementMaps.outstanding)}
+                    </p>
+                  ) : null}
+                  {reimbursementFilter !== "all" ||
+                  reimbursementMaps.amountMatchPairs > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {reimbursementFilter !== "all" ? (
+                        <button
+                          type="button"
+                          className="text-xs font-semibold text-brand-800 underline"
+                          onClick={() => setReimbursementFilter("all")}
+                        >
+                          Show all rows
+                        </button>
+                      ) : null}
+                      {reimbursementMaps.amountMatchPairs > 0 ? (
+                        <button
+                          type="button"
+                          className="text-xs font-semibold text-brand-800 underline"
+                          disabled={movingId === "pair-amounts"}
+                          onClick={() => {
+                            void pairMatchingAmounts();
+                          }}
+                        >
+                          {movingId === "pair-amounts"
+                            ? "Pairing..."
+                            : `Pair matching amounts (${reimbursementMaps.amountMatchPairs})`}
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <p className="text-xs uppercase tracking-wide text-slate-500">
@@ -1438,84 +1842,6 @@ export default function CashflowPage() {
               </p>
             </div>
           </section>
-
-          {balanceSheetReview.items.length > 0 && (
-            <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <h2 className="text-sm font-semibold text-slate-900">
-                    Balance Sheet items
-                  </h2>
-                  <p className="mt-1 text-sm text-slate-600">
-                    {balanceSheetReview.items.length}{" "}
-                    {balanceSheetReview.items.length === 1 ? "row is" : "rows are"}{" "}
-                    marked Balance Sheet (excluded from P&amp;L). Personal-use goods
-                    and 300-series transfers/equity are expected.{" "}
-                    {balanceSheetReview.unexpected.length === 0
-                      ? "None look marked that way in error."
-                      : `${balanceSheetReview.unexpected.length} ${
-                          balanceSheetReview.unexpected.length === 1
-                            ? "row does not"
-                            : "rows do not"
-                        } match those categories — review those first. Saving a cashflow edit now resets the flag from CoA.`}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setShowBalanceSheetReview((current) => !current)
-                  }
-                  className="text-sm font-medium text-brand-700 hover:text-brand-900"
-                >
-                  {showBalanceSheetReview ? "Hide list" : "Show list"}
-                </button>
-              </div>
-              {showBalanceSheetReview && (
-                <div className="mt-4">
-                  <DataTable
-                    stickyHeader
-                    maxBodyHeight="24rem"
-                    mobileTitleKey="date"
-                    emptyMessage="No Balance Sheet rows."
-                    columns={[
-                      { key: "date", label: "Date" },
-                      { key: "kind", label: "Why marked" },
-                      { key: "coa", label: "CoA Category" },
-                      { key: "description", label: "Description" },
-                      { key: "purchaser", label: "Purchased By" },
-                      { key: "amount", label: "Amount" },
-                    ]}
-                    rows={balanceSheetReview.items.map(({ entry, kind }) => ({
-                      date: formatDate(entry.entry_date),
-                      kind:
-                        kind === "Unexpected" ? (
-                          <span className="font-medium text-red-700">
-                            {kind}
-                          </span>
-                        ) : (
-                          kind
-                        ),
-                      coa: entry.coa_category?.trim() || "—",
-                      description:
-                        entry.description?.trim() ||
-                        entry.clients?.name ||
-                        "—",
-                      purchaser: entry.purchaser,
-                      amount: formatSignedCash(
-                        signedCashAmount(
-                          Number(entry.debit_amount ?? 0),
-                          Number(entry.credit_amount ?? 0)
-                        )
-                      ),
-                    }))}
-                    rowKey={(_row, index) =>
-                      balanceSheetReview.items[index]?.entry.id ?? String(index)
-                    }
-                  />
-                </div>
-              )}
-            </section>
-          )}
 
           <div className="mb-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <div>
@@ -1558,106 +1884,180 @@ export default function CashflowPage() {
                   </label>
                 ))}
               </div>
-            </div>
-
-            <div className="border-t border-slate-100 pt-4 sm:max-w-md">
-              <MultiSelectDropdown
-                label="CoA Categories"
-                allLabel="All categories"
-                options={chartOfAccounts.map((account) => ({
-                  value: account.category,
-                  label: account.category,
-                }))}
-                selected={coaCategoryFilter}
-                onToggle={toggleCoaCategoryFilter}
-                onClear={() => setCoaCategoryFilter([])}
-              />
-              {chartOfAccounts.length === 0 && (
-                <p className="mt-2 text-xs text-slate-500">
-                  No categories yet. Add them on the Chart of Accounts page.
-                </p>
-              )}
-            </div>
-
-            <div className="grid gap-4 border-t border-slate-100 pt-4 sm:grid-cols-2 lg:grid-cols-3 lg:max-w-3xl">
-              <MultiSelectDropdown
-                label="Months"
-                allLabel="All months"
-                options={monthOptions.map((monthKey) => ({
-                  value: monthKey,
-                  label: monthLabel(monthKey),
-                }))}
-                selected={monthFilter}
-                onToggle={toggleMonthFilter}
-                onClear={() => setMonthFilter([])}
-              />
-              <MultiSelectDropdown
-                label="Invoice IDs"
-                allLabel="All invoice IDs"
-                options={invoiceOptions.map((invoiceId) => ({
-                  value: invoiceId,
-                  label: invoiceId,
-                }))}
-                selected={invoiceFilter}
-                onToggle={toggleInvoiceFilter}
-                onClear={() => setInvoiceFilter([])}
-              />
-              <label className="block text-sm">
-                <span className="mb-1 block font-medium text-slate-900">
-                  Sort by
-                </span>
-                <select
-                  value={sortBy}
-                  onChange={(event) =>
-                    setSortBy(event.target.value as "date" | "description")
-                  }
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                >
-                  <option value="date">Date</option>
-                  <option value="description">Description</option>
-                </select>
-              </label>
-            </div>
-
-            <div className="border-t border-slate-100 pt-4 text-sm">
-              <span className="mb-1 block font-medium text-slate-900">
-                Grouping
-              </span>
-              <label className="flex items-start gap-2 text-slate-700">
+              <label className="mt-3 inline-flex items-center gap-2 text-sm text-slate-700">
                 <input
                   type="checkbox"
-                  checked={grouped}
-                  onChange={(event) => setGrouped(event.target.checked)}
-                  className="mt-0.5 size-4 shrink-0 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                  checked={showCardPaydowns}
+                  onChange={(event) => setShowCardPaydowns(event.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500"
                 />
-                <span className="min-w-0">
-                  <span className="font-medium">Group related rows</span>
-                  <span className="font-normal text-slate-600">
-                    {" "}
-                    — includes all charges on an invoice from all designers and
-                    accounts. When unchecked, only rows for the selected Account
-                    filter are shown.
-                  </span>
-                </span>
+                Show card payments from checking
               </label>
-              {grouped && groupKeys.length > 0 && (
-                <div className="mt-1.5 flex gap-3 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setExpandedGroups(new Set(groupKeys))}
-                    className="font-medium text-brand-700 hover:underline"
-                  >
-                    Expand all
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setExpandedGroups(new Set())}
-                    className="font-medium text-brand-700 hover:underline"
-                  >
-                    Collapse all
-                  </button>
+              {needsIdentificationCount > 0 ||
+              reimbursementMaps.duplicateGroups.length > 0 ? (
+                <div className="mt-4 max-w-md space-y-3">
+                  {needsIdentificationCount > 0 ? (
+                    <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                      {needsIdentificationCount} moved row
+                      {needsIdentificationCount === 1 ? "" : "s"} still need to
+                      be identified.{" "}
+                      <button
+                        type="button"
+                        className="font-semibold underline"
+                        onClick={() => setReimbursementFilter("needs-id")}
+                      >
+                        Show them
+                      </button>
+                      , then This is a charge or This is a reimbursement on each
+                      row.
+                    </p>
+                  ) : null}
+                  {reimbursementMaps.duplicateGroups.length > 0 ? (
+                    <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+                      {reimbursementMaps.duplicateGroups.length} possible
+                      duplicate card charge{" "}
+                      {reimbursementMaps.duplicateGroups.length === 1
+                        ? "group"
+                        : "groups"}{" "}
+                      (same purchase twice).{" "}
+                      <button
+                        type="button"
+                        className="font-semibold underline"
+                        onClick={() => setReimbursementFilter("duplicates")}
+                      >
+                        Review
+                      </button>{" "}
+                      and delete the extra row yourself.
+                    </p>
+                  ) : null}
                 </div>
-              )}
+              ) : null}
+            </div>
+
+            <div className="border-t border-slate-100 pt-4">
+              <p className="text-sm font-medium text-slate-900">Filters</p>
+              <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <MultiSelectDropdown
+                    label="CoA Categories"
+                    allLabel="All categories"
+                    options={chartOfAccounts.map((account) => ({
+                      value: account.category,
+                      label: account.category,
+                    }))}
+                    selected={coaCategoryFilter}
+                    onToggle={toggleCoaCategoryFilter}
+                    onClear={() => setCoaCategoryFilter([])}
+                  />
+                  {chartOfAccounts.length === 0 && (
+                    <p className="mt-2 text-xs text-slate-500">
+                      No categories yet. Add them on the Chart of Accounts page.
+                    </p>
+                  )}
+                </div>
+                <MultiSelectDropdown
+                  label="Months"
+                  allLabel="All months"
+                  options={monthOptions.map((monthKey) => ({
+                    value: monthKey,
+                    label: monthLabel(monthKey),
+                  }))}
+                  selected={monthFilter}
+                  onToggle={toggleMonthFilter}
+                  onClear={() => setMonthFilter([])}
+                />
+                <MultiSelectDropdown
+                  label="Invoice IDs"
+                  allLabel="All invoice IDs"
+                  options={invoiceOptions.map((invoiceId) => ({
+                    value: invoiceId,
+                    label: invoiceId,
+                  }))}
+                  selected={invoiceFilter}
+                  onToggle={toggleInvoiceFilter}
+                  onClear={() => setInvoiceFilter([])}
+                />
+                <label className="block text-sm">
+                  <span className="mb-1 block font-medium text-slate-900">
+                    Sort by
+                  </span>
+                  <select
+                    value={sortBy}
+                    onChange={(event) =>
+                      setSortBy(event.target.value as "date" | "description")
+                    }
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  >
+                    <option value="date">Date</option>
+                    <option value="description">Description</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div className="border-t border-slate-100 pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-medium text-slate-900">
+                  Customize View
+                </p>
+                {allGroupKeys.length > 0 && (
+                  <div className="flex gap-3 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedGroups(new Set(allGroupKeys))}
+                      className="font-medium text-brand-700 hover:underline"
+                    >
+                      Expand all
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExpandedGroups(new Set())}
+                      className="font-medium text-brand-700 hover:underline"
+                    >
+                      Collapse all
+                    </button>
+                  </div>
+                )}
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                Grouping starts off. Choose a highest level to nest rows; set
+                lower levels to None for fewer layers.
+              </p>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                {groupLevels.map((field, index) => (
+                  <label key={index} className="block text-sm">
+                    <span className="mb-1 flex items-center gap-2 font-medium text-slate-900">
+                      <span className="inline-flex size-5 items-center justify-center rounded-full bg-slate-100 text-[11px] text-slate-600">
+                        {index + 1}
+                      </span>
+                      {index === 0 ? "Highest level" : `Level ${index + 1}`}
+                    </span>
+                    <select
+                      value={field}
+                      disabled={
+                        (index === 1 && groupLevels[0] === "none") ||
+                        (index === 2 &&
+                          (groupLevels[0] === "none" ||
+                            groupLevels[1] === "none"))
+                      }
+                      onChange={(event) =>
+                        setGroupLevel(
+                          index,
+                          event.target.value as CashflowGroupLevel
+                        )
+                      }
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-400"
+                    >
+                      <option value="none">None</option>
+                      {CASHFLOW_GROUP_FIELDS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+              </div>
             </div>
 
             {hasActiveListFilters && (
@@ -1665,22 +2065,213 @@ export default function CashflowPage() {
                 Checking and credit card balances above use the current filters
                 (selected accounts only). 303/304 transfers show on both checking
                 registers: the sender as a deduction, the receiver as an addition.
-                Showing {displayItems.length} rows ({visibleEntries.length}{" "}
-                source {visibleEntries.length === 1 ? "entry" : "entries"}
-                {grouped && groupKeys.length > 0
-                  ? `; ${groupKeys.length} grouped`
+                Showing {displayItems.length} rows ({listEntries.length}{" "}
+                source {listEntries.length === 1 ? "entry" : "entries"}) of{" "}
+                {entries.length} total
+                {hiddenCardPaydownCount > 0
+                  ? ` · ${hiddenCardPaydownCount} card payment${
+                      hiddenCardPaydownCount === 1 ? "" : "s"
+                    } from checking hidden`
                   : ""}
-                ) of {entries.length} total
               </p>
             )}
           </div>
+
+          {moveError ? (
+            <p className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {moveError}
+            </p>
+          ) : null}
+
+          {linking && linkingPanel ? (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
+              <p className="font-medium">
+                {linkingPanel.kind === "charge"
+                  ? "Link a checking 308 to this card charge"
+                  : "Link a card charge to this 308"}
+              </p>
+              <p className="mt-1 text-xs text-amber-900/80">
+                {linkingPanel.kind === "charge"
+                  ? "Pick the Checking 308 (personal-card refund), not a 302 owner's draw and not the Credit Card “Pays the card back” line. That card credit is already the companion of the checking 308."
+                  : null}
+              </p>
+              {linkingPanel.source ? (
+                <p className="mt-1 text-xs text-amber-900/80">
+                  {reimbursementRowLabel(linkingPanel.source)}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs">
+                  That row is not in the current list. Clear filters or cancel.
+                </p>
+              )}
+              {linkingPanel.candidates.length === 0 ? (
+                <p className="mt-2 text-xs">
+                  {linkingPanel.kind === "charge"
+                    ? "No checking 308s are available to link. Enter the repayment on checking as CoA 308 (not 302 owner's draw or 306 loan payback). If it is already tied to another card charge, pick that 308 to reassign it."
+                    : "No outstanding card charges are available to link."}
+                </p>
+              ) : (
+                <label className="mt-3 block text-xs font-medium">
+                  {linkingPanel.kind === "charge"
+                    ? "Checking reimbursement"
+                    : "Card charge"}
+                  <select
+                    value={linking.selectedId}
+                    onChange={(event) =>
+                      setLinking((current) =>
+                        current
+                          ? { ...current, selectedId: event.target.value }
+                          : current
+                      )
+                    }
+                    className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-slate-900"
+                  >
+                    {linkingPanel.kind === "charge"
+                      ? linkingPanel.candidates.map((row) => (
+                          <option key={row.payment.id} value={row.payment.id}>
+                            {reimbursementRowLabel(
+                              row.payment,
+                              [
+                                row.amountMatch ? "amount match" : null,
+                                row.hasCardPaydown
+                                  ? "this is the 308 for the card pay-down"
+                                  : null,
+                                row.duplicateCharge
+                                  ? "possible duplicate — you choose what to delete"
+                                  : row.linkedCharge
+                                    ? "already linked — reassign"
+                                    : "unmatched",
+                                row.needsCoa308 ? "will become 308" : null,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ")
+                            )}
+                          </option>
+                        ))
+                      : linkingPanel.candidates.map((row) => (
+                          <option key={row.charge.id} value={row.charge.id}>
+                            {reimbursementRowLabel(
+                              row.charge,
+                              [
+                                row.amountMatch ? "amount match" : null,
+                                row.sameOwner ? null : "other owner",
+                              ]
+                                .filter(Boolean)
+                                .join(" · ")
+                            )}
+                          </option>
+                        ))}
+                  </select>
+                </label>
+              )}
+              {linkingPanel.kind === "charge" &&
+              linkingPanel.selectedCandidate?.linkedCharge ? (
+                <div className="mt-3 rounded-md border border-amber-300 bg-white px-3 py-2 text-xs text-slate-800">
+                  {linkingPanel.selectedCandidate.duplicateCharge ? (
+                    <p className="font-medium text-amber-950">
+                      These two card charges look like the same purchase. Nothing
+                      is deleted unless you choose one below.
+                    </p>
+                  ) : (
+                    <p className="font-medium text-amber-950">
+                      This 308 already pays another card charge. Linking moves
+                      the 308 here; the other card row stays unless you delete
+                      it.
+                    </p>
+                  )}
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <div className="rounded border border-slate-200 p-2">
+                      <p className="font-semibold">This charge</p>
+                      <p className="mt-1">
+                        {linkingPanel.source
+                          ? reimbursementRowLabel(linkingPanel.source)
+                          : "—"}
+                      </p>
+                      {linkingPanel.source ? (
+                        <p className="mt-1 text-slate-500">
+                          {cardChargeOriginNote(linkingPanel.source)}
+                        </p>
+                      ) : null}
+                      {linkingPanel.source ? (
+                        <Button
+                          variant="secondary"
+                          className="mt-2 min-h-[33px] w-full px-3 py-1.5"
+                          disabled={Boolean(movingId)}
+                          onClick={() => {
+                            void deleteCardChargeRow(linkingPanel.source!);
+                          }}
+                        >
+                          Delete this card row
+                        </Button>
+                      ) : null}
+                    </div>
+                    <div className="rounded border border-slate-200 p-2">
+                      <p className="font-semibold">Already linked card row</p>
+                      <p className="mt-1">
+                        {reimbursementRowLabel(
+                          linkingPanel.selectedCandidate.linkedCharge
+                        )}
+                      </p>
+                      <p className="mt-1 text-slate-500">
+                        {cardChargeOriginNote(
+                          linkingPanel.selectedCandidate.linkedCharge
+                        )}
+                      </p>
+                      <Button
+                        variant="secondary"
+                        className="mt-2 min-h-[33px] w-full px-3 py-1.5"
+                        disabled={Boolean(movingId)}
+                        onClick={() => {
+                          void deleteCardChargeRow(
+                            linkingPanel.selectedCandidate!.linkedCharge!
+                          );
+                        }}
+                      >
+                        Delete the other card row
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  className="min-h-[33px] px-3 py-1.5"
+                  disabled={
+                    !linking.selectedId ||
+                    linkingPanel.candidates.length === 0 ||
+                    Boolean(movingId)
+                  }
+                  onClick={() => {
+                    void confirmReimbursementLink();
+                  }}
+                >
+                  {movingId ? "Linking..." : "Link these"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  className="min-h-[33px] px-3 py-1.5"
+                  disabled={Boolean(movingId)}
+                  onClick={() => setLinking(null)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : null}
 
           <DataTable
             stickyFirstColumn
             stickyHeader
             maxBodyHeight="calc(100dvh - 14rem)"
-            mobileTitleKey="date"
+            mobileTitleKey="group"
+            rowKey={(_row, index) => {
+              const item = displayItems[index];
+              if (!item) return String(index);
+              if (item.kind === "group") return item.key;
+              return `entry:${item.entry.id}:${item.level}`;
+            }}
             columns={[
+              { key: "group", label: "\u00a0", className: "min-w-[16rem]" },
               { key: "actions", label: "Actions" },
               { key: "date", label: "Date" },
               { key: "account", label: "Account" },
@@ -1690,57 +2281,55 @@ export default function CashflowPage() {
               { key: "invoiceId", label: "Invoice ID" },
               { key: "purchasedBy", label: "Purchased By" },
               { key: "paidTo", label: "Paid To" },
+              { key: "department", label: "Department" },
+              { key: "reimbursed", label: "Reimbursed" },
             ]}
             rows={displayItems.map((item) => {
               if (item.kind === "group") {
                 const expanded = expandedGroups.has(item.key);
                 return {
-                  actions: (
-                    <div className="flex flex-col gap-1.5">
-                      <Button
-                        variant="secondary"
-                        className="w-full min-h-[33px] px-3 py-1.5"
-                        onClick={() => toggleGroup(item.key)}
-                      >
-                        {expanded
-                          ? "− Collapse"
-                          : `+ Expand (${item.entries.length})`}
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        className="w-full min-h-[33px] px-3 py-1.5"
-                        onClick={() => openAccountEditor(item.entries)}
-                      >
-                        {item.entries.every(isCashflowManagedEntry)
-                          ? "Edit Account / CoA"
-                          : "Edit Account"}
-                      </Button>
-                    </div>
+                  group: (
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(item.key)}
+                      aria-expanded={expanded}
+                      aria-label={
+                        expanded
+                          ? `Collapse ${item.label}`
+                          : `Expand ${item.label} (${item.entries.length} transactions)`
+                      }
+                      className="flex w-full items-start gap-1 rounded text-left hover:bg-slate-50"
+                      style={{ paddingLeft: `${item.level * 1.25}rem` }}
+                    >
+                      <GroupExpandArrow expanded={expanded} />
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-900">
+                          {item.label}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {item.entries.length} transaction
+                          {item.entries.length === 1 ? "" : "s"}
+                        </p>
+                      </div>
+                    </button>
                   ),
-                  date: item.date,
-                  account: item.account,
-                  description: (
-                    <div>
-                      <p className="font-semibold text-slate-900">
-                        {item.title}
-                      </p>
-                      <p className="text-xs text-slate-500">{item.subtitle}</p>
-                    </div>
-                  ),
-                  coaCategory: (
-                    <span className="text-slate-700">{item.coaLabel}</span>
-                  ),
+                  actions: "—",
+                  date: "—",
+                  account: "—",
+                  description: "—",
+                  coaCategory: "—",
                   amount: formatSignedCash(
                     signedCashAmount(item.debit, item.credit)
                   ),
-                  purchasedBy: item.purchasedBy,
-                  paidTo: item.paidTo,
-                  invoiceId: item.invoiceId || "—",
+                  invoiceId: "—",
+                  purchasedBy: "—",
+                  paidTo: "—",
+                  department: "—",
+                  reimbursed: "—",
                 };
               }
 
               const entry = item.entry;
-              const isChild = item.kind === "child";
               const isExpense =
                 isOperatingExpense(entry) || isPartnerTransferMateRow(entry);
               const amounts = amountsForAccountFilter(
@@ -1749,33 +2338,191 @@ export default function CashflowPage() {
                 accountFilter,
                 showAllAccounts
               );
+              const setRole = reimbursementSetRole(entry);
               return {
-                actions: isExpense ? (
-                  <Button
-                    variant="secondary"
-                    className="w-full min-h-[33px] px-3 py-1.5"
-                    onClick={() => {
-                      void startExpenseEdit(entry);
+                group: (
+                  <div
+                    className="text-slate-400"
+                    style={{
+                      paddingLeft:
+                        setRole === "card-paydown"
+                          ? `${Math.max(item.level, 0) * 1.25 + 1.25}rem`
+                          : item.level === 0
+                            ? undefined
+                            : `${item.level * 1.25 + 1.75}rem`,
                     }}
                   >
-                    Edit
-                  </Button>
-                ) : (
-                  <Button
-                    variant="secondary"
-                    className="w-full min-h-[33px] px-3 py-1.5"
-                    onClick={() => openAccountEditor([entry])}
-                  >
-                    {isInvoiceGoodsLine(entry)
-                      ? "Edit Account / Purchaser"
-                      : "Edit Account"}
-                  </Button>
+                    {item.level === 0 && setRole !== "card-paydown" ? "" : "·"}
+                  </div>
+                ),
+                actions: (
+                  <div className="flex flex-col gap-1.5">
+                    {isExpense ? (
+                      <Button
+                        variant="secondary"
+                        className="w-full min-h-[33px] px-3 py-1.5"
+                        onClick={() => {
+                          void startExpenseEdit(entry);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="secondary"
+                        className="w-full min-h-[33px] px-3 py-1.5"
+                        onClick={() => openAccountEditor([entry])}
+                      >
+                        Edit
+                      </Button>
+                    )}
+                    {isCheckingAccount(entry.account) &&
+                    reimbursementMaps.chargeByPaymentId.has(entry.id) &&
+                    !isPersonalCardReimbursementCoa(entry.coa_category) ? (
+                      <Button
+                        variant="secondary"
+                        className="w-full min-h-[33px] px-3 py-1.5"
+                        disabled={movingId === entry.id}
+                        onClick={() => {
+                          void recodePaymentTo308(entry);
+                        }}
+                      >
+                        {movingId === entry.id ? "Saving..." : "Change to 308"}
+                      </Button>
+                    ) : null}
+                    {needsPersonalCardIdentification(entry) ? (
+                      <>
+                        <Button
+                          variant="secondary"
+                          className="w-full min-h-[33px] px-3 py-1.5"
+                          disabled={movingId === entry.id}
+                          onClick={() => {
+                            void markMovedRowAsCharge(entry);
+                          }}
+                        >
+                          {movingId === entry.id
+                            ? "Saving..."
+                            : "This is a charge"}
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          className="w-full min-h-[33px] px-3 py-1.5"
+                          disabled={movingId === entry.id}
+                          onClick={() => {
+                            void markMovedRowAsReimbursement(entry);
+                          }}
+                        >
+                          {movingId === entry.id
+                            ? "Saving..."
+                            : "This is a reimbursement"}
+                        </Button>
+                      </>
+                    ) : null}
+                    {isPersonalCardCharge(entry) &&
+                    !entry.reimbursed_by_ledger_id ? (
+                      <Button
+                        variant="secondary"
+                        className="w-full min-h-[33px] px-3 py-1.5"
+                        disabled={movingId === entry.id}
+                        onClick={() => startLinkCharge(entry)}
+                      >
+                        Reimbursed
+                      </Button>
+                    ) : null}
+                    {isPersonalCardCharge(entry) &&
+                    entry.reimbursed_by_ledger_id ? (
+                      <Button
+                        variant="secondary"
+                        className="w-full min-h-[33px] px-3 py-1.5"
+                        disabled={movingId === entry.id}
+                        onClick={() => {
+                          void unlinkCharge(entry);
+                        }}
+                      >
+                        Outstanding
+                      </Button>
+                    ) : null}
+                    {canBillCardChargeOnInvoice(entry) ? (
+                      <Button
+                        variant="secondary"
+                        className="w-full min-h-[33px] px-3 py-1.5"
+                        disabled={movingId === entry.id}
+                        onClick={() => {
+                          void billChargeAsCogs(entry);
+                        }}
+                      >
+                        {movingId === entry.id
+                          ? "Saving..."
+                          : "Bill as 101 COGS"}
+                      </Button>
+                    ) : null}
+                    {reimbursementMaps.duplicateChargeIds.has(entry.id) ? (
+                      <Button
+                        variant="secondary"
+                        className="w-full min-h-[33px] px-3 py-1.5"
+                        disabled={movingId === entry.id}
+                        onClick={() => {
+                          void deleteCardChargeRow(entry);
+                        }}
+                      >
+                        {movingId === entry.id
+                          ? "Deleting..."
+                          : "Delete card row"}
+                      </Button>
+                    ) : null}
+                    {isCheckingCardReimbursement(entry) &&
+                    !reimbursementMaps.chargeByPaymentId.has(entry.id) ? (
+                      <Button
+                        variant="secondary"
+                        className="w-full min-h-[33px] px-3 py-1.5"
+                        disabled={movingId === entry.id}
+                        onClick={() => startLinkPayment(entry)}
+                      >
+                        Link charge
+                      </Button>
+                    ) : null}
+                  </div>
                 ),
                 date: displayDate(entry),
-                account: entry.account ?? "—",
+                account: (
+                  <span>
+                    {entry.account ?? "—"}
+                    {setRole === "purchase" ? (
+                      <span className="mt-0.5 block text-xs font-medium text-slate-600">
+                        1 · Card purchase
+                      </span>
+                    ) : null}
+                    {setRole === "card-paydown" ? (
+                      <span className="mt-0.5 block text-xs font-medium text-slate-600">
+                        2 · Pays the card back
+                      </span>
+                    ) : null}
+                    {entry.moved_from_account ? (
+                      <span className="mt-0.5 block text-xs font-medium text-amber-800">
+                        Moved from {entry.moved_from_account}
+                      </span>
+                    ) : null}
+                  </span>
+                ),
                 coaCategory: (
                   <span className="text-slate-600">
-                    {entry.coa_category ?? "—"}
+                    {setRole === "card-paydown"
+                      ? "Card pay-down"
+                      : (entry.coa_category ?? "—")}
+                    {setRole === "card-paydown" &&
+                    entry.coa_category &&
+                    isPersonalCardReimbursementCoa(entry.coa_category) ? (
+                      <span className="mt-0.5 block text-xs text-slate-500">
+                        {entry.coa_category}
+                      </span>
+                    ) : null}
+                    {isCheckingAccount(entry.account) &&
+                    reimbursementMaps.chargeByPaymentId.has(entry.id) &&
+                    !isPersonalCardReimbursementCoa(entry.coa_category) ? (
+                      <span className="mt-0.5 block text-xs font-medium text-amber-800">
+                        Linked card refund — change CoA to 308
+                      </span>
+                    ) : null}
                   </span>
                 ),
                 amount: formatSignedCash(
@@ -1784,23 +2531,94 @@ export default function CashflowPage() {
                     amounts.displayCredit
                   )
                 ),
-                purchasedBy:
-                  amounts.showDesignerCost || isCostCompanionRow(entry)
-                    ? entry.purchaser ?? "—"
-                    : "—",
-                paidTo:
-                  amounts.showPayment || isRecordedTransferCoa(entry.coa_category)
-                    ? entry.paid_to ?? "—"
-                    : "—",
-                invoiceId: normalizeInvoiceId(entry.invoice_id) || "—",
+                purchasedBy: entry.purchaser ?? "—",
+                paidTo: entry.paid_to ?? "—",
+                department: entry.department ?? "—",
+                invoiceId:
+                  effectiveInvoiceId(
+                    entry,
+                    outlineContext.paymentInvoiceByParentId
+                  ) || "—",
                 description: (
-                  <span className={isChild ? "block pl-5 text-slate-600" : ""}>
-                    {isChild ? "↳ " : ""}
+                  <span>
                     {cashflowEntryDescriptionKey(entry, parentById) ||
                       entry.clients?.name ||
                       "—"}
+                    {isCardReimburseMateRow(entry) ? (
+                      <span className="mt-0.5 block text-xs text-slate-500">
+                        Offset of the checking 308 — not a second purchase
+                      </span>
+                    ) : null}
                   </span>
                 ),
+                reimbursed: (() => {
+                  const status = reimbursementStatus(
+                    entry,
+                    reimbursementMaps.byId,
+                    reimbursementMaps.chargeByPaymentId
+                  );
+                  if (status.kind === "needs-identification") {
+                    return (
+                      <span className="font-medium text-amber-800">
+                        Identify charge or reimbursement
+                      </span>
+                    );
+                  }
+                  if (status.kind === "card-mate") {
+                    return (
+                      <span>
+                        <span className="text-slate-700">Pays the card back</span>
+                        <span className="mt-0.5 block text-xs text-slate-500">
+                          Nets the card charge to $0
+                        </span>
+                      </span>
+                    );
+                  }
+                  if (status.kind === "charge-outstanding") {
+                    return reimbursementMaps.duplicateChargeIds.has(entry.id) ? (
+                      <span className="text-xs font-medium text-amber-900">
+                        Possible duplicate · {cardChargeOriginNote(entry)}
+                      </span>
+                    ) : (
+                      "—"
+                    );
+                  }
+                  if (status.kind === "charge-reimbursed") {
+                    return (
+                      <span>
+                        <span className="text-xs text-slate-500">
+                          {coaAccountNumber(status.payment.coa_category) ?? 308}{" "}
+                          {formatDate(status.payment.entry_date)}
+                          {status.mismatch ? " · amount differs" : ""}
+                        </span>
+                        {reimbursementMaps.duplicateChargeIds.has(entry.id) ? (
+                          <span className="mt-0.5 block text-xs text-amber-900">
+                            Possible duplicate · {cardChargeOriginNote(entry)}
+                          </span>
+                        ) : null}
+                      </span>
+                    );
+                  }
+                  if (status.kind === "payment-unmatched") {
+                    return (
+                      <span className="font-medium text-amber-800">
+                        Unmatched 308
+                      </span>
+                    );
+                  }
+                  if (status.kind === "payment-matched") {
+                    return (
+                      <span>
+                        <span className="text-slate-700">Pays card charge</span>
+                        <span className="mt-0.5 block text-xs text-slate-500">
+                          {formatDate(status.charge.entry_date)}
+                          {status.mismatch ? " · amount differs" : ""}
+                        </span>
+                      </span>
+                    );
+                  }
+                  return "—";
+                })(),
               };
             })}
             emptyMessage={

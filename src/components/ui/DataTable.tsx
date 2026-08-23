@@ -86,7 +86,7 @@ export function DataTable({
               <div className="mb-4 border-b border-slate-100 pb-4">{row.actions}</div>
             )}
             {titleKey && row[titleKey] != null && (
-              <p className="font-medium text-slate-900">{row[titleKey]}</p>
+              <div className="font-medium text-slate-900">{row[titleKey]}</div>
             )}
             <dl className={`space-y-2 text-sm ${titleKey ? "mt-3" : ""}`}>
               {detailColumns.map((column) => (

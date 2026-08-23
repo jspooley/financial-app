@@ -1,7 +1,12 @@
 import type { LedgerEntry } from "./types";
 import { getLedgerVarianceBeforeAcceptance } from "./invoice-utils";
 import { isCostCompanionRow } from "./cost-companions";
-import { isOperatingExpenseCoa, isOperatingExpenseEntry } from "./coa";
+import {
+  cashflowClassificationFlags,
+  isInvoiceGoodsLine,
+  isOperatingExpenseCoa,
+  isOperatingExpenseEntry,
+} from "./coa";
 import {
   isLedgerLineInvoicedForRevenue,
   ledgerLineCogs,
@@ -68,6 +73,60 @@ export function isPlBalanceSheetEntry(
   entry: Pick<LedgerPlEntry, "balance_sheet">
 ): boolean {
   return Boolean(entry.balance_sheet);
+}
+
+export type BalanceSheetReviewKind =
+  | "Personal-use goods"
+  | "Personal-use companion"
+  | "300-series transfer / equity"
+  | "Unexpected";
+
+export type BalanceSheetReviewItem = {
+  entry: LedgerEntry;
+  kind: BalanceSheetReviewKind;
+};
+
+export function balanceSheetReviewKind(
+  entry: LedgerEntry,
+  parentById: Map<string, LedgerEntry>
+): BalanceSheetReviewKind {
+  if (isInvoiceGoodsLine(entry)) return "Personal-use goods";
+  if (entry.source_ledger_id) {
+    const parent = parentById.get(entry.source_ledger_id);
+    if (parent && (isInvoiceGoodsLine(parent) || parent.balance_sheet)) {
+      return "Personal-use companion";
+    }
+  }
+  if (cashflowClassificationFlags(entry.coa_category ?? "").balance_sheet) {
+    return "300-series transfer / equity";
+  }
+  return "Unexpected";
+}
+
+export function buildBalanceSheetReview(entries: LedgerEntry[]) {
+  const parentById = new Map(entries.map((entry) => [entry.id, entry]));
+  const items = entries
+    .filter((entry) => Boolean(entry.balance_sheet))
+    .map((entry) => ({
+      entry,
+      kind: balanceSheetReviewKind(entry, parentById),
+    }))
+    .sort((a, b) => {
+      const unexpectedDelta =
+        Number(b.kind === "Unexpected") - Number(a.kind === "Unexpected");
+      if (unexpectedDelta !== 0) return unexpectedDelta;
+      const byDate = b.entry.entry_date.localeCompare(a.entry.entry_date);
+      if (byDate !== 0) return byDate;
+      return (a.entry.description ?? "").localeCompare(
+        b.entry.description ?? "",
+        undefined,
+        { sensitivity: "base" }
+      );
+    });
+  return {
+    items,
+    unexpected: items.filter((item) => item.kind === "Unexpected"),
+  };
 }
 
 function entriesForPlTotals(entries: LedgerPlEntry[]): LedgerPlEntry[] {

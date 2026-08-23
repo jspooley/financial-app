@@ -7,6 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
 import { ledgerFormToDb, normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
+import { accountMoveFields } from "@/lib/account-move";
 import { syncCostCompanions } from "@/lib/cost-companions";
 import { syncPaymentCompanionFromParent } from "@/lib/payment-companions";
 import { deriveLedgerPaidFlag } from "@/lib/invoice-utils";
@@ -715,6 +716,9 @@ export function LedgerForm({
       account: values.account as CashflowAccount,
       income_statement: values.income_statement,
       balance_sheet: personalUse,
+      ...(initial
+        ? accountMoveFields(initial, values.account as CashflowAccount)
+        : {}),
     };
 
     const paid = deriveLedgerPaidFlag({
