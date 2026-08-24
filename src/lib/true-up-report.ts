@@ -23,9 +23,20 @@ export type PartnerAmounts = {
   molly: number;
 };
 
+export type TrueUpTransaction = {
+  id: string;
+  date: string;
+  description: string;
+  account: string;
+  invoiceId: string;
+  party: Purchaser;
+  amount: number;
+};
+
 export type TrueUpCategoryRow = {
   category: string;
   amounts: PartnerAmounts;
+  transactions?: TrueUpTransaction[];
 };
 
 export type TrueUpBlock = {
@@ -560,6 +571,11 @@ function buildSalesBlocks(
     );
 }
 
+type ExpenseCategoryBucket = {
+  amounts: PartnerAmounts;
+  transactions: TrueUpTransaction[];
+};
+
 function buildExpenseBlocks(
   entries: LedgerEntry[],
   year: number,
@@ -568,7 +584,7 @@ function buildExpenseBlocks(
   const byMonth = new Map<
     string,
     {
-      categories: Map<string, PartnerAmounts>;
+      categories: Map<string, ExpenseCategoryBucket>;
       recorded: Map<string, PartnerAmounts>;
     }
   >();
@@ -577,7 +593,7 @@ function buildExpenseBlocks(
     const existing = byMonth.get(key);
     if (existing) return existing;
     const created = {
-      categories: new Map<string, PartnerAmounts>(),
+      categories: new Map<string, ExpenseCategoryBucket>(),
       recorded: new Map<string, PartnerAmounts>(),
     };
     byMonth.set(key, created);
@@ -604,12 +620,23 @@ function buildExpenseBlocks(
     const amount = netCash(entry);
     if (Math.abs(amount) < 0.005) continue;
     const category = entry.coa_category?.trim() || "Expense";
-    addToCategoryMap(
-      monthGroup(key).categories,
-      category,
-      partnerFromEntry(entry, "payer"),
-      amount
-    );
+    const party = partnerFromEntry(entry, "payer");
+    const group = monthGroup(key);
+    const bucket = group.categories.get(category) ?? {
+      amounts: emptyPartnerAmounts(),
+      transactions: [],
+    };
+    bucket.amounts = addPartnerAmount(bucket.amounts, party, amount);
+    bucket.transactions.push({
+      id: entry.id,
+      date: entry.entry_date,
+      description: entry.description?.trim() || "—",
+      account: entry.account?.trim() || "—",
+      invoiceId: invoiceKey(entry),
+      party,
+      amount,
+    });
+    group.categories.set(category, bucket);
   }
 
   return [...byMonth.entries()]
@@ -617,7 +644,15 @@ function buildExpenseBlocks(
     .map(([key, group]) => {
       const categoryRows = [...group.categories.entries()]
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([category, amounts]) => ({ category, amounts }));
+        .map(([category, bucket]) => ({
+          category,
+          amounts: bucket.amounts,
+          transactions: [...bucket.transactions].sort(
+            (a, b) =>
+              a.date.localeCompare(b.date) ||
+              a.description.localeCompare(b.description)
+          ),
+        }));
       const subtotal = categoryRows.reduce(
         (acc, row) => sumPartnerAmounts(acc, row.amounts),
         emptyPartnerAmounts()

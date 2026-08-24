@@ -1,17 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SelectField } from "@/components/ui/FormFields";
 import { createClient } from "@/lib/supabase/client";
 import { fetchAllLedgerRows, normalizeLedgerRow } from "@/lib/ledger-db";
 import {
+  addPartnerAmount,
   buildTrueUpReport,
+  emptyPartnerAmounts,
   partnerTotal,
   TRUE_UP_EXCLUSIONS,
   type PartnerAmounts,
   type TrueUpBlock,
+  type TrueUpTransaction,
   type TrueUpUntaggedTransfer,
   type TrueUpYtdTotals,
 } from "@/lib/true-up-report";
@@ -137,11 +140,13 @@ function BlockTable({
   secondaryHeader,
   blocks,
   ytdTotals,
+  expandableCategories = false,
 }: {
   sectionLabel: string;
   secondaryHeader: string;
   blocks: TrueUpBlock[];
   ytdTotals?: TrueUpYtdTotals;
+  expandableCategories?: boolean;
 }) {
   if (blocks.length === 0) {
     return (
@@ -171,6 +176,7 @@ function BlockTable({
               key={block.id}
               block={block}
               showDivider={blockIndex > 0}
+              expandableCategories={expandableCategories}
             />
           ))}
           {ytdTotals ? (
@@ -234,13 +240,49 @@ function CollapsibleSection({
   );
 }
 
+function CategoryExpandArrow({ expanded }: { expanded: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="flex size-5 shrink-0 items-center justify-center text-brand-700"
+    >
+      <span
+        className={`inline-block text-sm leading-none transition-transform ${
+          expanded ? "rotate-90" : ""
+        }`}
+      >
+        ▶
+      </span>
+    </span>
+  );
+}
+
+function transactionAmounts(txn: TrueUpTransaction): PartnerAmounts {
+  return addPartnerAmount(emptyPartnerAmounts(), txn.party, txn.amount);
+}
+
 function BlockRows({
   block,
   showDivider,
+  expandableCategories = false,
 }: {
   block: TrueUpBlock;
   showDivider: boolean;
+  expandableCategories?: boolean;
 }) {
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
+    () => new Set()
+  );
+
+  function toggleCategory(category: string) {
+    setExpandedCategories((current) => {
+      const next = new Set(current);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
+      return next;
+    });
+  }
+
   return (
     <>
       {showDivider ? (
@@ -248,21 +290,75 @@ function BlockRows({
           <td colSpan={6} className="h-3 bg-white p-0" />
         </tr>
       ) : null}
-      {block.categoryRows.map((row, index) => (
-        <tr
-          key={`${block.id}-cat-${row.category}`}
-          className={`border-b border-slate-100 ${index === 0 ? "bg-slate-50" : ""}`}
-        >
-          <td className="whitespace-nowrap px-3 py-1.5 font-medium text-slate-900">
-            {index === 0 ? block.groupLabel : ""}
-          </td>
-          <td className="whitespace-nowrap px-3 py-1.5 text-slate-600">
-            {index === 0 ? block.secondaryLabel : ""}
-          </td>
-          <td className="px-3 py-1.5 text-slate-800">{row.category}</td>
-          <AmountCells amounts={row.amounts} />
-        </tr>
-      ))}
+      {block.categoryRows.map((row, index) => {
+        const transactions = row.transactions ?? [];
+        const canExpand = expandableCategories && transactions.length > 0;
+        const isOpen = expandedCategories.has(row.category);
+        return (
+          <Fragment key={`${block.id}-cat-${row.category}`}>
+            <tr
+              className={`border-b border-slate-100 ${index === 0 ? "bg-slate-50" : ""}`}
+            >
+              <td className="whitespace-nowrap px-3 py-1.5 font-medium text-slate-900">
+                {index === 0 ? block.groupLabel : ""}
+              </td>
+              <td className="whitespace-nowrap px-3 py-1.5 text-slate-600">
+                {index === 0 ? block.secondaryLabel : ""}
+              </td>
+              <td className="px-3 py-1.5 text-slate-800">
+                {canExpand ? (
+                  <button
+                    type="button"
+                    onClick={() => toggleCategory(row.category)}
+                    aria-expanded={isOpen}
+                    aria-label={
+                      isOpen
+                        ? `Collapse ${row.category}`
+                        : `Expand ${row.category} (${transactions.length} transactions)`
+                    }
+                    className="-ml-1 flex w-full items-center gap-1 rounded px-1 text-left hover:bg-slate-100"
+                  >
+                    <CategoryExpandArrow expanded={isOpen} />
+                    <span>
+                      {row.category}
+                      <span className="ml-1 text-xs font-normal text-slate-500">
+                        ({transactions.length})
+                      </span>
+                    </span>
+                  </button>
+                ) : (
+                  row.category
+                )}
+              </td>
+              <AmountCells amounts={row.amounts} />
+            </tr>
+            {canExpand && isOpen
+              ? transactions.map((txn) => (
+                  <tr
+                    key={`${block.id}-txn-${txn.id}`}
+                    className="border-b border-slate-50 bg-slate-50/60"
+                  >
+                    <td />
+                    <td className="whitespace-nowrap px-3 py-1 text-slate-500">
+                      {formatDate(txn.date)}
+                    </td>
+                    <td className="px-3 py-1 pl-8 text-slate-600">
+                      <span className="block">{txn.description}</span>
+                      {txn.account !== "—" || txn.invoiceId ? (
+                        <span className="block text-xs text-slate-400">
+                          {[txn.account !== "—" ? txn.account : null, txn.invoiceId]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </span>
+                      ) : null}
+                    </td>
+                    <AmountCells amounts={transactionAmounts(txn)} />
+                  </tr>
+                ))
+              : null}
+          </Fragment>
+        );
+      })}
       {block.categoryRows.length === 0 ? (
         <tr className="border-b border-slate-100 bg-slate-50">
           <td className="px-3 py-1.5 font-medium text-slate-900">{block.groupLabel}</td>
@@ -450,13 +546,14 @@ export default function TrueUpReportPage() {
 
           <CollapsibleSection
             title="Expenses"
-            description="Operating cash by month and COA category. Expenses (debits) are negative. Required transfer splits that month's cash 50/50: send is negative, receive is positive."
+            description="Operating cash by month and COA category. Expand a category to see its transactions. Expenses (debits) are negative. Required transfer splits that month's cash 50/50: send is negative, receive is positive."
           >
             <BlockTable
               sectionLabel="Expenses"
               secondaryHeader="Date"
               blocks={report.expenses}
               ytdTotals={report.ytdExpenses}
+              expandableCategories
             />
           </CollapsibleSection>
 
