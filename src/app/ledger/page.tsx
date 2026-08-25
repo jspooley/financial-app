@@ -370,7 +370,7 @@ function LedgerPageContent() {
   const goodsAndServicesTotal = useMemo(
     () =>
       debitEntries.reduce(
-        (sum, entry) => sum + getLedgerInvoicedAmount(entry),
+        (sum, entry) => sum + getLedgerCustomerPrice(entry),
         0
       ),
     [debitEntries]
