@@ -223,56 +223,64 @@ export const InvoicePdfContent = forwardRef<HTMLDivElement, InvoicePdfContentPro
           </tbody>
         </table>
 
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "0.35in" }}>
-          <table style={{ borderCollapse: "collapse", fontSize: "9pt", minWidth: "2.6in" }}>
-            <tbody>
-              {[
-                ["Product Subtotal:", totals.merchandise],
-                ["Shipping:", totals.shipping],
-                ["Taxes:", totals.tax],
-                ["Grand Total:", totals.total, true],
-              ].map(([label, amount, bold]) => (
-                <tr key={String(label)}>
-                  <td
-                    style={{
-                      color: PINK,
-                      fontWeight: 700,
-                      textAlign: "right",
-                      padding: "4px 8px 4px 0",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {label}
-                  </td>
-                  <td
-                    style={{
-                      border: "1px solid #111",
-                      padding: "4px 8px",
-                      textAlign: "right",
-                      minWidth: "0.9in",
-                      fontWeight: bold ? 700 : 400,
-                    }}
-                  >
-                    {formatMoney(Number(amount))}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <p
+        <div
+          data-pdf-keep="true"
           style={{
-            textAlign: "center",
-            color: PINK,
-            fontSize: "14pt",
-            fontWeight: 700,
-            fontStyle: "italic",
-            margin: "0.25in 0 0",
+            breakInside: "avoid",
+            pageBreakInside: "avoid",
           }}
         >
-          Thank you for your putting your trust in us!!! XOXO
-        </p>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "0.35in" }}>
+            <table style={{ borderCollapse: "collapse", fontSize: "9pt", minWidth: "2.6in" }}>
+              <tbody>
+                {[
+                  ["Product Subtotal:", totals.merchandise],
+                  ["Shipping:", totals.shipping],
+                  ["Taxes:", totals.tax],
+                  ["Grand Total:", totals.total, true],
+                ].map(([label, amount, bold]) => (
+                  <tr key={String(label)}>
+                    <td
+                      style={{
+                        color: PINK,
+                        fontWeight: 700,
+                        textAlign: "right",
+                        padding: "4px 8px 4px 0",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {label}
+                    </td>
+                    <td
+                      style={{
+                        border: "1px solid #111",
+                        padding: "4px 8px",
+                        textAlign: "right",
+                        minWidth: "0.9in",
+                        fontWeight: bold ? 700 : 400,
+                      }}
+                    >
+                      {formatMoney(Number(amount))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <p
+            style={{
+              textAlign: "center",
+              color: PINK,
+              fontSize: "14pt",
+              fontWeight: 700,
+              fontStyle: "italic",
+              margin: "0.25in 0 0",
+            }}
+          >
+            Thank you for your putting your trust in us!!! XOXO
+          </p>
+        </div>
       </div>
     );
   }

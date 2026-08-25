@@ -413,6 +413,24 @@ export function InvoiceForm({
     );
   }, [initial, currentInvoiceLines, linesForPo]);
 
+  const includedLineTotals = useMemo(() => {
+    const lines = selectableLines.filter((line) => includedLineIds.has(line.id));
+    let profit = 0;
+    let tax = 0;
+    let fees = 0;
+    for (const line of lines) {
+      profit +=
+        getLedgerCustomerPrice(line) - getLedgerTotalDesignerCost(line);
+      tax += Number(line.tax_amount ?? 0);
+      fees += Number(line.payment_fee ?? 0);
+    }
+    return {
+      profit: roundMoney(profit),
+      tax: roundMoney(tax),
+      fees: roundMoney(fees),
+    };
+  }, [selectableLines, includedLineIds]);
+
   const ledgerSummary = useMemo(() => {
     const po = poNumber?.trim();
     if (!po) return null;
@@ -732,9 +750,41 @@ export function InvoiceForm({
           <InputField label="Invoice Date" type="date" {...register("invoice_date")} />
           <TextareaField
             label="Notes"
-            className="sm:col-span-2"
             {...register("notes")}
           />
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium text-slate-700">Selected items</p>
+            <dl className="min-h-24 space-y-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-slate-600">Total profit</dt>
+                <dd
+                  className={`tabular-nums font-semibold ${
+                    includedLineTotals.profit < 0
+                      ? "text-red-700"
+                      : "text-emerald-700"
+                  }`}
+                >
+                  {formatCurrency(includedLineTotals.profit)}
+                </dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-slate-600">Total tax</dt>
+                <dd className="tabular-nums font-semibold text-slate-900">
+                  {formatCurrency(includedLineTotals.tax)}
+                </dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-slate-600">Total fees</dt>
+                <dd className="tabular-nums font-semibold text-slate-900">
+                  {formatCurrency(includedLineTotals.fees)}
+                </dd>
+              </div>
+            </dl>
+            <p className="text-xs text-slate-500">
+              From checked lines. Profit is customer cost minus designer total
+              cost.
+            </p>
+          </div>
         </div>
 
         {(initial || (clientId && poNumber)) && (

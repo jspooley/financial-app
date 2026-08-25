@@ -15,6 +15,7 @@ import {
   isToBeInvoicedLine,
   jobKeysByStatus,
   ledgerJobKey,
+  normalizeInvoiceId,
   normalizePoNumber,
 } from "@/lib/invoice-utils";
 import { isInvoiceGoodsLine } from "@/lib/coa";
@@ -44,15 +45,66 @@ import { SelectField } from "@/components/ui/FormFields";
 
 const GOODS_AND_SERVICES_LABEL = "Goods and Services";
 
+type GoodsAndServicesInvoiceTotal = {
+  invoiceId: string | null;
+  label: string;
+  count: number;
+  total: number;
+};
+
+function goodsAndServicesTotalsByInvoice(
+  entries: LedgerEntry[]
+): GoodsAndServicesInvoiceTotal[] {
+  const byInvoice = new Map<string, { count: number; total: number }>();
+  let uninvoicedCount = 0;
+  let uninvoicedTotal = 0;
+
+  for (const entry of entries) {
+    const amount = getLedgerCustomerPrice(entry);
+    const invoiceId = normalizeInvoiceId(entry.invoice_id);
+    if (!invoiceId) {
+      uninvoicedCount += 1;
+      uninvoicedTotal += amount;
+      continue;
+    }
+    const current = byInvoice.get(invoiceId) ?? { count: 0, total: 0 };
+    current.count += 1;
+    current.total += amount;
+    byInvoice.set(invoiceId, current);
+  }
+
+  const rows: GoodsAndServicesInvoiceTotal[] = [...byInvoice.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([invoiceId, group]) => ({
+      invoiceId,
+      label: invoiceId,
+      count: group.count,
+      total: group.total,
+    }));
+
+  if (uninvoicedCount > 0) {
+    rows.push({
+      invoiceId: null,
+      label: "Not invoiced",
+      count: uninvoicedCount,
+      total: uninvoicedTotal,
+    });
+  }
+
+  return rows;
+}
+
 function GoodsAndServicesSectionHeader({
   entryCount,
   entriesTotal,
+  invoiceTotals,
   budgetLabel,
   onDownloadCsv,
   downloadDisabled,
 }: {
   entryCount: number;
   entriesTotal: number;
+  invoiceTotals: GoodsAndServicesInvoiceTotal[];
   budgetLabel?: ReactNode;
   onDownloadCsv: () => void;
   downloadDisabled: boolean;
@@ -67,9 +119,35 @@ function GoodsAndServicesSectionHeader({
           </span>
           {budgetLabel}
         </h2>
+        {invoiceTotals.length > 0 ? (
+          <ul className="mt-2 space-y-0.5 text-sm">
+            {invoiceTotals.map((row) => (
+              <li
+                key={row.invoiceId ?? "not-invoiced"}
+                className="flex flex-wrap items-baseline gap-x-2"
+              >
+                <span
+                  className={
+                    row.invoiceId
+                      ? "font-medium text-slate-800"
+                      : "font-medium text-slate-600"
+                  }
+                >
+                  {row.invoiceId ? row.label : "Not invoiced"}
+                </span>
+                <span className="tabular-nums font-semibold text-brand-800">
+                  {formatCurrency(row.total)}
+                </span>
+                <span className="text-slate-500">
+                  ({row.count} {row.count === 1 ? "item" : "items"})
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <p className="mt-1 text-sm text-slate-500">
           {GOODS_AND_SERVICES_LABEL} — includes Invoiced, Invoice ID, Paid, and payment
-          columns.
+          columns. Totals are customer price × qty (no tax, fees, or shipping).
         </p>
       </div>
       <Button
@@ -376,6 +454,11 @@ function LedgerPageContent() {
     [debitEntries]
   );
 
+  const goodsAndServicesInvoiceTotals = useMemo(
+    () => goodsAndServicesTotalsByInvoice(debitEntries),
+    [debitEntries]
+  );
+
   const handleDownloadGoodsAndServicesCsv = useCallback(() => {
     downloadGoodsAndServicesLedgerCsv(debitEntries, invoicedPoKeys);
   }, [debitEntries, invoicedPoKeys]);
@@ -627,6 +710,7 @@ function LedgerPageContent() {
                   <GoodsAndServicesSectionHeader
                     entryCount={group.rows.length}
                     entriesTotal={goodsAndServicesTotal}
+                    invoiceTotals={goodsAndServicesInvoiceTotals}
                     budgetLabel={debitsBudgetLabel()}
                     onDownloadCsv={handleDownloadGoodsAndServicesCsv}
                     downloadDisabled={debitEntries.length === 0}
@@ -706,6 +790,7 @@ function LedgerPageContent() {
               <GoodsAndServicesSectionHeader
                 entryCount={debitEntries.length}
                 entriesTotal={goodsAndServicesTotal}
+                invoiceTotals={goodsAndServicesInvoiceTotals}
                 budgetLabel={debitsBudgetLabel()}
                 onDownloadCsv={handleDownloadGoodsAndServicesCsv}
                 downloadDisabled={debitEntries.length === 0}
