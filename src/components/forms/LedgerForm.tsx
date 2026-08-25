@@ -1055,41 +1055,39 @@ export function LedgerForm({
                   : "=( Retail Price x Qty ) x (1 - Discount %)"
               }
             />
-            <div className="flex items-end gap-3">
-              <div className="min-w-0 flex-1">
-                <InputField
-                  label={usesCostMarkup ? "Markup (%)" : "Discount (%)"}
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  max={usesCostMarkup ? undefined : 100}
-                  required
-                  hint={
-                    isService
-                      ? "0% = customer pays full retail. Applied as (retail × qty) × (1 − discount %)."
-                      : isRetail && !hasTradePartner
-                        ? "((retail − designer) ÷ designer) × 100. Edit to set retail from cost, or set retail to auto-fill."
-                        : hasTradePartner
-                          ? "Applied to retail for customer price. Defaults to 0%."
-                          : "Applied to retail for customer price."
-                  }
-                  error={errors.discount_percent?.message}
-                  {...register("discount_percent", {
-                    setValueAs: (value) => {
-                      if (value === "" || value == null) return 0;
-                      const n = Number(value);
-                      return Number.isFinite(n) ? n : 0;
-                    },
-                    onChange: () => {
-                      if (isRetail && !hasTradePartner) {
-                        retailManuallyEdited.current = false;
-                      }
-                    },
-                  })}
-                />
-              </div>
+            <div>
+              <InputField
+                label={usesCostMarkup ? "Markup (%)" : "Discount (%)"}
+                type="number"
+                step="0.01"
+                min="0"
+                max={usesCostMarkup ? undefined : 100}
+                required
+                hint={
+                  isService
+                    ? "0% = customer pays full retail. Applied as (retail × qty) × (1 − discount %)."
+                    : isRetail && !hasTradePartner
+                      ? "((retail − designer) ÷ designer) × 100. Edit to set retail from cost, or set retail to auto-fill."
+                      : hasTradePartner
+                        ? "Applied to retail for customer price. Defaults to 0%."
+                        : "Applied to retail for customer price."
+                }
+                error={errors.discount_percent?.message}
+                {...register("discount_percent", {
+                  setValueAs: (value) => {
+                    if (value === "" || value == null) return 0;
+                    const n = Number(value);
+                    return Number.isFinite(n) ? n : 0;
+                  },
+                  onChange: () => {
+                    if (isRetail && !hasTradePartner) {
+                      retailManuallyEdited.current = false;
+                    }
+                  },
+                })}
+              />
               {!isService && tradePartnerDiscount > 0 ? (
-                <p className="shrink-0 pb-2.5 text-sm text-slate-600">
+                <p className="mt-1 text-sm text-slate-600">
                   Trade discount:{" "}
                   <span className="font-medium text-slate-800">
                     {formatPercent(tradePartnerDiscount)}

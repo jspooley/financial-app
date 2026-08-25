@@ -335,7 +335,7 @@ function BlockRows({
             {canExpand && isOpen
               ? transactions.map((txn) => (
                   <tr
-                    key={`${block.id}-txn-${txn.id}`}
+                    key={`${block.id}-txn-${row.category}-${txn.id}`}
                     className="border-b border-slate-50 bg-slate-50/60"
                   >
                     <td />
@@ -534,13 +534,14 @@ export default function TrueUpReportPage() {
         <div className="space-y-8">
           <CollapsibleSection
             title="Sales and Revenue"
-            description="Cash in and out by invoice. Sales income is net of tax, shipping, and fees (pass-through, not shared). COGS is negative (money out). Required transfer splits that net 50/50: send is negative, receive is positive."
+            description="Cash in and out by invoice. Expand a COA category to see the lines on that invoice. Sales income is net of tax, shipping, and fees (pass-through, not shared). COGS is negative (money out). Required transfer splits that net 50/50: send is negative, receive is positive."
           >
             <BlockTable
               sectionLabel="Sales&Revenue"
               secondaryHeader="Invoice"
               blocks={report.sales}
               ytdTotals={report.ytdSales}
+              expandableCategories
             />
           </CollapsibleSection>
 

@@ -22,9 +22,17 @@ import {
   type InvoiceLineItem,
 } from "@/lib/invoice-utils";
 import type { Client, Invoice, LedgerEntry } from "@/lib/types";
-import { formatCurrency, formatDate, getLedgerInvoicedAmountExcludingPaymentFee, roundMoney } from "@/lib/utils";
+import {
+  formatCurrency,
+  formatDate,
+  formatQuantity,
+  getLedgerCustomerPrice,
+  getLedgerInvoicedAmountExcludingPaymentFee,
+  getLedgerTotalDesignerCost,
+  roundMoney,
+} from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
-import { CheckboxField, InputField, SelectField, TextareaField } from "@/components/ui/FormFields";
+import { InputField, SelectField, TextareaField } from "@/components/ui/FormFields";
 import { InvoiceDetailView } from "@/components/invoicing/InvoiceDetailView";
 
 const schema = z.object({
@@ -35,6 +43,106 @@ const schema = z.object({
 });
 
 type FormValues = z.infer<typeof schema>;
+
+function DetailsExpandArrow({ expanded }: { expanded: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="flex size-5 shrink-0 items-center justify-center text-brand-700"
+    >
+      <span
+        className={`inline-block text-sm leading-none transition-transform ${
+          expanded ? "rotate-90" : ""
+        }`}
+      >
+        ▶
+      </span>
+    </span>
+  );
+}
+
+function InvoiceLineIncludeRow({
+  line,
+  checked,
+  disabled,
+  onToggle,
+}: {
+  line: LedgerEntry | InvoiceLineItem;
+  checked: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const description = line.description?.trim() || "Item";
+  const details = [
+    { label: "Quantity", value: formatQuantity(Number(line.quantity)) },
+    {
+      label: "Designer total cost",
+      value: formatCurrency(getLedgerTotalDesignerCost(line)),
+    },
+    { label: "Tax", value: formatCurrency(Number(line.tax_amount ?? 0)) },
+    { label: "Fees", value: formatCurrency(Number(line.payment_fee ?? 0)) },
+    {
+      label: "Shipping",
+      value: formatCurrency(Number(line.shipping_receiving_amount ?? 0)),
+    },
+    {
+      label: "Customer cost",
+      value: formatCurrency(getLedgerCustomerPrice(line)),
+    },
+  ];
+
+  return (
+    <li
+      className={`rounded-lg border shadow-sm ${
+        disabled ? "border-slate-300 bg-slate-50" : "border-brand-300 bg-white"
+      }`}
+    >
+      <div className="flex min-h-11 items-center gap-1 px-3">
+        <label
+          className={`flex min-w-0 flex-1 items-center gap-3 py-2 ${
+            disabled ? "cursor-default" : "cursor-pointer"
+          }`}
+        >
+          <input
+            type="checkbox"
+            className="size-4 shrink-0 rounded border-brand-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed disabled:border-slate-300"
+            checked={checked}
+            disabled={disabled}
+            readOnly={disabled}
+            onChange={onToggle}
+          />
+          <span className="min-w-0 flex-1 text-sm font-medium text-slate-700">
+            {formatDate(line.entry_date)} — {description} —{" "}
+            {formatCurrency(getLedgerInvoicedAmountExcludingPaymentFee(line))}
+          </span>
+        </label>
+        <button
+          type="button"
+          onClick={() => setOpen((current) => !current)}
+          aria-expanded={open}
+          aria-label={
+            open ? `Hide details for ${description}` : `Show details for ${description}`
+          }
+          className="flex shrink-0 items-center gap-1 rounded px-1 py-1 text-sm text-brand-700 hover:bg-slate-50"
+        >
+          <DetailsExpandArrow expanded={open} />
+          <span>{open ? "Hide details" : "Show details"}</span>
+        </button>
+      </div>
+      {open ? (
+        <dl className="grid gap-x-6 gap-y-1 border-t border-slate-100 px-3 py-2 text-sm sm:grid-cols-2">
+          {details.map((item) => (
+            <div key={item.label} className="flex justify-between gap-3">
+              <dt className="text-slate-500">{item.label}</dt>
+              <dd className="tabular-nums text-slate-900">{item.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+    </li>
+  );
+}
 
 interface InvoiceFormProps {
   clients: Client[];
@@ -677,17 +785,14 @@ export function InvoiceForm({
             ) : (
               <ul className="space-y-2">
                 {selectableLines.map((line) => (
-                    <li key={line.id}>
-                      <CheckboxField
-                        labelPosition="inline"
-                        disabled={invoiceFullyPaid}
-                        readOnly={invoiceFullyPaid}
-                        label={`${formatDate(line.entry_date)} — ${line.description?.trim() || "Item"} — ${formatCurrency(getLedgerInvoicedAmountExcludingPaymentFee(line))}`}
-                        checked={includedLineIds.has(line.id)}
-                        onChange={() => toggleLine(line.id)}
-                      />
-                    </li>
-                  ))}
+                  <InvoiceLineIncludeRow
+                    key={line.id}
+                    line={line}
+                    checked={includedLineIds.has(line.id)}
+                    disabled={invoiceFullyPaid}
+                    onToggle={() => toggleLine(line.id)}
+                  />
+                ))}
               </ul>
             )}
           </section>

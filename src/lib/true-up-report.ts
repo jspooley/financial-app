@@ -215,6 +215,33 @@ function invoiceKey(entry: Pick<LedgerEntry, "invoice_id">) {
   return normalizeInvoiceId(entry.invoice_id);
 }
 
+function trueUpTransactionFromEntry(
+  entry: LedgerEntry,
+  party: Purchaser,
+  amount: number,
+  date = entry.entry_date
+): TrueUpTransaction {
+  return {
+    id: entry.id,
+    date,
+    description:
+      entry.description?.trim() ||
+      entry.clients?.name?.trim() ||
+      "—",
+    account: entry.account?.trim() || "—",
+    invoiceId: invoiceKey(entry),
+    party,
+    amount,
+  };
+}
+
+function sortTrueUpTransactions(transactions: TrueUpTransaction[]) {
+  return [...transactions].sort(
+    (a, b) =>
+      a.date.localeCompare(b.date) || a.description.localeCompare(b.description)
+  );
+}
+
 function invoiceProjectLabel(
   invoiceId: string,
   poNumber?: string | null
@@ -465,6 +492,8 @@ function buildSalesBlocks(
       projectLabel: string;
       cogs: PartnerAmounts;
       income: PartnerAmounts;
+      cogsTransactions: TrueUpTransaction[];
+      incomeTransactions: TrueUpTransaction[];
       recorded: Map<string, PartnerAmounts>;
     }
   >();
@@ -482,6 +511,8 @@ function buildSalesBlocks(
       projectLabel: invoiceProjectLabel(invoiceId, poNumber),
       cogs: emptyPartnerAmounts(),
       income: emptyPartnerAmounts(),
+      cogsTransactions: [] as TrueUpTransaction[],
+      incomeTransactions: [] as TrueUpTransaction[],
       recorded: new Map<string, PartnerAmounts>(),
     };
     byInvoice.set(invoiceId, created);
@@ -516,10 +547,16 @@ function buildSalesBlocks(
         source
       );
       if (income) {
-        group(invoiceId, entry.po_number).income = addPartnerAmount(
-          group(invoiceId, entry.po_number).income,
-          partnerFromEntry(entry, "payee"),
-          income
+        const g = group(invoiceId, entry.po_number);
+        const party = partnerFromEntry(entry, "payee");
+        g.income = addPartnerAmount(g.income, party, income);
+        g.incomeTransactions.push(
+          trueUpTransactionFromEntry(
+            entry,
+            party,
+            income,
+            entry.date_paid || entry.entry_date
+          )
         );
       }
       continue;
@@ -530,25 +567,44 @@ function buildSalesBlocks(
     const cogs = -getLedgerTotalDesignerCost(entry);
     const g = group(invoiceId, entry.po_number);
     const party = partnerFromEntry(entry, "payer");
-    if (cogs) g.cogs = addPartnerAmount(g.cogs, party, cogs);
+    if (cogs) {
+      g.cogs = addPartnerAmount(g.cogs, party, cogs);
+      g.cogsTransactions.push(trueUpTransactionFromEntry(entry, party, cogs));
+    }
 
     if (
       !paymentCompanionParentIds.has(entry.id) &&
       Number(entry.payment_amount ?? 0) > 0
     ) {
-      g.income = addPartnerAmount(
-        g.income,
-        partnerFromEntry(entry, "payee"),
-        netSalesIncome(Number(entry.payment_amount ?? 0), entry)
-      );
+      const income = netSalesIncome(Number(entry.payment_amount ?? 0), entry);
+      if (income) {
+        const payee = partnerFromEntry(entry, "payee");
+        g.income = addPartnerAmount(g.income, payee, income);
+        g.incomeTransactions.push(
+          trueUpTransactionFromEntry(
+            entry,
+            payee,
+            income,
+            entry.date_paid || entry.entry_date
+          )
+        );
+      }
     }
   }
 
   return [...byInvoice.values()]
     .map((group) => {
       const categoryRows: TrueUpCategoryRow[] = [
-        { category: TRUE_UP_COGS_LABEL, amounts: group.cogs },
-        { category: TRUE_UP_INCOME_LABEL, amounts: group.income },
+        {
+          category: TRUE_UP_COGS_LABEL,
+          amounts: group.cogs,
+          transactions: sortTrueUpTransactions(group.cogsTransactions),
+        },
+        {
+          category: TRUE_UP_INCOME_LABEL,
+          amounts: group.income,
+          transactions: sortTrueUpTransactions(group.incomeTransactions),
+        },
       ];
       return finishBlock(
         `inv:${group.invoiceId}`,
@@ -627,15 +683,7 @@ function buildExpenseBlocks(
       transactions: [],
     };
     bucket.amounts = addPartnerAmount(bucket.amounts, party, amount);
-    bucket.transactions.push({
-      id: entry.id,
-      date: entry.entry_date,
-      description: entry.description?.trim() || "—",
-      account: entry.account?.trim() || "—",
-      invoiceId: invoiceKey(entry),
-      party,
-      amount,
-    });
+    bucket.transactions.push(trueUpTransactionFromEntry(entry, party, amount));
     group.categories.set(category, bucket);
   }
 
@@ -647,11 +695,7 @@ function buildExpenseBlocks(
         .map(([category, bucket]) => ({
           category,
           amounts: bucket.amounts,
-          transactions: [...bucket.transactions].sort(
-            (a, b) =>
-              a.date.localeCompare(b.date) ||
-              a.description.localeCompare(b.description)
-          ),
+          transactions: sortTrueUpTransactions(bucket.transactions),
         }));
       const subtotal = categoryRows.reduce(
         (acc, row) => sumPartnerAmounts(acc, row.amounts),
