@@ -193,7 +193,8 @@ export function requiredTransfers(amounts: PartnerAmounts): PartnerAmounts {
 /**
  * After attributing purchases to the purchaser and client payments to the
  * payee, equalize profit only. Costs are fully reimbursed; profit is split
- * 50/50.
+ * 50/50. When there is no profit yet (costs exceed income), reimburse each
+ * partner's purchases in full instead of splitting the shortfall 50/50.
  */
 export function requiredProfitTransfers(
   costs: PartnerAmounts,
@@ -201,9 +202,15 @@ export function requiredProfitTransfers(
 ): PartnerAmounts {
   const position = sumPartnerAmounts(costs, income);
   const profit = partnerTotal(position);
-  const halfProfit = roundMoney(profit / 2);
-  const jess = roundMoney(halfProfit - position.jess);
-  return { jess, molly: roundMoney(-jess) };
+
+  if (profit > 0) {
+    const halfProfit = roundMoney(profit / 2);
+    const jess = roundMoney(halfProfit - position.jess);
+    return { jess, molly: roundMoney(-jess) };
+  }
+
+  const netToMolly = roundMoney(-costs.molly + costs.jess);
+  return { molly: netToMolly, jess: roundMoney(-netToMolly) };
 }
 
 export function partnerFromAccount(
