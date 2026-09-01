@@ -78,6 +78,7 @@ const schema = z
       .number({ invalid_type_error: "Must be a number" })
       .min(0, "Cannot be negative"),
     shipping_receiving_amount: z.coerce.number().min(0).transform(roundMoney),
+    receiving_amount: z.coerce.number().min(0).transform(roundMoney),
     retail_price: z.coerce
       .number({ invalid_type_error: "Retail price is required" })
       .positive("Retail price must be greater than 0")
@@ -115,6 +116,7 @@ type MoneyFieldName =
   | "retail_price"
   | "designer_cost"
   | "shipping_receiving_amount"
+  | "receiving_amount"
   | "tax_amount";
 
 const currencyInputClass = `${fieldClass} py-2 pl-7 pr-3`;
@@ -274,6 +276,7 @@ export function LedgerForm({
       trade_partner_id: initial?.trade_partner_id ?? "",
       discount_percent: initial?.discount_percent ?? 0,
       shipping_receiving_amount: roundMoney(initial?.shipping_receiving_amount ?? 0),
+      receiving_amount: roundMoney(initial?.receiving_amount ?? 0),
       retail_price:
         initial?.retail_price != null && initial.retail_price > 0
           ? roundMoney(initial.retail_price)
@@ -297,6 +300,7 @@ export function LedgerForm({
   const discountPercent = useWatch({ control, name: "discount_percent" });
   const wholesaleRetail = useWatch({ control, name: "wholesale_retail" });
   const shippingAmount = useWatch({ control, name: "shipping_receiving_amount" });
+  const receivingAmount = useWatch({ control, name: "receiving_amount" });
   const retailPrice = useWatch({ control, name: "retail_price" });
   const designerCost = useWatch({ control, name: "designer_cost" });
   const storedPaymentFee = roundMoney(initial?.payment_fee ?? 0);
@@ -311,6 +315,7 @@ export function LedgerForm({
   const numericQty = Number(quantity) || 0;
   const numericDiscount = Number(discountPercent) || 0;
   const numericShipping = Number(shippingAmount) || 0;
+  const numericReceiving = Number(receivingAmount) || 0;
   const numericRetailPrice = Number(retailPrice) || 0;
   const numericDesignerCost = Number(designerCost) || 0;
   const isWholesale = wholesaleRetail === "wholesale";
@@ -415,6 +420,7 @@ export function LedgerForm({
         discount_percent: numericDiscount,
         tax_amount: effectiveTax,
         shipping_receiving_amount: numericShipping,
+        receiving_amount: numericReceiving,
         wholesale_retail: wholesaleRetail,
         payment_fee: storedPaymentFee,
         balance_sheet: isPersonalUse,
@@ -427,6 +433,7 @@ export function LedgerForm({
       numericDiscount,
       effectiveTax,
       numericShipping,
+      numericReceiving,
       wholesaleRetail,
       storedPaymentFee,
       isPersonalUse,
@@ -460,8 +467,9 @@ export function LedgerForm({
       quantity: numericQty,
       discount_percent: numericDiscount,
       tax_amount: effectiveTax,
-      shipping_receiving_amount: numericShipping,
-      wholesale_retail: wholesaleRetail,
+        shipping_receiving_amount: numericShipping,
+        receiving_amount: numericReceiving,
+        wholesale_retail: wholesaleRetail,
       designer_cost: numericDesignerCost,
       trade_partner_id: selectedTradePartnerId || null,
       payment_fee: storedPaymentFee,
@@ -480,6 +488,7 @@ export function LedgerForm({
     numericDiscount,
     effectiveTax,
     numericShipping,
+    numericReceiving,
     wholesaleRetail,
     numericDesignerCost,
     selectedTradePartnerId,
@@ -704,6 +713,7 @@ export function LedgerForm({
         trade_partner_id: values.trade_partner_id,
         discount_percent: values.discount_percent,
         shipping_receiving_amount: values.shipping_receiving_amount,
+        receiving_amount: values.receiving_amount,
         retail_price: values.retail_price,
         tax_amount: effectiveTax,
         sand_u_tax: clientSandUTaxRate,
@@ -1104,6 +1114,13 @@ export function LedgerForm({
               allowZero
               error={errors.shipping_receiving_amount?.message}
             />
+            <CurrencyField
+              control={control}
+              name="receiving_amount"
+              label="Receiving"
+              allowZero
+              error={errors.receiving_amount?.message}
+            />
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
             <InputField
@@ -1151,7 +1168,7 @@ export function LedgerForm({
               hint={
                 isPersonalUse
                   ? "Personal use: tax amount only"
-                  : "Customer price × qty + shipping + payment fee + tax amount"
+                  : "Customer price × qty + shipping + receiving + payment fee + tax amount"
               }
             />
           </div>

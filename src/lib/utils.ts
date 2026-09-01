@@ -165,7 +165,7 @@ export function getLedgerCustomerPrice(entry: {
   });
 }
 
-/** Customer price × qty + tax + shipping + fee — used for invoice and payment line totals.
+/** Customer price × qty + tax + shipping + receiving + fee — used for invoice and payment line totals.
  * Personal use (balance sheet) lines invoice tax amount only. */
 export function getLedgerInvoicedAmount(entry: {
   retail_price: number;
@@ -174,6 +174,7 @@ export function getLedgerInvoicedAmount(entry: {
   customer_price?: number | null;
   tax_amount?: number;
   shipping_receiving_amount?: number;
+  receiving_amount?: number;
   wholesale_retail?: "wholesale" | "retail" | "service";
   payment_fee?: number;
   balance_sheet?: boolean | null;
@@ -189,6 +190,7 @@ export function getLedgerInvoicedAmount(entry: {
   }
 
   const shipping = Number(entry.shipping_receiving_amount) || 0;
+  const receiving = Number(entry.receiving_amount) || 0;
   const fee = Number(entry.payment_fee ?? 0);
   return roundMoney(
     getLedgerCustomerPrice({
@@ -202,6 +204,7 @@ export function getLedgerInvoicedAmount(entry: {
     }) +
       tax +
       shipping +
+      receiving +
       fee
   );
 }
@@ -269,6 +272,7 @@ type LedgerBalanceEntry = {
   customer_price?: number | null;
   tax_amount?: number;
   shipping_receiving_amount?: number;
+  receiving_amount?: number;
   wholesale_retail?: "wholesale" | "retail" | "service";
   payment_fee?: number;
   payment_amount?: number;
@@ -290,6 +294,7 @@ export function ledgerLineBilledAmount(
     customer_price: entry.customer_price,
     tax_amount: entry.tax_amount ?? 0,
     shipping_receiving_amount: entry.shipping_receiving_amount ?? 0,
+    receiving_amount: entry.receiving_amount ?? 0,
     wholesale_retail: entry.wholesale_retail ?? "retail",
     payment_fee: entry.payment_fee ?? 0,
     balance_sheet: entry.balance_sheet,

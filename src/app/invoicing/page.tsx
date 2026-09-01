@@ -310,6 +310,7 @@ export default function InvoicingPage() {
           { key: "profit", label: "Profit", className: "text-right" },
           { key: "tax", label: "Tax", className: "text-right" },
           { key: "shipping", label: "Shipping", className: "text-right" },
+          { key: "receiving", label: "Receiving", className: "text-right" },
           { key: "fees", label: "Fees", className: "text-right" },
           { key: "invoiceAmount", label: "Invoice Amount", className: "text-right" },
           { key: "viewInvoice", label: "View", className: "text-right" },
@@ -321,6 +322,7 @@ export default function InvoicingPage() {
             profit: 0,
             tax: 0,
             shipping: 0,
+            receiving: 0,
             fees: 0,
           };
           return {
@@ -351,6 +353,7 @@ export default function InvoicingPage() {
             profit: <InvoiceProfitValue amount={selectedItems.profit} />,
             tax: formatCurrency(selectedItems.tax),
             shipping: formatCurrency(selectedItems.shipping),
+            receiving: formatCurrency(selectedItems.receiving),
             fees: formatCurrency(selectedItems.fees),
             invoiceAmount: formatCurrency(invoiceTotals.amounts[invoiceId] ?? 0),
             viewInvoice: (

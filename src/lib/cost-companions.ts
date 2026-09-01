@@ -11,7 +11,7 @@ export const COA_FEES_CATEGORY = "203 commissions and fees";
  * to the state later, so it is entered on Cashflow as one monthly payment
  * rather than as a purchase-dated debit (migration 063).
  */
-export const COST_COMPANION_KINDS = ["shipping", "fee"] as const;
+export const COST_COMPANION_KINDS = ["shipping", "receiving", "fee"] as const;
 
 export type CostCompanionKind = (typeof COST_COMPANION_KINDS)[number];
 
@@ -20,6 +20,7 @@ const COST_COMPANION_CONFIG: Record<
   { coaCategory: string; suffix: string }
 > = {
   shipping: { coaCategory: COA_FEES_CATEGORY, suffix: "shipping" },
+  receiving: { coaCategory: COA_FEES_CATEGORY, suffix: "receiving" },
   fee: { coaCategory: COA_FEES_CATEGORY, suffix: "payment fee" },
 };
 
@@ -40,18 +41,19 @@ export function isPaymentCompanionKind(kind: CompanionKind | null | undefined) {
  * companion, so the caller passes the effective fee for the parent.
  */
 export function costCompanionAmounts(
-  parent: Pick<LedgerEntry, "shipping_receiving_amount">,
+  parent: Pick<LedgerEntry, "shipping_receiving_amount" | "receiving_amount">,
   paymentFee: number
 ): Record<CostCompanionKind, number> {
   return {
     shipping: roundMoney(Number(parent.shipping_receiving_amount ?? 0)),
+    receiving: roundMoney(Number(parent.receiving_amount ?? 0)),
     fee: roundMoney(Number(paymentFee) || 0),
   };
 }
 
 /**
  * Companion payload. The amount lives in debit_amount only — tax_amount,
- * shipping_receiving_amount, and payment_fee stay zero here so invoiced totals
+ * shipping_receiving_amount, receiving_amount, and payment_fee stay zero here so invoiced totals
  * and S&U tax reporting keep reading the parent.
  */
 export function buildCostCompanionPayload(
@@ -74,6 +76,7 @@ export function buildCostCompanionPayload(
     trade_partner_id: null,
     discount_percent: 0,
     shipping_receiving_amount: 0,
+    receiving_amount: 0,
     retail_price: 0,
     tax_amount: 0,
     customer_price: 0,
@@ -121,7 +124,7 @@ export async function syncCostCompanions(
     ? 0
     : (options?.paymentFee ?? Number(parent.payment_fee ?? 0));
   const amounts = parent.balance_sheet
-    ? { shipping: 0, fee: 0 }
+    ? { shipping: 0, receiving: 0, fee: 0 }
     : costCompanionAmounts(parent, paymentFee);
 
   const { data: existing, error: loadError } = await supabase

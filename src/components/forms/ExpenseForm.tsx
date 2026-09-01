@@ -242,6 +242,7 @@ export function ExpenseForm({
       trade_partner_id: null,
       discount_percent: 0,
       shipping_receiving_amount: 0,
+      receiving_amount: 0,
       retail_price: 0,
       tax_amount: 0,
       client_id: null,

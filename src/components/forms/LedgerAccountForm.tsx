@@ -248,7 +248,7 @@ export function LedgerAccountForm({
     const label = description;
     if (
       !confirm(
-        `Delete this charge?\n${label}\n\nRelated tax/shipping/fee rows on this charge are also deleted. This cannot be undone.`
+        `Delete this charge?\n${label}\n\nRelated tax/shipping/receiving/fee rows on this charge are also deleted. This cannot be undone.`
       )
     ) {
       return;
@@ -295,7 +295,7 @@ export function LedgerAccountForm({
         {canEditCoa
           ? "Change the bank account and CoA category (for example 302 owner's draw vs 308 personal-card refund)."
           : canEditPurchaser
-            ? "Change who purchased this line. Shipping and payment-fee companions stay with the same purchaser."
+            ? "Change who purchased this line. Shipping, receiving, and payment-fee companions stay with the same purchaser."
           : "Change the account. Moving Checking → Credit Card stamps the original checking account so you can review relocated personal-card charges."}
         {canEditPurchaser && canEditCoa
           ? " Purchaser can be changed here too."
