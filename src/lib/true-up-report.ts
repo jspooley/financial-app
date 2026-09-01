@@ -125,9 +125,9 @@ export const TRUE_UP_EXCLUSIONS: { label: string; detail: string }[] = [
       "Invoice lines marked personal use, plus their payment and cost companions.",
   },
   {
-    label: "Tax, shipping, and payment fees on sales income",
+    label: "Tax, shipping, receiving, and payment fees",
     detail:
-      "Stripped from 100 Sales Income as pass-through. They are not 50/50 profit.",
+      "Reimbursed to whoever purchased the goods (from sales income), not split 50/50. Only remaining profit is shared.",
   },
 ];
 
@@ -444,12 +444,13 @@ function recordedCategoryLabel(category: string | null | undefined) {
 
 function salesSubtotal(
   cogs: PartnerAmounts,
+  passThrough: PartnerAmounts,
   income: PartnerAmounts
 ): PartnerAmounts {
-  return sumPartnerAmounts(cogs, income);
+  return sumPartnerAmounts(cogs, passThrough, income);
 }
 
-/** Tax, shipping, and fees billed through the invoice — not 50/50 profit. */
+/** Tax, shipping, receiving, and fees on a goods line — reimbursed to purchaser. */
 function salesIncomePassThrough(
   entry: Pick<
     LedgerEntry,
@@ -464,14 +465,12 @@ function salesIncomePassThrough(
   );
 }
 
-function netSalesIncome(
-  gross: number,
-  source: Pick<
-    LedgerEntry,
-    "tax_amount" | "shipping_receiving_amount" | "receiving_amount" | "payment_fee"
-  >
+function grossSalesIncomeAmount(
+  entry: Pick<LedgerEntry, "credit_amount" | "payment_amount">
 ) {
-  return roundMoney(gross - salesIncomePassThrough(source));
+  return roundMoney(
+    Number(entry.credit_amount ?? 0) || Number(entry.payment_amount ?? 0)
+  );
 }
 
 function buildSalesBlocks(
@@ -492,8 +491,10 @@ function buildSalesBlocks(
       invoiceId: string;
       projectLabel: string;
       cogs: PartnerAmounts;
+      passThrough: PartnerAmounts;
       income: PartnerAmounts;
       cogsTransactions: TrueUpTransaction[];
+      passThroughTransactions: TrueUpTransaction[];
       incomeTransactions: TrueUpTransaction[];
       recorded: Map<string, PartnerAmounts>;
     }
@@ -511,8 +512,10 @@ function buildSalesBlocks(
       invoiceId,
       projectLabel: invoiceProjectLabel(invoiceId, poNumber),
       cogs: emptyPartnerAmounts(),
+      passThrough: emptyPartnerAmounts(),
       income: emptyPartnerAmounts(),
       cogsTransactions: [] as TrueUpTransaction[],
+      passThroughTransactions: [] as TrueUpTransaction[],
       incomeTransactions: [] as TrueUpTransaction[],
       recorded: new Map<string, PartnerAmounts>(),
     };
@@ -540,13 +543,7 @@ function buildSalesBlocks(
     if (isCostCompanionRow(entry)) continue;
 
     if (isPaymentCompanionRow(entry) || isSalesIncomeCoa(entry.coa_category)) {
-      const source =
-        (entry.source_ledger_id && parentById.get(entry.source_ledger_id)) ||
-        entry;
-      const income = netSalesIncome(
-        Number(entry.credit_amount ?? 0) || Number(entry.payment_amount ?? 0),
-        source
-      );
+      const income = grossSalesIncomeAmount(entry);
       if (income) {
         const g = group(invoiceId, entry.po_number);
         const party = partnerFromEntry(entry, "payee");
@@ -565,19 +562,28 @@ function buildSalesBlocks(
 
     if (entry.source_ledger_id) continue;
 
-    const cogs = -getLedgerTotalDesignerCost(entry);
-    const g = group(invoiceId, entry.po_number);
     const party = partnerFromEntry(entry, "payer");
+    const g = group(invoiceId, entry.po_number);
+
+    const cogs = -getLedgerTotalDesignerCost(entry);
     if (cogs) {
       g.cogs = addPartnerAmount(g.cogs, party, cogs);
       g.cogsTransactions.push(trueUpTransactionFromEntry(entry, party, cogs));
+    }
+
+    const passThroughCost = -salesIncomePassThrough(entry);
+    if (passThroughCost) {
+      g.passThrough = addPartnerAmount(g.passThrough, party, passThroughCost);
+      g.passThroughTransactions.push(
+        trueUpTransactionFromEntry(entry, party, passThroughCost)
+      );
     }
 
     if (
       !paymentCompanionParentIds.has(entry.id) &&
       Number(entry.payment_amount ?? 0) > 0
     ) {
-      const income = netSalesIncome(Number(entry.payment_amount ?? 0), entry);
+      const income = grossSalesIncomeAmount(entry);
       if (income) {
         const payee = partnerFromEntry(entry, "payee");
         g.income = addPartnerAmount(g.income, payee, income);
@@ -597,14 +603,19 @@ function buildSalesBlocks(
     .map((group) => {
       const categoryRows: TrueUpCategoryRow[] = [
         {
+          category: TRUE_UP_INCOME_LABEL,
+          amounts: group.income,
+          transactions: sortTrueUpTransactions(group.incomeTransactions),
+        },
+        {
           category: TRUE_UP_COGS_LABEL,
           amounts: group.cogs,
           transactions: sortTrueUpTransactions(group.cogsTransactions),
         },
         {
-          category: TRUE_UP_INCOME_LABEL,
-          amounts: group.income,
-          transactions: sortTrueUpTransactions(group.incomeTransactions),
+          category: TRUE_UP_FEES_LABEL,
+          amounts: group.passThrough,
+          transactions: sortTrueUpTransactions(group.passThroughTransactions),
         },
       ];
       return finishBlock(
@@ -612,7 +623,7 @@ function buildSalesBlocks(
         group.projectLabel,
         group.invoiceId,
         categoryRows,
-        salesSubtotal(group.cogs, group.income),
+        salesSubtotal(group.cogs, group.passThrough, group.income),
         group.recorded
       );
     })
