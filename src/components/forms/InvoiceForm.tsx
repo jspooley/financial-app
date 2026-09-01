@@ -89,6 +89,10 @@ function InvoiceLineIncludeRow({
       value: formatCurrency(Number(line.shipping_receiving_amount ?? 0)),
     },
     {
+      label: "Receiving",
+      value: formatCurrency(Number(line.receiving_amount ?? 0)),
+    },
+    {
       label: "Customer cost",
       value: formatCurrency(getLedgerCustomerPrice(line)),
     },
@@ -743,7 +747,7 @@ export function InvoiceForm({
           />
           <InvoiceSelectedTotals
             totals={includedLineTotals}
-            hint="From checked lines. Profit is merchandise margin only (customer price minus designer total cost). Tax, shipping, and fees are excluded."
+            hint="From checked lines. Profit is merchandise margin minus designer cost and 203 pass-through expenses (shipping, receiving, fees). Tax is excluded."
           />
         </div>
 

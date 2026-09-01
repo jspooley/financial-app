@@ -453,12 +453,13 @@ function salesSubtotal(
 function salesIncomePassThrough(
   entry: Pick<
     LedgerEntry,
-    "tax_amount" | "shipping_receiving_amount" | "payment_fee"
+    "tax_amount" | "shipping_receiving_amount" | "receiving_amount" | "payment_fee"
   >
 ) {
   return roundMoney(
     Number(entry.tax_amount ?? 0) +
       Number(entry.shipping_receiving_amount ?? 0) +
+      Number(entry.receiving_amount ?? 0) +
       Number(entry.payment_fee ?? 0)
   );
 }
@@ -467,7 +468,7 @@ function netSalesIncome(
   gross: number,
   source: Pick<
     LedgerEntry,
-    "tax_amount" | "shipping_receiving_amount" | "payment_fee"
+    "tax_amount" | "shipping_receiving_amount" | "receiving_amount" | "payment_fee"
   >
 ) {
   return roundMoney(gross - salesIncomePassThrough(source));

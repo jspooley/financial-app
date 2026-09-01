@@ -147,7 +147,7 @@ function GoodsAndServicesSectionHeader({
         ) : null}
         <p className="mt-1 text-sm text-slate-500">
           {GOODS_AND_SERVICES_LABEL} — includes Invoiced, Invoice ID, Paid, and payment
-          columns. Totals are customer price × qty (no tax, fees, or shipping).
+          columns. Totals are customer price × qty (no tax, fees, shipping, or receiving).
         </p>
       </div>
       <Button

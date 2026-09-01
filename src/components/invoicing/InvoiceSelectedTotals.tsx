@@ -57,6 +57,12 @@ export function InvoiceSelectedTotals({
           </dd>
         </div>
         <div className="flex items-baseline justify-between gap-3">
+          <dt className="text-slate-600">Total receiving</dt>
+          <dd className="tabular-nums font-semibold text-slate-900">
+            {formatCurrency(totals.receiving)}
+          </dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-3">
           <dt className="text-slate-600">Total fees</dt>
           <dd className="tabular-nums font-semibold text-slate-900">
             {formatCurrency(totals.fees)}
@@ -66,7 +72,7 @@ export function InvoiceSelectedTotals({
       {showHint ? (
         <p className="mt-1.5 text-xs text-slate-500">
           {hint ??
-            "Profit is merchandise margin only (customer price minus designer total cost). Tax, shipping, and fees are excluded."}
+            "Profit is merchandise margin minus designer cost and 203 pass-through expenses (shipping, receiving, fees). Tax is excluded."}
         </p>
       ) : null}
     </div>

@@ -69,6 +69,7 @@ export type LedgerInsert = {
   trade_partner_id: string | null;
   discount_percent: number;
   shipping_receiving_amount: number;
+  receiving_amount: number;
   retail_price: number;
   tax_amount: number;
   client_id: string | null;
@@ -325,6 +326,7 @@ export interface LedgerEntry {
   trade_partner_id: string | null;
   discount_percent: number;
   shipping_receiving_amount: number;
+  receiving_amount: number;
   retail_price: number;
   tax_amount: number;
   customer_price?: number;

@@ -124,6 +124,7 @@ export function normalizeLedgerRow(
     trade_partner_id: r.trade_partner_id,
     discount_percent: Number(r.discount_percent ?? r.discount_amount ?? 0),
     shipping_receiving_amount: Number(r.shipping_receiving_amount ?? 0),
+    receiving_amount: Number(r.receiving_amount ?? 0),
     retail_price: Number(r.retail_price ?? 0),
     tax_amount: Number(r.tax_amount ?? 0),
     customer_price: Number(r.customer_price ?? 0),
@@ -210,6 +211,7 @@ export function ledgerFormToDb(values: {
   trade_partner_id?: string;
   discount_percent: number;
   shipping_receiving_amount: number;
+  receiving_amount: number;
   retail_price: number;
   tax_amount: number;
   /** Client S&U tax rate as a decimal (e.g. 0.06). Used for wholesale tax. */
@@ -254,6 +256,7 @@ export function ledgerFormToDb(values: {
     discount_percent: discountPercent,
     customer_price: merchandise,
     shipping_receiving_amount: values.shipping_receiving_amount,
+    receiving_amount: values.receiving_amount,
     retail_price: retailPrice,
     tax_amount: tax,
     client_id: values.client_id,
