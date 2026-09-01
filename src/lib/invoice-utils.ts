@@ -665,17 +665,31 @@ export function invoiceLineMerchandiseAmount(entry: LedgerAmountEntry): number {
   });
 }
 
-/** Gross profit on one line: merchandise minus designer total cost. */
+/** 203 pass-through costs on the line (shipping, receiving, payment fee). */
+export function invoiceLinePassThroughExpenses(entry: LedgerAmountEntry): number {
+  if (entry.balance_sheet) return 0;
+  return roundMoney(
+    Number(entry.shipping_receiving_amount ?? 0) +
+      Number(entry.receiving_amount ?? 0) +
+      Number(entry.payment_fee ?? 0)
+  );
+}
+
+/** Invoice line profit: merchandise margin minus designer cost and 203 pass-through expenses. */
 export function invoiceLineProfit(entry: LedgerAmountEntry): number {
   if (entry.balance_sheet) return 0;
   const designerCost = getLedgerTotalDesignerCost({
     designer_cost: Number(entry.designer_cost ?? 0),
     quantity: Number(entry.quantity ?? 1),
   });
-  return roundMoney(invoiceLineMerchandiseAmount(entry) - designerCost);
+  return roundMoney(
+    invoiceLineMerchandiseAmount(entry) -
+      designerCost -
+      invoiceLinePassThroughExpenses(entry)
+  );
 }
 
-/** Sum gross profit across invoiced debit lines on an invoice. */
+/** Sum invoice line profit after 203 pass-through expenses (shipping, receiving, fees). */
 export function sumInvoiceLineProfit(entries: LedgerAmountEntry[]): number {
   return roundMoney(
     entries

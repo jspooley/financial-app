@@ -6,7 +6,8 @@ export const COA_TAXES_CATEGORY = "214 Taxes and licenses";
 export const COA_FEES_CATEGORY = "203 commissions and fees";
 
 /**
- * Cost companions mirror a parent cost so it carries its own CoA Category.
+ * Cost companions mirror a parent cost so each carries its own CoA Category and
+ * reduces net profit as a 203 commissions and fees expense.
  * S&U tax is deliberately absent: it is collected from the client and remitted
  * to the state later, so it is entered on Cashflow as one monthly payment
  * rather than as a purchase-dated debit (migration 063).
