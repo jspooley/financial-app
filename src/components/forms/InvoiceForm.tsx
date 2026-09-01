@@ -19,6 +19,7 @@ import {
   nextInvoiceSequence,
   parseInvoiceDbError,
   poNumbersMatch,
+  sumInvoiceSelectedItemTotals,
   type InvoiceLineItem,
 } from "@/lib/invoice-utils";
 import type { Client, Invoice, LedgerEntry } from "@/lib/types";
@@ -34,6 +35,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { InputField, SelectField, TextareaField } from "@/components/ui/FormFields";
 import { InvoiceDetailView } from "@/components/invoicing/InvoiceDetailView";
+import { InvoiceSelectedTotals } from "@/components/invoicing/InvoiceSelectedTotals";
 
 const schema = z.object({
   client_id: z.string().uuid("Select a client"),
@@ -415,20 +417,7 @@ export function InvoiceForm({
 
   const includedLineTotals = useMemo(() => {
     const lines = selectableLines.filter((line) => includedLineIds.has(line.id));
-    let profit = 0;
-    let tax = 0;
-    let fees = 0;
-    for (const line of lines) {
-      profit +=
-        getLedgerCustomerPrice(line) - getLedgerTotalDesignerCost(line);
-      tax += Number(line.tax_amount ?? 0);
-      fees += Number(line.payment_fee ?? 0);
-    }
-    return {
-      profit: roundMoney(profit),
-      tax: roundMoney(tax),
-      fees: roundMoney(fees),
-    };
+    return sumInvoiceSelectedItemTotals(lines);
   }, [selectableLines, includedLineIds]);
 
   const ledgerSummary = useMemo(() => {
@@ -752,39 +741,10 @@ export function InvoiceForm({
             label="Notes"
             {...register("notes")}
           />
-          <div className="space-y-1.5">
-            <p className="text-sm font-medium text-slate-700">Selected items</p>
-            <dl className="min-h-24 space-y-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-              <div className="flex items-baseline justify-between gap-3">
-                <dt className="text-slate-600">Total profit</dt>
-                <dd
-                  className={`tabular-nums font-semibold ${
-                    includedLineTotals.profit < 0
-                      ? "text-red-700"
-                      : "text-emerald-700"
-                  }`}
-                >
-                  {formatCurrency(includedLineTotals.profit)}
-                </dd>
-              </div>
-              <div className="flex items-baseline justify-between gap-3">
-                <dt className="text-slate-600">Total tax</dt>
-                <dd className="tabular-nums font-semibold text-slate-900">
-                  {formatCurrency(includedLineTotals.tax)}
-                </dd>
-              </div>
-              <div className="flex items-baseline justify-between gap-3">
-                <dt className="text-slate-600">Total fees</dt>
-                <dd className="tabular-nums font-semibold text-slate-900">
-                  {formatCurrency(includedLineTotals.fees)}
-                </dd>
-              </div>
-            </dl>
-            <p className="text-xs text-slate-500">
-              From checked lines. Profit is customer cost minus designer total
-              cost.
-            </p>
-          </div>
+          <InvoiceSelectedTotals
+            totals={includedLineTotals}
+            hint="From checked lines. Profit is merchandise margin only (customer price minus designer total cost). Tax, shipping, and fees are excluded."
+          />
         </div>
 
         {(initial || (clientId && poNumber)) && (

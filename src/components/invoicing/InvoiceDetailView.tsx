@@ -7,9 +7,11 @@ import type { Invoice } from "@/lib/types";
 import {
   getInvoiceLineBreakdown,
   sumInvoiceLineBreakdowns,
+  sumInvoiceSelectedItemTotals,
   type InvoiceLineItem,
 } from "@/lib/invoice-utils";
 import { formatCurrency, formatDate, formatQuantity } from "@/lib/utils";
+import { InvoiceSelectedTotals } from "@/components/invoicing/InvoiceSelectedTotals";
 
 const InvoicePdfPreview = dynamic(
   () => import("./InvoicePdfPreview").then((mod) => mod.InvoicePdfPreview),
@@ -30,6 +32,7 @@ export function InvoiceDetailView({
   onClose,
 }: InvoiceDetailViewProps) {
   const totals = sumInvoiceLineBreakdowns(lines);
+  const selectedItems = sumInvoiceSelectedItemTotals(lines);
   const [showPdfPreview, setShowPdfPreview] = useState(false);
 
   return (
@@ -65,10 +68,17 @@ export function InvoiceDetailView({
         </div>
 
         <div className="space-y-4 p-4 sm:p-6">
-          {invoice.notes && (
-            <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
-              <span className="font-medium">Notes:</span> {invoice.notes}
-            </p>
+          {(invoice.notes || lines.length > 0) && (
+            <div className="space-y-3">
+              {invoice.notes ? (
+                <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+                  <span className="font-medium">Notes:</span> {invoice.notes}
+                </p>
+              ) : null}
+              {lines.length > 0 ? (
+                <InvoiceSelectedTotals totals={selectedItems} />
+              ) : null}
+            </div>
           )}
 
           {lines.length === 0 ? (

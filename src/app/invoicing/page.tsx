@@ -7,6 +7,7 @@ import { InvoiceForm } from "@/components/forms/InvoiceForm";
 import { useRecordLocks } from "@/components/RecordLockProvider";
 import { DeleteInvoiceDialog } from "@/components/invoicing/DeleteInvoiceDialog";
 import { InvoiceDetailView } from "@/components/invoicing/InvoiceDetailView";
+import { InvoiceProfitValue } from "@/components/invoicing/InvoiceSelectedTotals";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -16,7 +17,7 @@ import { createClient } from "@/lib/supabase/client";
 import { isInvoiceGoodsLine } from "@/lib/coa";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { InvoiceLineItem } from "@/lib/invoice-utils";
-import { getLedgerLinesForInvoice, invoiceLineTotal, isInvoiceFullyPaid, isInvoicePaidByBalance, isInvoicedDebitLine, isToBeInvoicedLine, normalizeInvoiceId, sumInvoiceHistoryTotal, summarizeToBeInvoiced } from "@/lib/invoice-utils";
+import { getLedgerLinesForInvoice, invoiceLineTotal, isInvoiceFullyPaid, isInvoicePaidByBalance, isInvoicedDebitLine, isToBeInvoicedLine, normalizeInvoiceId, sumInvoiceHistoryTotal, sumInvoiceSelectedItemTotals, summarizeToBeInvoiced } from "@/lib/invoice-utils";
 import { loadInvoiceLockTargets } from "@/lib/record-lock";
 import type { Client, Invoice, LedgerEntry } from "@/lib/types";
 import { formatCurrency, formatDate, roundMoney } from "@/lib/utils";
@@ -143,8 +144,12 @@ export default function InvoicingPage() {
     [filteredUninvoiced]
   );
 
-  const invoiceAmounts = useMemo(() => {
+  const invoiceTotals = useMemo(() => {
     const amounts: Record<string, number> = {};
+    const selectedItems: Record<
+      string,
+      ReturnType<typeof sumInvoiceSelectedItemTotals>
+    > = {};
     for (const invoice of invoices) {
       const invoiceId = normalizeInvoiceId(invoice.invoice_id);
       if (!invoiceId) continue;
@@ -154,8 +159,9 @@ export default function InvoicingPage() {
       amounts[invoiceId] = roundMoney(
         lines.reduce((sum, entry) => sum + invoiceLineTotal(entry), 0)
       );
+      selectedItems[invoiceId] = sumInvoiceSelectedItemTotals(lines);
     }
-    return amounts;
+    return { amounts, selectedItems };
   }, [invoices, ledgerEntries]);
 
   const invoicePaidById = useMemo(() => {
@@ -301,12 +307,22 @@ export default function InvoicingPage() {
           { key: "po", label: "PO Number" },
           { key: "date", label: "Invoice Date" },
           { key: "notes", label: "Notes" },
+          { key: "profit", label: "Profit", className: "text-right" },
+          { key: "tax", label: "Tax", className: "text-right" },
+          { key: "shipping", label: "Shipping", className: "text-right" },
+          { key: "fees", label: "Fees", className: "text-right" },
           { key: "invoiceAmount", label: "Invoice Amount", className: "text-right" },
           { key: "viewInvoice", label: "View", className: "text-right" },
         ]}
         rows={rows.map((invoice) => {
           const invoiceId = normalizeInvoiceId(invoice.invoice_id);
           const isPaid = invoicePaidById[invoiceId] ?? false;
+          const selectedItems = invoiceTotals.selectedItems[invoiceId] ?? {
+            profit: 0,
+            tax: 0,
+            shipping: 0,
+            fees: 0,
+          };
           return {
             actions: (
               <RowActions
@@ -332,7 +348,11 @@ export default function InvoicingPage() {
             po: invoice.po_number,
             date: formatDate(invoice.invoice_date),
             notes: invoice.notes ?? "—",
-            invoiceAmount: formatCurrency(invoiceAmounts[invoiceId] ?? 0),
+            profit: <InvoiceProfitValue amount={selectedItems.profit} />,
+            tax: formatCurrency(selectedItems.tax),
+            shipping: formatCurrency(selectedItems.shipping),
+            fees: formatCurrency(selectedItems.fees),
+            invoiceAmount: formatCurrency(invoiceTotals.amounts[invoiceId] ?? 0),
             viewInvoice: (
               <div className="flex justify-end">
                 <Button variant="secondary" onClick={() => handleView(invoice)}>
