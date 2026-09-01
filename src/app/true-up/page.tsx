@@ -283,6 +283,32 @@ function BlockRows({
     });
   }
 
+  if (block.status === "pending") {
+    return (
+      <>
+        {showDivider ? (
+          <tr>
+            <td colSpan={6} className="h-3 bg-white p-0" />
+          </tr>
+        ) : null}
+        <tr className="border-b border-slate-100 bg-amber-50/60">
+          <td className="whitespace-nowrap px-3 py-1.5 font-medium text-slate-900">
+            {block.groupLabel}
+          </td>
+          <td className="whitespace-nowrap px-3 py-1.5 font-medium text-amber-800">
+            Pending
+          </td>
+          <td
+            colSpan={4}
+            className="px-3 py-1.5 text-sm text-amber-900/80"
+          >
+            Open job with no purchases or client payments recorded yet.
+          </td>
+        </tr>
+      </>
+    );
+  }
+
   return (
     <>
       {showDivider ? (
@@ -505,7 +531,7 @@ export default function TrueUpReportPage() {
     <AppShell>
       <PageHeader
         title="True Up Report"
-        description="Cash-basis accounting (50/50 split between partners). Payments exchanged between partners show up on both partners reports with the appropriate positive/negative amounts."
+        description="Cash-basis accounting between partners. Purchases (goods, services, shipping, and fees) are attributed to whoever paid and reimbursed in full. Client payments go to whoever received them. Required transfer splits profit only 50/50: send is negative, receive is positive."
         action={
           <SelectField
             label="Year"
@@ -534,7 +560,7 @@ export default function TrueUpReportPage() {
         <div className="space-y-8">
           <CollapsibleSection
             title="Sales and Revenue"
-            description="Cash in and out by invoice. Expand a COA category to see the lines on that invoice. Sales income is net of tax, shipping, and fees (pass-through, not shared). COGS is negative (money out). Required transfer splits that net 50/50: send is negative, receive is positive."
+            description="Cash in and out by invoice. Expand a COA category to see the lines on that invoice. COGS includes goods, shipping, and payment fees (negative = money out). Sales income is net of sales & use tax only. Required transfer reimburses each partner's costs and splits profit 50/50. Open jobs with no purchases or payments yet are listed as Pending."
           >
             <BlockTable
               sectionLabel="Sales&Revenue"
@@ -615,8 +641,8 @@ export default function TrueUpReportPage() {
               Excluded from the true-up
             </h2>
             <p className="mt-1 text-sm text-slate-600">
-              These do not enter the 50/50 split. Partner transfers that do count
-              are 203 commissions/fees and 303/304 Jess↔Molly (or Paid To the other
+              These do not enter the profit split. Partner transfers that do count
+              toward settlement are 203 commissions/fees and 303/304 Jess↔Molly (or Paid To the other
               partner).
             </p>
             <ul className="mt-3 space-y-2 text-sm text-slate-700">

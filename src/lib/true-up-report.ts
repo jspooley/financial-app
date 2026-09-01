@@ -13,7 +13,11 @@ import {
   isTaxesAndLicensesCoa,
 } from "@/lib/coa";
 import { isCostCompanionRow } from "@/lib/cost-companions";
-import { normalizeInvoiceId } from "@/lib/invoice-utils";
+import {
+  jobKeysByStatus,
+  ledgerJobKey,
+  normalizeInvoiceId,
+} from "@/lib/invoice-utils";
 import { isPaymentCompanionRow } from "@/lib/payment-companions";
 import type { LedgerEntry, Purchaser } from "@/lib/types";
 import { getLedgerTotalDesignerCost, roundMoney } from "@/lib/utils";
@@ -43,6 +47,7 @@ export type TrueUpBlock = {
   id: string;
   groupLabel: string;
   secondaryLabel: string;
+  status?: "pending";
   categoryRows: TrueUpCategoryRow[];
   subtotal: PartnerAmounts;
   required: PartnerAmounts;
@@ -125,9 +130,9 @@ export const TRUE_UP_EXCLUSIONS: { label: string; detail: string }[] = [
       "Invoice lines marked personal use, plus their payment and cost companions.",
   },
   {
-    label: "Tax, shipping, and payment fees on sales income",
+    label: "Sales & use tax collected on invoices",
     detail:
-      "Stripped from 100 Sales Income as pass-through. They are not 50/50 profit.",
+      "Stripped from 100 Sales Income as pass-through to the state. Shipping and payment fees stay in sales income and are reimbursed to whoever paid them.",
   },
 ];
 
@@ -182,6 +187,22 @@ export function subtractPartnerAmounts(
 export function requiredTransfers(amounts: PartnerAmounts): PartnerAmounts {
   const half = roundMoney(partnerTotal(amounts) / 2);
   const jess = roundMoney(half - amounts.jess);
+  return { jess, molly: roundMoney(-jess) };
+}
+
+/**
+ * After attributing purchases to the purchaser and client payments to the
+ * payee, equalize profit only. Costs are fully reimbursed; profit is split
+ * 50/50.
+ */
+export function requiredProfitTransfers(
+  costs: PartnerAmounts,
+  income: PartnerAmounts
+): PartnerAmounts {
+  const position = sumPartnerAmounts(costs, income);
+  const profit = partnerTotal(position);
+  const halfProfit = roundMoney(profit / 2);
+  const jess = roundMoney(halfProfit - position.jess);
   return { jess, molly: roundMoney(-jess) };
 }
 
@@ -300,9 +321,10 @@ function finishBlock(
   secondaryLabel: string,
   categoryRows: TrueUpCategoryRow[],
   subtotal: PartnerAmounts,
-  recordedByCategory: Map<string, PartnerAmounts>
+  recordedByCategory: Map<string, PartnerAmounts>,
+  requiredOverride?: PartnerAmounts
 ): TrueUpBlock {
-  const required = requiredTransfers(subtotal);
+  const required = requiredOverride ?? requiredTransfers(subtotal);
   const recordedRows = recordedRowsFromMap(recordedByCategory);
   const recorded = recordedRows.reduce(
     (acc, row) => sumPartnerAmounts(acc, row.amounts),
@@ -449,28 +471,101 @@ function salesSubtotal(
   return sumPartnerAmounts(cogs, income);
 }
 
-/** Tax, shipping, and fees billed through the invoice — not 50/50 profit. */
+/** Sales & use tax collected on the invoice — remitted to the state, not profit. */
 function salesIncomePassThrough(
-  entry: Pick<
-    LedgerEntry,
-    "tax_amount" | "shipping_receiving_amount" | "payment_fee"
-  >
+  entry: Pick<LedgerEntry, "tax_amount">
 ) {
-  return roundMoney(
-    Number(entry.tax_amount ?? 0) +
-      Number(entry.shipping_receiving_amount ?? 0) +
-      Number(entry.payment_fee ?? 0)
-  );
+  return roundMoney(Number(entry.tax_amount ?? 0));
 }
 
 function netSalesIncome(
   gross: number,
-  source: Pick<
-    LedgerEntry,
-    "tax_amount" | "shipping_receiving_amount" | "payment_fee"
-  >
+  source: Pick<LedgerEntry, "tax_amount">
 ) {
   return roundMoney(gross - salesIncomePassThrough(source));
+}
+
+function addCostToGroup(
+  group: {
+    cogs: PartnerAmounts;
+    cogsTransactions: TrueUpTransaction[];
+  },
+  entry: LedgerEntry,
+  amount: number
+) {
+  if (Math.abs(amount) < 0.005) return;
+  const party = partnerFromEntry(entry, "payer");
+  group.cogs = addPartnerAmount(group.cogs, party, amount);
+  group.cogsTransactions.push(trueUpTransactionFromEntry(entry, party, amount));
+}
+
+function jobHasPurchaseOrPayment(
+  entries: LedgerEntry[],
+  jobKey: string,
+  parentById: Map<string, LedgerEntry>
+) {
+  for (const entry of entries) {
+    if (skipTrueUpShare(entry)) continue;
+    if (isPersonalUseTrueUpEntry(entry, parentById)) continue;
+    if (ledgerJobKey(entry.client_id, entry.po_number) !== jobKey) continue;
+
+    if (isPaymentCompanionRow(entry)) return true;
+    if (Number(entry.payment_amount ?? 0) > 0) return true;
+    if (isCostCompanionRow(entry) && Number(entry.debit_amount ?? 0) > 0) {
+      return true;
+    }
+    if (entry.source_ledger_id) continue;
+    if (getLedgerTotalDesignerCost(entry) > 0) return true;
+  }
+  return false;
+}
+
+function buildPendingSalesBlocks(
+  entries: LedgerEntry[],
+  parentById: Map<string, LedgerEntry>,
+  activeInvoiceIds: Set<string>
+): TrueUpBlock[] {
+  const { open } = jobKeysByStatus(entries);
+  const pending: TrueUpBlock[] = [];
+
+  for (const jobKey of open) {
+    if (jobHasPurchaseOrPayment(entries, jobKey, parentById)) continue;
+
+    const jobEntries = entries.filter(
+      (entry) => ledgerJobKey(entry.client_id, entry.po_number) === jobKey
+    );
+    if (jobEntries.length === 0) continue;
+
+    const poNumber =
+      jobEntries.find((entry) => entry.po_number?.trim())?.po_number?.trim() ||
+      jobKey.split(":").slice(1).join(":") ||
+      jobKey;
+    const invoiceId =
+      jobEntries
+        .map((entry) => invoiceKey(entry))
+        .find((id) => id && !activeInvoiceIds.has(id)) ?? `pending:${jobKey}`;
+
+    if (activeInvoiceIds.has(invoiceId)) continue;
+
+    pending.push({
+      id: `pending:${jobKey}`,
+      groupLabel: poNumber,
+      secondaryLabel: "Pending",
+      status: "pending",
+      categoryRows: [],
+      subtotal: emptyPartnerAmounts(),
+      required: emptyPartnerAmounts(),
+      recordedRows: [],
+      recorded: emptyPartnerAmounts(),
+      discrepancy: emptyPartnerAmounts(),
+    });
+  }
+
+  return pending.sort(
+    (a, b) =>
+      a.groupLabel.localeCompare(b.groupLabel) ||
+      a.secondaryLabel.localeCompare(b.secondaryLabel)
+  );
 }
 
 function buildSalesBlocks(
@@ -536,7 +631,14 @@ function buildSalesBlocks(
       continue;
     }
 
-    if (isCostCompanionRow(entry)) continue;
+    if (isCostCompanionRow(entry)) {
+      addCostToGroup(
+        group(invoiceId, entry.po_number),
+        entry,
+        -Number(entry.debit_amount ?? 0)
+      );
+      continue;
+    }
 
     if (isPaymentCompanionRow(entry) || isSalesIncomeCoa(entry.coa_category)) {
       const source =
@@ -566,10 +668,8 @@ function buildSalesBlocks(
 
     const cogs = -getLedgerTotalDesignerCost(entry);
     const g = group(invoiceId, entry.po_number);
-    const party = partnerFromEntry(entry, "payer");
     if (cogs) {
-      g.cogs = addPartnerAmount(g.cogs, party, cogs);
-      g.cogsTransactions.push(trueUpTransactionFromEntry(entry, party, cogs));
+      addCostToGroup(g, entry, cogs);
     }
 
     if (
@@ -592,7 +692,7 @@ function buildSalesBlocks(
     }
   }
 
-  return [...byInvoice.values()]
+  const activeBlocks = [...byInvoice.values()]
     .map((group) => {
       const categoryRows: TrueUpCategoryRow[] = [
         {
@@ -612,7 +712,8 @@ function buildSalesBlocks(
         group.invoiceId,
         categoryRows,
         salesSubtotal(group.cogs, group.income),
-        group.recorded
+        group.recorded,
+        requiredProfitTransfers(group.cogs, group.income)
       );
     })
     .filter(
@@ -620,11 +721,21 @@ function buildSalesBlocks(
         block.categoryRows.some((row) => hasAmount(row.amounts)) ||
         hasAmount(block.recorded) ||
         hasAmount(block.required)
-    )
-    .sort((a, b) =>
+    );
+
+  const activeInvoiceIds = new Set(
+    activeBlocks.map((block) => block.secondaryLabel).filter(Boolean)
+  );
+  const pending = buildPendingSalesBlocks(entries, parentById, activeInvoiceIds);
+
+  return [...activeBlocks, ...pending].sort((a, b) => {
+    if (a.status === "pending" && b.status !== "pending") return 1;
+    if (b.status === "pending" && a.status !== "pending") return -1;
+    return (
       a.groupLabel.localeCompare(b.groupLabel) ||
       a.secondaryLabel.localeCompare(b.secondaryLabel)
     );
+  });
 }
 
 type ExpenseCategoryBucket = {
