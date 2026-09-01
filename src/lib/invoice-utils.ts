@@ -676,6 +676,34 @@ export function sumInvoiceLineProfit(entries: LedgerAmountEntry[]): number {
   );
 }
 
+export type InvoiceSelectedItemTotals = {
+  profit: number;
+  tax: number;
+  shipping: number;
+  fees: number;
+};
+
+/** Totals for the invoice selected-items panel (profit, tax, shipping, fees). */
+export function sumInvoiceSelectedItemTotals(
+  entries: LedgerAmountEntry[]
+): InvoiceSelectedItemTotals {
+  const lines = entries.filter(isInvoicedDebitLine);
+  let tax = 0;
+  let shipping = 0;
+  let fees = 0;
+  for (const line of lines) {
+    tax += Number(line.tax_amount ?? 0);
+    shipping += Number(line.shipping_receiving_amount ?? 0);
+    fees += Number(line.payment_fee ?? 0);
+  }
+  return {
+    profit: sumInvoiceLineProfit(lines),
+    tax: roundMoney(tax),
+    shipping: roundMoney(shipping),
+    fees: roundMoney(fees),
+  };
+}
+
 export function sumInvoiceLineBreakdowns(entries: InvoiceLineItem[]): InvoiceLineBreakdown {
   return entries.reduce(
     (acc, entry) => {
