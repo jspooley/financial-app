@@ -86,7 +86,7 @@ export function InvoiceDetailView({
                   </span>
                   <span className="text-slate-500">
                     {" "}
-                    — customer cost minus designer total cost
+                    — merchandise margin; tax, shipping, and fees excluded
                   </span>
                 </p>
               ) : null}

@@ -418,15 +418,18 @@ export function InvoiceForm({
     const lines = selectableLines.filter((line) => includedLineIds.has(line.id));
     let profit = 0;
     let tax = 0;
+    let shipping = 0;
     let fees = 0;
     for (const line of lines) {
       profit += invoiceLineProfit(line);
       tax += Number(line.tax_amount ?? 0);
+      shipping += Number(line.shipping_receiving_amount ?? 0);
       fees += Number(line.payment_fee ?? 0);
     }
     return {
       profit: roundMoney(profit),
       tax: roundMoney(tax),
+      shipping: roundMoney(shipping),
       fees: roundMoney(fees),
     };
   }, [selectableLines, includedLineIds]);
@@ -774,6 +777,12 @@ export function InvoiceForm({
                 </dd>
               </div>
               <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-slate-600">Total shipping</dt>
+                <dd className="tabular-nums font-semibold text-slate-900">
+                  {formatCurrency(includedLineTotals.shipping)}
+                </dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-3">
                 <dt className="text-slate-600">Total fees</dt>
                 <dd className="tabular-nums font-semibold text-slate-900">
                   {formatCurrency(includedLineTotals.fees)}
@@ -781,8 +790,9 @@ export function InvoiceForm({
               </div>
             </dl>
             <p className="text-xs text-slate-500">
-              From checked lines. Profit is customer cost minus designer total
-              cost.
+              From checked lines. Profit is merchandise margin only (customer
+              price minus designer total cost). Tax, shipping, and fees are
+              excluded.
             </p>
           </div>
         </div>

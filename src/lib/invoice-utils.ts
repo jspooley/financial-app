@@ -5,6 +5,7 @@ import {
   getLedgerCustomerPrice,
   getLedgerInvoicedAmount,
   getLedgerInvoicedAmountExcludingPaymentFee,
+  getLedgerMerchandiseAmount,
   getLedgerTotalDesignerCost,
   parseDateOnlyParts,
   roundMoney,
@@ -598,33 +599,6 @@ export function invoiceLineTotal(entry: InvoiceLineItem): number {
   return getLedgerInvoicedAmountExcludingPaymentFee(entry);
 }
 
-/** Gross profit on one line: customer price minus designer total cost. */
-export function invoiceLineProfit(entry: LedgerAmountEntry): number {
-  const customerPrice = getLedgerCustomerPrice({
-    retail_price: entry.retail_price,
-    quantity: entry.quantity,
-    discount_percent: entry.discount_percent ?? 0,
-    customer_price: entry.customer_price,
-    designer_cost: entry.designer_cost,
-    wholesale_retail: entry.wholesale_retail,
-    trade_partner_id: entry.trade_partner_id,
-  });
-  const designerCost = getLedgerTotalDesignerCost({
-    designer_cost: Number(entry.designer_cost ?? 0),
-    quantity: Number(entry.quantity ?? 1),
-  });
-  return roundMoney(customerPrice - designerCost);
-}
-
-/** Sum gross profit across invoiced debit lines on an invoice. */
-export function sumInvoiceLineProfit(entries: LedgerAmountEntry[]): number {
-  return roundMoney(
-    entries
-      .filter(isInvoicedDebitLine)
-      .reduce((sum, entry) => sum + invoiceLineProfit(entry), 0)
-  );
-}
-
 export interface InvoiceLineBreakdown {
   merchandise: number;
   tax: number;
@@ -650,7 +624,15 @@ export function getInvoiceLineBreakdown(entry: InvoiceLineItem): InvoiceLineBrea
   }
 
   const shipping = Number(entry.shipping_receiving_amount) || 0;
-  const merchandise = getLedgerCustomerPrice(entry);
+  const merchandise = getLedgerCustomerPrice({
+    retail_price: entry.retail_price,
+    quantity: entry.quantity,
+    discount_percent: entry.discount_percent ?? 0,
+    customer_price: entry.customer_price,
+    designer_cost: entry.designer_cost,
+    wholesale_retail: entry.wholesale_retail,
+    trade_partner_id: entry.trade_partner_id,
+  });
 
   return {
     merchandise,
@@ -660,6 +642,38 @@ export function getInvoiceLineBreakdown(entry: InvoiceLineItem): InvoiceLineBrea
     total: roundMoney(merchandise + tax + shipping),
     taxLabel: entry.wholesale_retail === "wholesale" ? formatCurrency(tax) : "N/A",
   };
+}
+
+/** Merchandise billed on the line (excludes tax, shipping, and payment fees). */
+export function invoiceLineMerchandiseAmount(entry: LedgerAmountEntry): number {
+  if (entry.balance_sheet) return 0;
+  return getLedgerMerchandiseAmount({
+    retail_price: entry.retail_price,
+    quantity: entry.quantity,
+    discount_percent: entry.discount_percent ?? 0,
+    designer_cost: entry.designer_cost,
+    wholesale_retail: entry.wholesale_retail,
+    trade_partner_id: entry.trade_partner_id,
+  });
+}
+
+/** Gross profit on one line: merchandise minus designer total cost. */
+export function invoiceLineProfit(entry: LedgerAmountEntry): number {
+  if (entry.balance_sheet) return 0;
+  const designerCost = getLedgerTotalDesignerCost({
+    designer_cost: Number(entry.designer_cost ?? 0),
+    quantity: Number(entry.quantity ?? 1),
+  });
+  return roundMoney(invoiceLineMerchandiseAmount(entry) - designerCost);
+}
+
+/** Sum gross profit across invoiced debit lines on an invoice. */
+export function sumInvoiceLineProfit(entries: LedgerAmountEntry[]): number {
+  return roundMoney(
+    entries
+      .filter(isInvoicedDebitLine)
+      .reduce((sum, entry) => sum + invoiceLineProfit(entry), 0)
+  );
 }
 
 export function sumInvoiceLineBreakdowns(entries: InvoiceLineItem[]): InvoiceLineBreakdown {
