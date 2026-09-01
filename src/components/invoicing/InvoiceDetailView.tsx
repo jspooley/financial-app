@@ -7,6 +7,7 @@ import type { Invoice } from "@/lib/types";
 import {
   getInvoiceLineBreakdown,
   sumInvoiceLineBreakdowns,
+  sumInvoiceLineProfit,
   type InvoiceLineItem,
 } from "@/lib/invoice-utils";
 import { formatCurrency, formatDate, formatQuantity } from "@/lib/utils";
@@ -30,6 +31,7 @@ export function InvoiceDetailView({
   onClose,
 }: InvoiceDetailViewProps) {
   const totals = sumInvoiceLineBreakdowns(lines);
+  const profit = sumInvoiceLineProfit(lines);
   const [showPdfPreview, setShowPdfPreview] = useState(false);
 
   return (
@@ -65,10 +67,30 @@ export function InvoiceDetailView({
         </div>
 
         <div className="space-y-4 p-4 sm:p-6">
-          {invoice.notes && (
-            <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
-              <span className="font-medium">Notes:</span> {invoice.notes}
-            </p>
+          {(invoice.notes || lines.length > 0) && (
+            <div className="space-y-2 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+              {invoice.notes ? (
+                <p>
+                  <span className="font-medium">Notes:</span> {invoice.notes}
+                </p>
+              ) : null}
+              {lines.length > 0 ? (
+                <p>
+                  <span className="font-medium">Profit:</span>{" "}
+                  <span
+                    className={`tabular-nums font-semibold ${
+                      profit < 0 ? "text-red-700" : "text-emerald-700"
+                    }`}
+                  >
+                    {formatCurrency(profit)}
+                  </span>
+                  <span className="text-slate-500">
+                    {" "}
+                    — customer cost minus designer total cost
+                  </span>
+                </p>
+              ) : null}
+            </div>
           )}
 
           {lines.length === 0 ? (

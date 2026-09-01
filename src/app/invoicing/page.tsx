@@ -16,7 +16,7 @@ import { createClient } from "@/lib/supabase/client";
 import { isInvoiceGoodsLine } from "@/lib/coa";
 import { normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import type { InvoiceLineItem } from "@/lib/invoice-utils";
-import { getLedgerLinesForInvoice, invoiceLineTotal, isInvoiceFullyPaid, isInvoicePaidByBalance, isInvoicedDebitLine, isToBeInvoicedLine, normalizeInvoiceId, sumInvoiceHistoryTotal, summarizeToBeInvoiced } from "@/lib/invoice-utils";
+import { getLedgerLinesForInvoice, invoiceLineTotal, isInvoiceFullyPaid, isInvoicePaidByBalance, isInvoicedDebitLine, isToBeInvoicedLine, normalizeInvoiceId, sumInvoiceHistoryTotal, sumInvoiceLineProfit, summarizeToBeInvoiced } from "@/lib/invoice-utils";
 import { loadInvoiceLockTargets } from "@/lib/record-lock";
 import type { Client, Invoice, LedgerEntry } from "@/lib/types";
 import { formatCurrency, formatDate, roundMoney } from "@/lib/utils";
@@ -143,8 +143,9 @@ export default function InvoicingPage() {
     [filteredUninvoiced]
   );
 
-  const invoiceAmounts = useMemo(() => {
+  const invoiceTotals = useMemo(() => {
     const amounts: Record<string, number> = {};
+    const profits: Record<string, number> = {};
     for (const invoice of invoices) {
       const invoiceId = normalizeInvoiceId(invoice.invoice_id);
       if (!invoiceId) continue;
@@ -154,8 +155,9 @@ export default function InvoicingPage() {
       amounts[invoiceId] = roundMoney(
         lines.reduce((sum, entry) => sum + invoiceLineTotal(entry), 0)
       );
+      profits[invoiceId] = sumInvoiceLineProfit(lines);
     }
-    return amounts;
+    return { amounts, profits };
   }, [invoices, ledgerEntries]);
 
   const invoicePaidById = useMemo(() => {
@@ -301,6 +303,7 @@ export default function InvoicingPage() {
           { key: "po", label: "PO Number" },
           { key: "date", label: "Invoice Date" },
           { key: "notes", label: "Notes" },
+          { key: "profit", label: "Profit", className: "text-right" },
           { key: "invoiceAmount", label: "Invoice Amount", className: "text-right" },
           { key: "viewInvoice", label: "View", className: "text-right" },
         ]}
@@ -332,7 +335,18 @@ export default function InvoicingPage() {
             po: invoice.po_number,
             date: formatDate(invoice.invoice_date),
             notes: invoice.notes ?? "—",
-            invoiceAmount: formatCurrency(invoiceAmounts[invoiceId] ?? 0),
+            profit: (
+              <span
+                className={`tabular-nums font-semibold ${
+                  (invoiceTotals.profits[invoiceId] ?? 0) < 0
+                    ? "text-red-700"
+                    : "text-emerald-700"
+                }`}
+              >
+                {formatCurrency(invoiceTotals.profits[invoiceId] ?? 0)}
+              </span>
+            ),
+            invoiceAmount: formatCurrency(invoiceTotals.amounts[invoiceId] ?? 0),
             viewInvoice: (
               <div className="flex justify-end">
                 <Button variant="secondary" onClick={() => handleView(invoice)}>

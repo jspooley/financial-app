@@ -15,6 +15,7 @@ import {
   isInvoiceFullyPaid,
   isInvoicePaidByBalance,
   isLedgerLineUninvoiced,
+  invoiceLineProfit,
   isToBeInvoicedLine,
   nextInvoiceSequence,
   parseInvoiceDbError,
@@ -419,8 +420,7 @@ export function InvoiceForm({
     let tax = 0;
     let fees = 0;
     for (const line of lines) {
-      profit +=
-        getLedgerCustomerPrice(line) - getLedgerTotalDesignerCost(line);
+      profit += invoiceLineProfit(line);
       tax += Number(line.tax_amount ?? 0);
       fees += Number(line.payment_fee ?? 0);
     }

@@ -1,5 +1,14 @@
 import type { LedgerEntry } from "./types";
-import { formatCurrency, formatDate, getLedgerCustomerPrice, getLedgerInvoicedAmount, getLedgerInvoicedAmountExcludingPaymentFee, parseDateOnlyParts, roundMoney } from "./utils";
+import {
+  formatCurrency,
+  formatDate,
+  getLedgerCustomerPrice,
+  getLedgerInvoicedAmount,
+  getLedgerInvoicedAmountExcludingPaymentFee,
+  getLedgerTotalDesignerCost,
+  parseDateOnlyParts,
+  roundMoney,
+} from "./utils";
 
 /** Short US date for printed invoices (e.g. 4/22/2026). */
 export function formatInvoiceDisplayDate(value?: string | Date | null): string {
@@ -587,6 +596,33 @@ export function summarizePaymentsByInvoiceId(
 
 export function invoiceLineTotal(entry: InvoiceLineItem): number {
   return getLedgerInvoicedAmountExcludingPaymentFee(entry);
+}
+
+/** Gross profit on one line: customer price minus designer total cost. */
+export function invoiceLineProfit(entry: LedgerAmountEntry): number {
+  const customerPrice = getLedgerCustomerPrice({
+    retail_price: entry.retail_price,
+    quantity: entry.quantity,
+    discount_percent: entry.discount_percent ?? 0,
+    customer_price: entry.customer_price,
+    designer_cost: entry.designer_cost,
+    wholesale_retail: entry.wholesale_retail,
+    trade_partner_id: entry.trade_partner_id,
+  });
+  const designerCost = getLedgerTotalDesignerCost({
+    designer_cost: Number(entry.designer_cost ?? 0),
+    quantity: Number(entry.quantity ?? 1),
+  });
+  return roundMoney(customerPrice - designerCost);
+}
+
+/** Sum gross profit across invoiced debit lines on an invoice. */
+export function sumInvoiceLineProfit(entries: LedgerAmountEntry[]): number {
+  return roundMoney(
+    entries
+      .filter(isInvoicedDebitLine)
+      .reduce((sum, entry) => sum + invoiceLineProfit(entry), 0)
+  );
 }
 
 export interface InvoiceLineBreakdown {
