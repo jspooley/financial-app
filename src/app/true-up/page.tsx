@@ -534,7 +534,7 @@ export default function TrueUpReportPage() {
         <div className="space-y-8">
           <CollapsibleSection
             title="Sales and Revenue"
-            description="Cash in and out by invoice. Expand a COA category to see the lines on that invoice. Sales income is net of tax, shipping, and fees (pass-through, not shared). COGS is negative (money out). Required transfer splits that net 50/50: send is negative, receive is positive."
+            description="Cash in and out by invoice. Expand a COA category to see the lines on that invoice. Sales income is gross cash collected. COGS and 203 fees (tax, shipping, receiving, payment fees) reimburse whoever purchased the goods. Subtotal is profit; required transfer splits that profit 50/50: send is negative, receive is positive."
           >
             <BlockTable
               sectionLabel="Sales&Revenue"
