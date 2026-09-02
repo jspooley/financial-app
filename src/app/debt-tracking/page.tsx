@@ -2,9 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { CardBalanceReconciliationPanel } from "@/components/debt/CardBalanceReconciliationPanel";
 import { DataTable } from "@/components/ui/DataTable";
 import { selectFieldClass } from "@/components/ui/FormFields";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { buildCardBalanceReconciliation } from "@/lib/card-balance-reconciliation";
+import { mergeCardReimburseDisplayMates } from "@/lib/card-reimbursement";
 import { fetchAllLedgerRows, normalizeLedgerRow } from "@/lib/ledger-db";
 import {
   buildPersonalFundsReport,
@@ -141,6 +144,11 @@ export default function DebtTrackingPage() {
     [entries, partner]
   );
 
+  const cardReconciliation = useMemo(() => {
+    const registerEntries = mergeCardReimburseDisplayMates(entries);
+    return buildCardBalanceReconciliation(registerEntries, partner);
+  }, [entries, partner]);
+
   const unreimbursedDisplay = -report.unreimbursedTotal;
   const businessLoanDisplay = -report.capitalNet;
   const netBusinessDebt = report.netBusinessDebt;
@@ -196,6 +204,8 @@ export default function DebtTrackingPage() {
               emphasize
             />
           </div>
+
+          <CardBalanceReconciliationPanel reconciliation={cardReconciliation} />
 
           <LinesTable
             title="Unreimbursed personal credit card charges"

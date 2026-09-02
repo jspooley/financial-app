@@ -4,13 +4,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
+import { CardBalanceReconciliationPanel } from "@/components/debt/CardBalanceReconciliationPanel";
 import { ExpenseForm } from "@/components/forms/ExpenseForm";
 import { LedgerAccountForm } from "@/components/forms/LedgerAccountForm";
 import { useRecordLocks } from "@/components/RecordLockProvider";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { buildCardBalanceReconciliation } from "@/lib/card-balance-reconciliation";
 import { normalizeInvoiceId } from "@/lib/invoice-utils";
+import type { PersonalFundsPartnerFilter } from "@/lib/personal-funds-report";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 import {
   coaAccountNumber,
@@ -1391,6 +1394,38 @@ export default function CashflowPage() {
     !showAllCoaCategories ||
     reimbursementFilter !== "all";
 
+  const cardReconciliationPartner = useMemo((): PersonalFundsPartnerFilter => {
+    const cardOnly = accountFilter.filter((account) =>
+      account.startsWith("Credit Card")
+    );
+    if (!showAllAccounts && cardOnly.length === 1) {
+      return cardOnly[0].includes("Molly") ? "Molly" : "Jess";
+    }
+    return "Both";
+  }, [accountFilter, showAllAccounts]);
+
+  const cardReconciliation = useMemo(
+    () =>
+      buildCardBalanceReconciliation(visibleEntries, cardReconciliationPartner, {
+        resolveNetAmount: (entry) => {
+          const amounts = amountsForAccountFilter(
+            entry,
+            monthFilter,
+            accountFilter,
+            showAllAccounts
+          );
+          return roundMoney(amounts.debit - amounts.credit);
+        },
+      }),
+    [
+      visibleEntries,
+      cardReconciliationPartner,
+      monthFilter,
+      accountFilter,
+      showAllAccounts,
+    ]
+  );
+
   function toggleAccountFilter(account: CashflowAccount) {
     setAccountFilter((current) =>
       current.includes(account)
@@ -2482,6 +2517,20 @@ export default function CashflowPage() {
               </p>
             </div>
           </section>
+
+          <div className="mb-6">
+            <CardBalanceReconciliationPanel
+              compact
+              reconciliation={cardReconciliation}
+              relatedHref="/debt-tracking"
+              relatedLabel="Open Business Debt"
+              filteredNote={
+                hasActiveListFilters
+                  ? "Totals use the current Cashflow filters and should match the Credit Card Balance card above."
+                  : undefined
+              }
+            />
+          </div>
 
           <div className="mb-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <div>
