@@ -255,6 +255,7 @@ export function LedgerForm({
   const [pendingZeroDiscountValues, setPendingZeroDiscountValues] =
     useState<FormValues | null>(null);
   const [showPaymentDetails, setShowPaymentDetails] = useState(false);
+  const isEditing = Boolean(initial);
   const {
     register,
     handleSubmit,
@@ -301,6 +302,7 @@ export function LedgerForm({
   const quantity = useWatch({ control, name: "quantity" });
   const discountPercent = useWatch({ control, name: "discount_percent" });
   const wholesaleRetail = useWatch({ control, name: "wholesale_retail" });
+  const creditDebit = useWatch({ control, name: "credit_debit" });
   const shippingAmount = useWatch({ control, name: "shipping_receiving_amount" });
   const receivingAmount = useWatch({ control, name: "receiving_amount" });
   const retailPrice = useWatch({ control, name: "retail_price" });
@@ -321,6 +323,7 @@ export function LedgerForm({
   const numericRetailPrice = Number(retailPrice) || 0;
   const numericDesignerCost = Number(designerCost) || 0;
   const isWholesale = wholesaleRetail === "wholesale";
+  const isDebitLine = creditDebit === "debit";
   const isService = wholesaleRetail === "service";
   const isRetail = wholesaleRetail === "retail";
   const hasTradePartner = Boolean(selectedTradePartnerId);
@@ -463,7 +466,10 @@ export function LedgerForm({
   );
 
   const outstandingBalance = useMemo(() => {
-    if (!initial || initial.credit_debit !== "debit") return null;
+    if (!isDebitLine) return null;
+    if (!initial) {
+      return invoicedAmount;
+    }
     return getLedgerOutstandingBalance({
       retail_price: effectiveRetailPrice,
       quantity: numericQty,
@@ -485,6 +491,7 @@ export function LedgerForm({
     });
   }, [
     initial,
+    isDebitLine,
     effectiveRetailPrice,
     numericQty,
     numericDiscount,
@@ -496,6 +503,7 @@ export function LedgerForm({
     selectedTradePartnerId,
     storedPaymentFee,
     isPersonalUse,
+    invoicedAmount,
   ]);
 
   useEffect(() => {
@@ -1145,15 +1153,17 @@ export function LedgerForm({
 
         {/* Payment & status (read-only) */}
         <div className="space-y-3">
-          <button
-            type="button"
-            onClick={() => setShowPaymentDetails((current) => !current)}
-            aria-expanded={showPaymentDetails}
-            className="text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
-          >
-            {showPaymentDetails ? "Hide additional details" : "Show additional details"}
-          </button>
-          {showPaymentDetails ? (
+          {isEditing ? (
+            <button
+              type="button"
+              onClick={() => setShowPaymentDetails((current) => !current)}
+              aria-expanded={showPaymentDetails}
+              className="text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
+            >
+              {showPaymentDetails ? "Hide additional details" : "Show additional details"}
+            </button>
+          ) : null}
+          {!isEditing || showPaymentDetails ? (
             <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
             <InputField
@@ -1178,7 +1188,11 @@ export function LedgerForm({
             <InputField
               label="Payment Type"
               value={
-                initial?.credit_debit === "debit" ? (initial.payment_type ?? "—") : "—"
+                isDebitLine
+                  ? isEditing
+                    ? (initial?.payment_type ?? "—")
+                    : "—"
+                  : "—"
               }
               readOnly
               disabled
@@ -1203,7 +1217,7 @@ export function LedgerForm({
               label="Paid"
               disabled
               checked={
-                initial?.credit_debit === "debit"
+                isEditing && initial && isDebitLine
                   ? isLedgerLineFullyPaid(initial)
                   : false
               }
@@ -1212,8 +1226,10 @@ export function LedgerForm({
             <InputField
               label="Paid Amount"
               value={
-                initial?.credit_debit === "debit"
-                  ? formatCurrency(Number(initial.payment_amount ?? 0))
+                isDebitLine
+                  ? formatCurrency(
+                      Number(isEditing ? (initial?.payment_amount ?? 0) : 0)
+                    )
                   : "—"
               }
               readOnly
@@ -1222,7 +1238,7 @@ export function LedgerForm({
             <InputField
               label="Date Paid"
               value={
-                initial?.date_paid && initial.credit_debit === "debit"
+                isDebitLine && isEditing && initial?.date_paid
                   ? formatDate(initial.date_paid)
                   : "—"
               }
@@ -1231,9 +1247,7 @@ export function LedgerForm({
             />
             <InputField
               label="Paid To"
-              value={
-                initial?.credit_debit === "debit" ? (initial.paid_to ?? "—") : "—"
-              }
+              value={isDebitLine && isEditing ? (initial?.paid_to ?? "—") : "—"}
               readOnly
               disabled
             />
@@ -1257,8 +1271,10 @@ export function LedgerForm({
               <InputField
                 label="Expense Amount"
                 value={
-                  initial?.credit_debit === "debit"
-                    ? formatCurrency(Number(initial.expense_amount ?? 0))
+                  isDebitLine
+                    ? formatCurrency(
+                        Number(isEditing ? (initial?.expense_amount ?? 0) : 0)
+                      )
                     : "—"
                 }
                 readOnly
@@ -1273,24 +1289,27 @@ export function LedgerForm({
               <InputField
                 label="Variance Amount"
                 value={
-                  initial?.credit_debit === "debit"
-                    ? formatCurrency(Number(initial.variance_amount ?? 0))
+                  isDebitLine
+                    ? formatCurrency(
+                        Number(isEditing ? (initial?.variance_amount ?? 0) : 0)
+                      )
                     : "—"
                 }
                 readOnly
                 disabled
               />
-              {(initial?.variance_accepted ||
-                Math.abs(Number(initial?.variance_amount ?? 0)) >= 0.005) && (
-                <div className="col-span-3">
-                  <InputField
-                    label="Variance Notes"
-                    value={initial?.variance_notes?.trim() || "—"}
-                    readOnly
-                    disabled
-                  />
-                </div>
-              )}
+              <div className="col-span-3">
+                <InputField
+                  label="Variance Notes"
+                  value={
+                    isEditing && initial?.variance_accepted
+                      ? initial.variance_notes?.trim() || "—"
+                      : "—"
+                  }
+                  readOnly
+                  disabled
+                />
+              </div>
             </div>
           </div>
             </>
