@@ -40,6 +40,7 @@ import {
   calculateMarkupPercentFromPricing,
   calculateTaxFromCustomerPrice,
   purchaserAccountForPurchaser,
+  checkingAccountForPurchaser,
   formatCurrency,
   formatPercent,
   formatSandUTaxPercent,
@@ -88,10 +89,12 @@ const schema = z
     client_id: z.string().uuid("Select a client"),
     po_number: z.string().trim().min(1, "PO number is required"),
     purchaser: z.enum(["Jess", "Molly", "TBD"], {
-      required_error: "Purchaser is required",
+      required_error: "Select a purchaser",
+      invalid_type_error: "Select a purchaser",
     }),
     account: z.enum(PURCHASER_ACCOUNT_OPTIONS, {
-      required_error: "Account is required",
+      required_error: "Select an account",
+      invalid_type_error: "Select an account",
     }),
     department: z.enum(CASHFLOW_DEPARTMENTS, {
       required_error: "Department is required",
@@ -234,7 +237,6 @@ interface LedgerFormProps {
   tradePartners: TradePartner[];
   clientPoNumbers: ClientPoNumber[];
   ledgerEntries?: LedgerEntry[];
-  defaultPurchaser?: Purchaser | null;
   initial?: LedgerEntry | null;
   onSuccess: () => void;
   onCancel: () => void;
@@ -245,7 +247,6 @@ export function LedgerForm({
   tradePartners,
   clientPoNumbers,
   ledgerEntries = [],
-  defaultPurchaser,
   initial,
   onSuccess,
   onCancel,
@@ -288,10 +289,8 @@ export function LedgerForm({
       tax_amount: roundMoney(initial?.tax_amount ?? 0),
       client_id: initial?.client_id ?? "",
       po_number: initial?.po_number?.trim() ?? "",
-      purchaser: initial?.purchaser ?? defaultPurchaser ?? "Jess",
-      account:
-        initial?.account ??
-        purchaserAccountForPurchaser(defaultPurchaser ?? "Jess"),
+      purchaser: initial?.purchaser ?? ("" as unknown as Purchaser),
+      account: initial?.account ?? ("" as unknown as PurchaserAccount),
       department: initial?.department ?? "Interior Design",
       income_statement: initial?.income_statement ?? false,
     },
@@ -304,7 +303,8 @@ export function LedgerForm({
   const discountPercent = useWatch({ control, name: "discount_percent" });
   const wholesaleRetail = useWatch({ control, name: "wholesale_retail" });
   const creditDebit = useWatch({ control, name: "credit_debit" });
-  const purchaser = useWatch({ control, name: "purchaser" });
+  const selectedPurchaser = useWatch({ control, name: "purchaser" });
+  const selectedAccount = useWatch({ control, name: "account" });
   const shippingAmount = useWatch({ control, name: "shipping_receiving_amount" });
   const receivingAmount = useWatch({ control, name: "receiving_amount" });
   const retailPrice = useWatch({ control, name: "retail_price" });
@@ -313,6 +313,7 @@ export function LedgerForm({
   const skipPoReset = useRef(true);
   const previousClientIdRef = useRef<string | null>(null);
   const previousTradePartnerIdRef = useRef<string | null>(null);
+  const previousPurchaserTradePartnerIdRef = useRef<string | undefined>(undefined);
   const skipDesignerCostReset = useRef(!!initial);
   const skipRetailFromDesignerReset = useRef(!!initial);
   const designerCostManuallyEdited = useRef(!!initial);
@@ -608,28 +609,56 @@ export function LedgerForm({
     }
   }, [isService, selectedTradePartnerId, setValue, getValues]);
 
-  // Wholesale: purchaser is always the trade partner account owner (read-only in the UI).
+  // Wholesale: default purchaser to trade partner account owner when partner changes.
   useEffect(() => {
     if (!isWholesale) return;
     const owner = selectedTradePartner?.account_owner;
-    if (owner === "Jess" || owner === "Molly") {
-      setValue("purchaser", owner, { shouldValidate: true });
+    if (owner !== "Jess" && owner !== "Molly") return;
+
+    const currentTradePartnerId = selectedTradePartnerId ?? "";
+    const previousTradePartnerId = previousPurchaserTradePartnerIdRef.current;
+    previousPurchaserTradePartnerIdRef.current = currentTradePartnerId;
+
+    if (previousTradePartnerId === undefined) {
+      if (!initial) {
+        setValue("purchaser", owner, { shouldValidate: true });
+      }
+      return;
     }
-  }, [isWholesale, selectedTradePartner?.account_owner, setValue]);
+    if (previousTradePartnerId === currentTradePartnerId) return;
+
+    setValue("purchaser", owner, { shouldValidate: true });
+  }, [
+    initial,
+    isWholesale,
+    selectedTradePartnerId,
+    selectedTradePartner?.account_owner,
+    setValue,
+  ]);
+
+  useEffect(() => {
+    if (initial) return;
+    if (selectedPurchaser === "TBD") return;
+    if (selectedPurchaser !== "Jess" && selectedPurchaser !== "Molly") return;
+    if (selectedAccount) return;
+    setValue("account", checkingAccountForPurchaser(selectedPurchaser), {
+      shouldValidate: true,
+    });
+  }, [initial, selectedAccount, selectedPurchaser, setValue]);
 
   // When purchaser is unknown, keep account on TBD until purchase happens.
   useEffect(() => {
     if (isWholesale) return;
-    if (purchaser === "TBD") {
+    if (selectedPurchaser === "TBD") {
       setValue("account", "TBD", { shouldValidate: true });
       return;
     }
-    if (isKnownPurchaser(purchaser) && getValues("account") === "TBD") {
-      setValue("account", purchaserAccountForPurchaser(purchaser), {
+    if (isKnownPurchaser(selectedPurchaser) && selectedAccount === "TBD") {
+      setValue("account", purchaserAccountForPurchaser(selectedPurchaser), {
         shouldValidate: true,
       });
     }
-  }, [isWholesale, purchaser, setValue, getValues]);
+  }, [isWholesale, selectedPurchaser, selectedAccount, setValue]);
 
   function resetDesignerCostAutoCalc() {
     retailManuallyEdited.current = true;
@@ -703,11 +732,6 @@ export function LedgerForm({
 
     const tradePartner = tradePartners.find((tp) => tp.id === values.trade_partner_id);
     const wholesaleOwner = tradePartner?.account_owner;
-    const purchaserForSave =
-      values.wholesale_retail === "wholesale" &&
-      (wholesaleOwner === "Jess" || wholesaleOwner === "Molly")
-        ? wholesaleOwner
-        : values.purchaser;
 
     if (
       values.wholesale_retail === "wholesale" &&
@@ -743,7 +767,7 @@ export function LedgerForm({
         sand_u_tax: clientSandUTaxRate,
         client_id: values.client_id,
         po_number: poNumber,
-        purchaser: purchaserForSave,
+        purchaser: values.purchaser,
         department: values.department,
         balance_sheet: personalUse,
       }),
@@ -1022,13 +1046,13 @@ export function LedgerForm({
             hint={
               isWholesale
                 ? selectedTradePartner?.account_owner
-                  ? "Locked to the trade partner account owner for wholesale."
+                  ? "Defaults to the trade partner account owner for wholesale. Change if needed."
                   : "Select a trade partner with an account owner (Molly or Jess)."
                 : "Choose TBD when who will purchase is not known yet."
             }
             {...register("purchaser")}
-            disabled={isWholesale}
           >
+            <option value="">Select purchaser</option>
             <option value="Jess">Jess</option>
             <option value="Molly">Molly</option>
             <option value="TBD">TBD</option>
@@ -1037,9 +1061,10 @@ export function LedgerForm({
             label="Account"
             required
             error={errors.account?.message}
-            hint="Defaults to the signed-in user's checking account. Choose TBD when the purchase account is not known yet."
+            hint="Select the account used for this purchase. Choose TBD when the purchase account is not known yet."
             {...register("account")}
           >
+            <option value="">Select account</option>
             {PURCHASER_ACCOUNT_OPTIONS.map((account) => (
               <option key={account} value={account}>
                 {account}
@@ -1169,19 +1194,18 @@ export function LedgerForm({
           </div>
         </div>
 
-        {/* Payment & status (read-only) */}
+        {/* Payment & status (read-only, edit only) */}
+        {isEditing ? (
         <div className="space-y-3">
-          {isEditing ? (
-            <button
-              type="button"
-              onClick={() => setShowPaymentDetails((current) => !current)}
-              aria-expanded={showPaymentDetails}
-              className="text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
-            >
-              {showPaymentDetails ? "Hide additional details" : "Show additional details"}
-            </button>
-          ) : null}
-          {!isEditing || showPaymentDetails ? (
+          <button
+            type="button"
+            onClick={() => setShowPaymentDetails((current) => !current)}
+            aria-expanded={showPaymentDetails}
+            className="text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
+          >
+            {showPaymentDetails ? "Hide additional details" : "Show additional details"}
+          </button>
+          {showPaymentDetails ? (
             <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
             <InputField
@@ -1333,6 +1357,7 @@ export function LedgerForm({
             </>
           ) : null}
         </div>
+        ) : null}
       </div>
 
       {needsQuantityColumn ? (
