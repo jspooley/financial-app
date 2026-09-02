@@ -37,7 +37,6 @@ import type { Client, ClientPoNumber, LedgerEntry, TradePartner } from "@/lib/ty
 import {
   formatCurrency,
   getLedgerCustomerPrice,
-  purchaserFromEmail,
 } from "@/lib/utils";
 import { SelectField } from "@/components/ui/FormFields";
 
@@ -116,9 +115,6 @@ function LedgerPageContent() {
   const [clients, setClients] = useState<Client[]>([]);
   const [tradePartners, setTradePartners] = useState<TradePartner[]>([]);
   const [clientPoNumbers, setClientPoNumbers] = useState<ClientPoNumber[]>([]);
-  const [defaultPurchaser, setDefaultPurchaser] = useState<"Jess" | "Molly" | null>(
-    null
-  );
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -138,7 +134,6 @@ function LedgerPageContent() {
       { data: tradeData, error: tradeError },
       { data: clientPoData, error: clientPoError },
       { data: invoiceHeaders },
-      { data: userData },
     ] = await Promise.all([
       supabase
         .from("ledger")
@@ -153,7 +148,6 @@ function LedgerPageContent() {
       supabase.from("trade_partners").select("*").order("company_name", { ascending: true }),
       supabase.from("client_po_numbers").select("*").order("po_number", { ascending: true }),
       supabase.from("invoicing").select("client_id, po_number"),
-      supabase.auth.getUser(),
     ]);
 
     const error = ledgerError ?? clientError ?? tradeError;
@@ -193,7 +187,6 @@ function LedgerPageContent() {
           "PO numbers table not found. Run migration 024_client_po_numbers.sql in Supabase."
       );
     }
-    setDefaultPurchaser(purchaserFromEmail(userData.user?.email));
     setLoading(false);
   }, []);
 
@@ -484,12 +477,11 @@ function LedgerPageContent() {
           </div>
         ) : (
           <LedgerForm
-            key={editing?.id ?? `new-${defaultPurchaser ?? "pending"}`}
+            key={editing?.id ?? "new-entry"}
             clients={clients}
             tradePartners={tradePartners}
             clientPoNumbers={clientPoNumbers}
             ledgerEntries={entries}
-            defaultPurchaser={defaultPurchaser}
             initial={editing}
             onCancel={closeForm}
             onSuccess={() => {

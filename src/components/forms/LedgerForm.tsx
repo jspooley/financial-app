@@ -86,12 +86,18 @@ const schema = z
     tax_amount: z.coerce.number().min(0).transform(roundMoney),
     client_id: z.string().uuid("Select a client"),
     po_number: z.string().trim().min(1, "PO number is required"),
-    purchaser: z.enum(["Jess", "Molly"], {
-      required_error: "Purchaser is required",
-    }),
-    account: z.enum(CASHFLOW_ACCOUNTS, {
-      required_error: "Account is required",
-    }),
+    purchaser: z
+      .string()
+      .refine((value): value is Purchaser => value === "Jess" || value === "Molly", {
+        message: "Select a purchaser",
+      }),
+    account: z
+      .string()
+      .refine(
+        (value): value is CashflowAccount =>
+          (CASHFLOW_ACCOUNTS as readonly string[]).includes(value),
+        { message: "Select an account" }
+      ),
     department: z.enum(CASHFLOW_DEPARTMENTS, {
       required_error: "Department is required",
     }),
@@ -233,7 +239,6 @@ interface LedgerFormProps {
   tradePartners: TradePartner[];
   clientPoNumbers: ClientPoNumber[];
   ledgerEntries?: LedgerEntry[];
-  defaultPurchaser?: Purchaser | null;
   initial?: LedgerEntry | null;
   onSuccess: () => void;
   onCancel: () => void;
@@ -244,7 +249,6 @@ export function LedgerForm({
   tradePartners,
   clientPoNumbers,
   ledgerEntries = [],
-  defaultPurchaser,
   initial,
   onSuccess,
   onCancel,
@@ -287,10 +291,9 @@ export function LedgerForm({
       tax_amount: roundMoney(initial?.tax_amount ?? 0),
       client_id: initial?.client_id ?? "",
       po_number: initial?.po_number?.trim() ?? "",
-      purchaser: initial?.purchaser ?? defaultPurchaser ?? "Jess",
+      purchaser: initial?.purchaser ?? ("" as unknown as Purchaser),
       account:
-        initial?.account ??
-        checkingAccountForPurchaser(defaultPurchaser),
+        initial?.account ?? ("" as unknown as CashflowAccount),
       department: initial?.department ?? "Interior Design",
       income_statement: initial?.income_statement ?? false,
     },
@@ -303,6 +306,8 @@ export function LedgerForm({
   const discountPercent = useWatch({ control, name: "discount_percent" });
   const wholesaleRetail = useWatch({ control, name: "wholesale_retail" });
   const creditDebit = useWatch({ control, name: "credit_debit" });
+  const selectedPurchaser = useWatch({ control, name: "purchaser" });
+  const selectedAccount = useWatch({ control, name: "account" });
   const shippingAmount = useWatch({ control, name: "shipping_receiving_amount" });
   const receivingAmount = useWatch({ control, name: "receiving_amount" });
   const retailPrice = useWatch({ control, name: "retail_price" });
@@ -633,6 +638,15 @@ export function LedgerForm({
     selectedTradePartner?.account_owner,
     setValue,
   ]);
+
+  useEffect(() => {
+    if (initial) return;
+    if (selectedPurchaser !== "Jess" && selectedPurchaser !== "Molly") return;
+    if (selectedAccount) return;
+    setValue("account", checkingAccountForPurchaser(selectedPurchaser), {
+      shouldValidate: true,
+    });
+  }, [initial, selectedAccount, selectedPurchaser, setValue]);
 
   function resetDesignerCostAutoCalc() {
     retailManuallyEdited.current = true;
@@ -1025,6 +1039,7 @@ export function LedgerForm({
             }
             {...register("purchaser")}
           >
+            <option value="">Select purchaser</option>
             <option value="Jess">Jess</option>
             <option value="Molly">Molly</option>
           </SelectField>
@@ -1032,9 +1047,10 @@ export function LedgerForm({
             label="Account"
             required
             error={errors.account?.message}
-            hint="Defaults to the signed-in user's checking account."
+            hint="Select the account used for this purchase."
             {...register("account")}
           >
+            <option value="">Select account</option>
             {CASHFLOW_ACCOUNTS.map((account) => (
               <option key={account} value={account}>
                 {account}
