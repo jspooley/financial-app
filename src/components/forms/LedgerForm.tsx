@@ -99,8 +99,9 @@ const schema = z
   })
   .superRefine((values, ctx) => {
     const usesMarkup =
-      values.wholesale_retail === "retail" &&
-      !(values.trade_partner_id ?? "").trim();
+      values.wholesale_retail === "service" ||
+      (values.wholesale_retail === "retail" &&
+        !(values.trade_partner_id ?? "").trim());
     if (!usesMarkup && values.discount_percent > 100) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -322,8 +323,8 @@ export function LedgerForm({
   const isService = wholesaleRetail === "service";
   const isRetail = wholesaleRetail === "retail";
   const hasTradePartner = Boolean(selectedTradePartnerId);
-  /** Retail without a trade partner: % field is markup; customer pays full retail. */
-  const usesCostMarkup = isRetail && !hasTradePartner;
+  /** No-trade retail and services: % field is markup; customer pays full retail. */
+  const usesCostMarkup = (isRetail && !hasTradePartner) || isService;
 
   const selectedClient = useMemo(
     () => clients.find((client) => client.id === selectedClientId),
@@ -500,25 +501,24 @@ export function LedgerForm({
     setValue("tax_amount", effectiveTax, { shouldValidate: true });
   }, [effectiveTax, setValue]);
 
-  // Retail with no trade partner: retail follows markup when markup is the source.
+  // Markup lines: retail follows markup when markup is the source.
   useEffect(() => {
-    if (!isRetail || hasTradePartner) return;
+    if (!usesCostMarkup) return;
     if (retailManuallyEdited.current) return;
     if (numericDesignerCost <= 0) return;
     if (Math.abs(numericRetailPrice - markedUpRetailPrice) < 0.005) return;
     setValue("retail_price", markedUpRetailPrice, { shouldValidate: true });
   }, [
-    isRetail,
-    hasTradePartner,
+    usesCostMarkup,
     numericDesignerCost,
     markedUpRetailPrice,
     numericRetailPrice,
     setValue,
   ]);
 
-  // Retail with no trade partner: markup follows retail when retail is the source.
+  // Markup lines: markup follows retail when retail is the source.
   useEffect(() => {
-    if (!isRetail || hasTradePartner) return;
+    if (!usesCostMarkup) return;
     if (!retailManuallyEdited.current) return;
     if (numericDesignerCost <= 0 || numericRetailPrice <= 0) return;
     const nextMarkup = Math.max(
@@ -528,8 +528,7 @@ export function LedgerForm({
     if (Math.abs(numericDiscount - nextMarkup) < 0.005) return;
     setValue("discount_percent", nextMarkup, { shouldValidate: true });
   }, [
-    isRetail,
-    hasTradePartner,
+    usesCostMarkup,
     numericDesignerCost,
     numericRetailPrice,
     numericDiscount,
@@ -635,13 +634,13 @@ export function LedgerForm({
   const paidLocked = Boolean(initial && isPaidLedgerRecord(initial));
 
   async function onSubmit(values: FormValues) {
-    const isNoTradeRetail =
-      values.wholesale_retail === "retail" &&
-      !(values.trade_partner_id ?? "").trim();
+    const usesMarkupPricing =
+      values.wholesale_retail === "service" ||
+      (values.wholesale_retail === "retail" &&
+        !(values.trade_partner_id ?? "").trim());
     if (
       !initial &&
-      values.wholesale_retail !== "service" &&
-      !isNoTradeRetail &&
+      !usesMarkupPricing &&
       Math.abs(Number(values.discount_percent) || 0) < 0.005
     ) {
       setPendingZeroDiscountValues(values);
@@ -972,13 +971,13 @@ export function LedgerForm({
             required
             hint={
               isService
-                ? "Customer-facing service price before discount %."
+                ? "Customer-facing service price. Set retail or markup % (customer pays full retail × qty)."
                 : hasTradePartner
                   ? `Enter retail, or enter designer cost to auto-fill as designer ÷ (1 − ${formatPercent(tradePartnerDiscount)}).`
                   : "No trade partner: set retail or markup % (customer pays full retail × qty)."
             }
             error={errors.retail_price?.message}
-            onValueChange={isService ? undefined : resetDesignerCostAutoCalc}
+            onValueChange={usesCostMarkup ? resetDesignerCostAutoCalc : undefined}
           />
           <InputField
             label="Retail Price × Qty"
@@ -1027,7 +1026,7 @@ export function LedgerForm({
             allowZero
             hint={
               isService
-                ? "Optional. Use 0 when the service has no designer cost."
+                ? "Optional. Use 0 when there is no designer cost. Markup % or retail sets the sell price."
                 : hasTradePartner
                   ? `From retail: retail × (1 − ${formatPercent(tradePartnerDiscount)}). Or enter 0 when there is no designer cost.`
                   : "Enter cost, or 0 when there is no designer cost. Markup % or retail sets the sell price."
@@ -1040,8 +1039,8 @@ export function LedgerForm({
                 ? undefined
                 : autoDesignerCost
             }
-            onUserEdit={isService ? undefined : markDesignerCostAsSource}
-            onValueChange={isService ? undefined : markDesignerCostAsSource}
+            onUserEdit={markDesignerCostAsSource}
+            onValueChange={markDesignerCostAsSource}
           />
           <InputField
             label="Total Designer Cost"
@@ -1074,13 +1073,11 @@ export function LedgerForm({
                 max={usesCostMarkup ? undefined : 100}
                 required
                 hint={
-                  isService
-                    ? "0% = customer pays full retail. Applied as (retail × qty) × (1 − discount %)."
-                    : isRetail && !hasTradePartner
-                      ? "((retail − designer) ÷ designer) × 100. Edit to set retail from cost, or set retail to auto-fill."
-                      : hasTradePartner
-                        ? "Applied to retail for customer price. Defaults to 0%."
-                        : "Applied to retail for customer price."
+                  usesCostMarkup
+                    ? "((retail − designer) ÷ designer) × 100. Edit to set retail from cost, or set retail to auto-fill."
+                    : hasTradePartner
+                      ? "Applied to retail for customer price. Defaults to 0%."
+                      : "Applied to retail for customer price."
                 }
                 error={errors.discount_percent?.message}
                 {...register("discount_percent", {
@@ -1090,7 +1087,7 @@ export function LedgerForm({
                     return Number.isFinite(n) ? n : 0;
                   },
                   onChange: () => {
-                    if (isRetail && !hasTradePartner) {
+                    if (usesCostMarkup) {
                       retailManuallyEdited.current = false;
                     }
                   },
