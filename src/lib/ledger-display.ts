@@ -1,4 +1,4 @@
-import { getLedgerOutstandingBalance, isLedgerLineFullyPaid } from "@/lib/invoice-utils";
+import { getLedgerOutstandingBalance } from "@/lib/invoice-utils";
 import { computePlTotals, isPlBalanceSheetEntry, ledgerLineGrossProfit, ledgerLineNetProfit } from "@/lib/pl-report";
 import type { LedgerEntry } from "@/lib/types";
 import {
@@ -24,14 +24,10 @@ function ledgerWholesaleRetailLabel(entry: LedgerEntry) {
   return "Retail";
 }
 
-/** Read-only fields for Goods & Services mobile cards — matches LedgerForm field order. */
-export function ledgerGoodsServicesCardFields(
-  entry: LedgerEntry,
-  invoicedPoKeys?: Set<string>
-) {
-  const isDebit = entry.credit_debit === "debit";
+/** Read-only fields for Goods & Services mobile cards — matches the main create form. */
+export function ledgerGoodsServicesCardFields(entry: LedgerEntry) {
   const discountLabel = ledgerUsesCostMarkup(entry) ? "Markup %" : "Discount %";
-  const fields: { label: string; value: string }[] = [
+  return [
     { label: "Client", value: entry.clients?.name ?? "—" },
     { label: "Description", value: entry.description?.trim() || "—" },
     { label: "Date", value: formatDate(entry.entry_date) },
@@ -77,77 +73,7 @@ export function ledgerGoodsServicesCardFields(
       label: "Invoiced Amount",
       value: formatCurrency(getLedgerInvoicedAmount(entry)),
     },
-    { label: "Tax Amount", value: ledgerTaxDisplay(entry) },
-    {
-      label: "Sales and Use Tax Paid",
-      value: entry.sales_and_use_tax_paid ? "Yes" : "No",
-    },
-    {
-      label: "Payment Type",
-      value: isDebit ? (entry.payment_type ?? "—") : "—",
-    },
-    { label: "Invoiced", value: entry.invoiced ? "Yes" : "No" },
-    { label: "Invoice ID", value: entry.invoice_id ?? "—" },
-    {
-      label: "Paid",
-      value: isDebit ? (isLedgerLineFullyPaid(entry) ? "Yes" : "No") : "—",
-    },
-    {
-      label: "Paid Amount",
-      value: isDebit ? formatCurrency(Number(entry.payment_amount ?? 0)) : "—",
-    },
-    {
-      label: "Date Paid",
-      value: isDebit && entry.date_paid ? formatDate(entry.date_paid) : "—",
-    },
-    {
-      label: "Paid To",
-      value: isDebit ? (entry.paid_to ?? "—") : "—",
-    },
-    {
-      label: "Outstanding Balance",
-      value: isDebit ? formatCurrency(getLedgerOutstandingBalance(entry)) : "—",
-    },
-    { label: "Expense", value: isDebit ? (entry.expense ? "Yes" : "No") : "—" },
-    {
-      label: "Expense Amount",
-      value: isDebit ? formatCurrency(Number(entry.expense_amount ?? 0)) : "—",
-    },
-    {
-      label: "Variance Accepted",
-      value: isDebit ? (entry.variance_accepted ? "Yes" : "No") : "—",
-    },
-    {
-      label: "Variance Amount",
-      value: isDebit ? formatCurrency(Number(entry.variance_amount ?? 0)) : "—",
-    },
   ];
-
-  if (
-    isDebit &&
-    (entry.variance_accepted ||
-      Math.abs(Number(entry.variance_amount ?? 0)) >= 0.005)
-  ) {
-    fields.push({
-      label: "Variance Notes",
-      value: entry.variance_notes?.trim() || "—",
-    });
-  }
-
-  if (!isPlBalanceSheetEntry(entry)) {
-    fields.push(
-      {
-        label: "Gross Profit",
-        value: formatCurrency(ledgerLineGrossProfit(entry, invoicedPoKeys)),
-      },
-      {
-        label: "Net Profit",
-        value: formatCurrency(ledgerLineNetProfit(entry, invoicedPoKeys)),
-      }
-    );
-  }
-
-  return fields;
 }
 
 export function ledgerTaxDisplay(entry: LedgerEntry) {
