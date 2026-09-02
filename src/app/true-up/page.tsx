@@ -311,6 +311,13 @@ function BlockRows({
 
   const isAwaitingPayment =
     block.status === "pending" && block.pendingReason === "awaiting_payment";
+  const projectedSubtotal = block.projectedSubtotal ?? block.subtotal;
+  const projectedRequired = block.projectedRequired ?? block.required;
+  const hasProjectedBreakdown =
+    isAwaitingPayment &&
+    (block.projectedCategoryRows?.length ?? 0) > 0 &&
+    block.projectedSubtotal &&
+    block.projectedRequired;
 
   return (
     <>
@@ -334,6 +341,9 @@ function BlockRows({
             Purchases recorded; awaiting client payment before true-up. COGS is
             not shared — the payee will reimburse whoever bought the goods once
             payment is received.
+            {hasProjectedBreakdown
+              ? " Projected profit below uses invoiced amounts."
+              : null}
           </td>
         </tr>
       ) : null}
@@ -406,6 +416,17 @@ function BlockRows({
           </Fragment>
         );
       })}
+      {(block.projectedCategoryRows ?? []).map((row) => (
+        <tr
+          key={`${block.id}-proj-${row.category}`}
+          className="border-b border-slate-100 bg-amber-50/30"
+        >
+          <td />
+          <td />
+          <td className="px-3 py-1.5 italic text-slate-700">{row.category}</td>
+          <AmountCells amounts={row.amounts} />
+        </tr>
+      ))}
       {block.categoryRows.length === 0 && !isAwaitingPayment ? (
         <tr className="border-b border-slate-100 bg-slate-50">
           <td className="px-3 py-1.5 font-medium text-slate-900">{block.groupLabel}</td>
@@ -446,6 +467,27 @@ function BlockRows({
         <AmountCells amounts={block.recorded} emphasize />
       </tr>
       <DiscrepancyRow amounts={block.discrepancy} leadingCells={2} />
+        </>
+      ) : isAwaitingPayment ? (
+        <>
+      <tr className="border-b border-slate-100 bg-amber-50/30">
+        <td />
+        <td />
+        <td className="px-3 py-1.5 font-bold text-slate-900">
+          {hasProjectedBreakdown ? "Subtotal (projected)" : "Subtotal"}
+        </td>
+        <AmountCells amounts={projectedSubtotal} emphasize />
+      </tr>
+      <tr className="border-b border-slate-100 bg-amber-50/30">
+        <td />
+        <td />
+        <td className="px-3 py-1.5 font-bold text-slate-900">
+          {hasProjectedBreakdown
+            ? "Required Transfer (projected)"
+            : "Required Transfer (after payment)"}
+        </td>
+        <AmountCells amounts={projectedRequired} emphasize />
+      </tr>
         </>
       ) : null}
     </>

@@ -14,13 +14,18 @@ import {
 } from "@/lib/coa";
 import { isCostCompanionRow } from "@/lib/cost-companions";
 import {
+  isInvoicedDebitLine,
   jobKeysByStatus,
   ledgerJobKey,
   normalizeInvoiceId,
 } from "@/lib/invoice-utils";
 import { isPaymentCompanionRow } from "@/lib/payment-companions";
 import type { LedgerEntry, Purchaser } from "@/lib/types";
-import { getLedgerTotalDesignerCost, roundMoney } from "@/lib/utils";
+import {
+  getLedgerInvoicedAmountExcludingPaymentFee,
+  getLedgerTotalDesignerCost,
+  roundMoney,
+} from "@/lib/utils";
 
 export type PartnerAmounts = {
   jess: number;
@@ -57,6 +62,10 @@ export type TrueUpBlock = {
   recordedRows: TrueUpCategoryRow[];
   recorded: PartnerAmounts;
   discrepancy: PartnerAmounts;
+  /** Invoiced sales income before client payment (awaiting_payment blocks only). */
+  projectedCategoryRows?: TrueUpCategoryRow[];
+  projectedSubtotal?: PartnerAmounts;
+  projectedRequired?: PartnerAmounts;
 };
 
 export type TrueUpYtdTotals = {
@@ -92,6 +101,7 @@ export type TrueUpUntaggedTransfer = {
 /** Spreadsheet labels for the true-up report (COA numbers still drive matching). */
 export const TRUE_UP_COGS_LABEL = "101 COGS";
 export const TRUE_UP_INCOME_LABEL = "100 Sales Income";
+export const TRUE_UP_PROJECTED_INCOME_LABEL = "100 Sales Income (invoiced)";
 export const TRUE_UP_FEES_LABEL = "203 Commissions and Fees";
 export const TRUE_UP_TRANSFERS_LABEL = "302 Transfers between accounts";
 
@@ -521,16 +531,56 @@ function hasClientPayment(income: PartnerAmounts) {
   return hasAmount(income);
 }
 
+function projectedInvoicedIncome(
+  entries: LedgerEntry[],
+  invoiceId: string,
+  parentById: Map<string, LedgerEntry>
+): PartnerAmounts {
+  let amounts = emptyPartnerAmounts();
+  for (const entry of entries) {
+    if (invoiceKey(entry) !== invoiceId) continue;
+    if (entry.source_ledger_id) continue;
+    if (!isInvoicedDebitLine(entry)) continue;
+    if (skipTrueUpShare(entry)) continue;
+    if (isPersonalUseTrueUpEntry(entry, parentById)) continue;
+
+    const gross = getLedgerInvoicedAmountExcludingPaymentFee(entry);
+    const net = netSalesIncome(gross, entry);
+    if (!net) continue;
+    const payee = partnerFromEntry(entry, "payee");
+    amounts = addPartnerAmount(amounts, payee, net);
+  }
+  return amounts;
+}
+
+function cogsAmountsFromBlock(block: TrueUpBlock): PartnerAmounts {
+  return (
+    block.categoryRows.find((row) => row.category === TRUE_UP_COGS_LABEL)
+      ?.amounts ?? emptyPartnerAmounts()
+  );
+}
+
 function awaitingClientPaymentBlock(
   block: TrueUpBlock,
+  projectedIncome: PartnerAmounts,
   reason: TrueUpPendingReason = "awaiting_payment"
 ): TrueUpBlock {
+  const cogs = cogsAmountsFromBlock(block);
+  const projectedCategoryRows: TrueUpCategoryRow[] = hasAmount(projectedIncome)
+    ? [{ category: TRUE_UP_PROJECTED_INCOME_LABEL, amounts: projectedIncome }]
+    : [];
+  const projectedSubtotal = salesSubtotal(cogs, projectedIncome);
+  const projectedRequired = requiredProfitTransfers(cogs, projectedIncome);
+
   return {
     ...block,
     status: "pending",
     pendingReason: reason,
     required: emptyPartnerAmounts(),
     discrepancy: subtractPartnerAmounts(emptyPartnerAmounts(), block.recorded),
+    projectedCategoryRows,
+    projectedSubtotal,
+    projectedRequired,
   };
 }
 
@@ -757,7 +807,12 @@ function buildSalesBlocks(
         requiredProfitTransfers(group.cogs, group.income)
       );
       if (!hasClientPayment(group.income) && hasAmount(group.cogs)) {
-        return awaitingClientPaymentBlock(block);
+        const projectedIncome = projectedInvoicedIncome(
+          entries,
+          group.invoiceId,
+          parentById
+        );
+        return awaitingClientPaymentBlock(block, projectedIncome);
       }
       return block;
     })
