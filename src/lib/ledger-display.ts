@@ -216,17 +216,24 @@ export function mapLedgerTableRow(
     client: entry.clients?.name ?? "—",
     date: formatDate(entry.entry_date),
     description: entry.description?.trim() || "—",
+    department: entry.department ?? "—",
+    creditDebit: ledgerCreditDebitLabel(entry),
+    po: entry.po_number ?? "—",
+    tradePartner: entry.trade_partners?.company_name?.trim() || "—",
+    wholesaleRetail: ledgerWholesaleRetailLabel(entry),
     retailPrice: formatCurrency(Number(entry.retail_price ?? 0)),
     qty: formatQuantity(Number(entry.quantity)),
     retailPriceQty: formatCurrency(getLedgerRetailSubtotal(entry)),
     discount: `${Number(entry.discount_percent)}%`,
     customerPrice: formatCurrency(getLedgerCustomerPrice(entry)),
-    tax: ledgerTaxDisplay(entry),
+    purchaser: entry.purchaser,
+    account: entry.account ?? "—",
+    designerCost: formatCurrency(Number(entry.designer_cost)),
     shipping: formatCurrency(Number(entry.shipping_receiving_amount ?? 0)),
     receiving: formatCurrency(Number(entry.receiving_amount ?? 0)),
     paymentFee: formatCurrency(Number(entry.payment_fee ?? 0)),
     invoicedAmount: formatCurrency(getLedgerInvoicedAmount(entry)),
-    coaCategory: entry.coa_category?.trim() || "—",
+    tax: ledgerTaxDisplay(entry),
     outstandingBalance:
       entry.credit_debit === "debit"
         ? formatCurrency(getLedgerOutstandingBalance(entry))
@@ -257,21 +264,19 @@ export function mapLedgerTableRow(
         ? entry.variance_notes?.trim() || "—"
         : "—",
     paid: entry.credit_debit === "debit" ? (entry.paid ? "Yes" : "No") : "—",
-    purchaser: entry.purchaser,
     paidTo: entry.credit_debit === "debit" ? (entry.paid_to ?? "—") : "—",
     datePaid:
       entry.credit_debit === "debit" && entry.date_paid
         ? formatDate(entry.date_paid)
         : "—",
-    designerCost: formatCurrency(Number(entry.designer_cost)),
     totalDesignerCost: formatCurrency(getLedgerTotalDesignerCost(entry)),
+    coaCategory: entry.coa_category?.trim() || "—",
     grossProfit: isPlBalanceSheetEntry(entry)
       ? "—"
       : formatCurrency(ledgerLineGrossProfit(entry, invoicedPoKeys)),
     netProfit: isPlBalanceSheetEntry(entry)
       ? "—"
       : formatCurrency(ledgerLineNetProfit(entry, invoicedPoKeys)),
-    po: entry.po_number ?? "—",
     type: `${entry.credit_debit} / ${entry.wholesale_retail}`,
     salesUseTaxPaid: entry.sales_and_use_tax_paid ? "Yes" : "No",
     incomeStatement: entry.income_statement ? "Yes" : "No",
@@ -362,7 +367,78 @@ export function ledgerDebitColumnTotals(
   };
 }
 
-/** Debits table: retail price columns after total designer cost. */
+/** Goods & Services list/table columns — matches the main create form. */
+export const ledgerGoodsServicesColumns = [
+  { key: "client", label: "Client" },
+  { key: "description", label: "Description" },
+  { key: "date", label: "Date" },
+  { key: "department", label: "Department" },
+  { key: "creditDebit", label: "Credit / Debit" },
+  { key: "po", label: "PO Number" },
+  { key: "tradePartner", label: "Trade Partner" },
+  { key: "wholesaleRetail", label: "Wholesale / Retail / Service" },
+  { key: "qty", label: "Qty", className: "w-14 max-w-14 whitespace-nowrap px-2" },
+  { key: "retailPrice", label: "Retail Price" },
+  { key: "retailPriceQty", label: "Retail Price × Qty" },
+  { key: "purchaser", label: "Purchaser" },
+  { key: "account", label: "Account" },
+  { key: "designerCost", label: "Designer Cost" },
+  { key: "totalDesignerCost", label: "Total Designer Cost" },
+  { key: "customerPrice", label: "Customer Price × Qty" },
+  { key: "discount", label: "Discount / Markup %" },
+  { key: "shipping", label: "Shipping" },
+  { key: "receiving", label: "Receiving" },
+  { key: "paymentFee", label: "Payment Fee", className: "w-24 max-w-24 whitespace-nowrap px-2" },
+  { key: "invoicedAmount", label: "Invoiced Amount" },
+] as const;
+
+/** Column header totals for the simplified goods and services list. */
+export function ledgerGoodsServicesColumnTotals(
+  entries: LedgerEntry[]
+): Record<string, string> {
+  if (entries.length === 0) return {};
+
+  let discountSum = 0;
+  let retailPrice = 0;
+  let retailPriceQty = 0;
+  let customerPrice = 0;
+  let shipping = 0;
+  let receiving = 0;
+  let paymentFee = 0;
+  let invoicedAmount = 0;
+  let designerCost = 0;
+  let totalDesignerCost = 0;
+
+  for (const entry of entries) {
+    discountSum += Number(entry.discount_percent);
+    retailPrice += Number(entry.retail_price ?? 0);
+    retailPriceQty += getLedgerRetailSubtotal(entry);
+    customerPrice += getLedgerCustomerPrice(entry);
+    shipping += Number(entry.shipping_receiving_amount ?? 0);
+    receiving += Number(entry.receiving_amount ?? 0);
+    paymentFee += Number(entry.payment_fee ?? 0);
+    invoicedAmount += getLedgerInvoicedAmount(entry);
+    designerCost += Number(entry.designer_cost);
+    totalDesignerCost += getLedgerTotalDesignerCost(entry);
+  }
+
+  const avgDiscount = discountSum / entries.length;
+
+  return {
+    discount: formatPercent(avgDiscount),
+    retailPrice: formatCurrency(roundMoney(retailPrice)),
+    retailPriceQty: formatCurrency(roundMoney(retailPriceQty)),
+    customerPrice: formatCurrency(roundMoney(customerPrice)),
+    shipping: formatCurrency(roundMoney(shipping)),
+    receiving: formatCurrency(roundMoney(receiving)),
+    paymentFee: formatCurrency(roundMoney(paymentFee)),
+    invoicedAmount: formatCurrency(roundMoney(invoicedAmount)),
+    designerCost: formatCurrency(roundMoney(designerCost)),
+    totalDesignerCost: formatCurrency(roundMoney(totalDesignerCost)),
+  };
+}
+
+/** Full export columns for goods and services CSV downloads. */
 export const ledgerDebitColumns = [
   { key: "client", label: "Client" },
   { key: "date", label: "Date" },

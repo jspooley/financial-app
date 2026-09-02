@@ -29,7 +29,7 @@ import {
   poNumbersForClient,
   poNumbersFromLedgerEntries,
 } from "@/lib/client-po-db";
-import { ledgerDetailFields, ledgerDetailColumns, ledgerDebitColumns, ledgerDebitColumnTotals, ledgerGoodsServicesCardFields, mapLedgerTableRow, downloadGoodsAndServicesLedgerCsv } from "@/lib/ledger-display";
+import { ledgerGoodsServicesCardFields, ledgerGoodsServicesColumns, ledgerGoodsServicesColumnTotals, mapLedgerTableRow, downloadGoodsAndServicesLedgerCsv } from "@/lib/ledger-display";
 import { computePlTotals } from "@/lib/pl-report";
 import { loadLedgerLockTargets } from "@/lib/record-lock";
 import { createClient } from "@/lib/supabase/client";
@@ -440,8 +440,8 @@ function LedgerPageContent() {
   const creditEntries = visibleEntries.filter((entry) => entry.credit_debit === "credit");
 
   const debitColumnTotals = useMemo(
-    () => ledgerDebitColumnTotals(debitEntries, invoicedPoKeys),
-    [debitEntries, invoicedPoKeys]
+    () => ledgerGoodsServicesColumnTotals(debitEntries),
+    [debitEntries]
   );
 
   const goodsAndServicesTotal = useMemo(
@@ -738,10 +738,7 @@ function LedgerPageContent() {
                         {entryActions(entry)}
                       </div>
                       <dl className="space-y-2 text-sm">
-                        {(group.title === GOODS_AND_SERVICES_LABEL
-                          ? ledgerGoodsServicesCardFields(entry)
-                          : ledgerDetailFields(entry, invoicedPoKeys)
-                        ).map((field) => (
+                        {ledgerGoodsServicesCardFields(entry).map((field) => (
                           <div
                             key={field.label}
                             className="flex items-start justify-between gap-3"
@@ -802,7 +799,7 @@ function LedgerPageContent() {
                 rowKey={(_, index) => debitEntries[index]?.id ?? String(index)}
                 columns={[
                   { key: "actions", label: "Actions" },
-                  ...ledgerDebitColumns,
+                  ...ledgerGoodsServicesColumns,
                 ]}
                 rows={debitEntries.map((entry) => ({
                   ...mapLedgerTableRow(entry, invoicedPoKeys),
@@ -824,7 +821,7 @@ function LedgerPageContent() {
               rowKey={(_, index) => creditEntries[index]?.id ?? String(index)}
               columns={[
                 { key: "actions", label: "Actions" },
-                ...ledgerDetailColumns,
+                ...ledgerGoodsServicesColumns,
               ]}
               rows={creditEntries.map((entry) => ({
                 ...mapLedgerTableRow(entry, invoicedPoKeys),
