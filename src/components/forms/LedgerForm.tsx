@@ -1151,19 +1151,18 @@ export function LedgerForm({
           </div>
         </div>
 
-        {/* Payment & status (read-only) */}
+        {/* Payment & status (read-only, edit only) */}
+        {isEditing ? (
         <div className="space-y-3">
-          {isEditing ? (
-            <button
-              type="button"
-              onClick={() => setShowPaymentDetails((current) => !current)}
-              aria-expanded={showPaymentDetails}
-              className="text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
-            >
-              {showPaymentDetails ? "Hide additional details" : "Show additional details"}
-            </button>
-          ) : null}
-          {!isEditing || showPaymentDetails ? (
+          <button
+            type="button"
+            onClick={() => setShowPaymentDetails((current) => !current)}
+            aria-expanded={showPaymentDetails}
+            className="text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
+          >
+            {showPaymentDetails ? "Hide additional details" : "Show additional details"}
+          </button>
+          {showPaymentDetails ? (
             <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
             <InputField
@@ -1315,6 +1314,7 @@ export function LedgerForm({
             </>
           ) : null}
         </div>
+        ) : null}
       </div>
 
       {needsQuantityColumn ? (
