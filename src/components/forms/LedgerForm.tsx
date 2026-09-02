@@ -254,6 +254,7 @@ export function LedgerForm({
   const [saving, setSaving] = useState(false);
   const [pendingZeroDiscountValues, setPendingZeroDiscountValues] =
     useState<FormValues | null>(null);
+  const [showPaymentDetails, setShowPaymentDetails] = useState(false);
   const {
     register,
     handleSubmit,
@@ -1173,6 +1174,16 @@ export function LedgerForm({
 
         {/* Payment & status (read-only) */}
         <div className="space-y-3">
+          <button
+            type="button"
+            onClick={() => setShowPaymentDetails((current) => !current)}
+            aria-expanded={showPaymentDetails}
+            className="text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
+          >
+            {showPaymentDetails ? "Hide details" : "Show details"}
+          </button>
+          {showPaymentDetails ? (
+            <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
             <CheckboxField
               label="Invoiced"
@@ -1282,6 +1293,8 @@ export function LedgerForm({
               )}
             </div>
           </div>
+            </>
+          ) : null}
         </div>
       </div>
 
