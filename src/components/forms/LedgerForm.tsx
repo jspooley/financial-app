@@ -1122,37 +1122,8 @@ export function LedgerForm({
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
             <InputField
-              label="Tax Amount"
-              value={isWholesale ? formatCurrency(effectiveTax) : "N/A"}
-              readOnly
-              disabled
-              hint={
-                isWholesale
-                  ? selectedClient
-                    ? `Customer price × qty × client S&U tax (${formatSandUTaxPercent(clientSandUTaxRate)})`
-                    : "Select a client to apply their S&U tax rate"
-                  : undefined
-              }
-            />
-            <CheckboxField
-              label="Sales and Use Tax Paid"
-              disabled
-              checked={initial?.sales_and_use_tax_paid ?? false}
-              readOnly
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
-            <InputField
               label="Payment Fee"
               value={formatCurrency(storedPaymentFee)}
-              readOnly
-              disabled
-            />
-            <InputField
-              label="Payment Type"
-              value={
-                initial?.credit_debit === "debit" ? (initial.payment_type ?? "—") : "—"
-              }
               readOnly
               disabled
             />
@@ -1184,6 +1155,35 @@ export function LedgerForm({
           </button>
           {showPaymentDetails ? (
             <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
+            <InputField
+              label="Tax Amount"
+              value={isWholesale ? formatCurrency(effectiveTax) : "N/A"}
+              readOnly
+              disabled
+              hint={
+                isWholesale
+                  ? selectedClient
+                    ? `Customer price × qty × client S&U tax (${formatSandUTaxPercent(clientSandUTaxRate)})`
+                    : "Select a client to apply their S&U tax rate"
+                  : undefined
+              }
+            />
+            <CheckboxField
+              label="Sales and Use Tax Paid"
+              disabled
+              checked={initial?.sales_and_use_tax_paid ?? false}
+              readOnly
+            />
+            <InputField
+              label="Payment Type"
+              value={
+                initial?.credit_debit === "debit" ? (initial.payment_type ?? "—") : "—"
+              }
+              readOnly
+              disabled
+            />
+          </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
             <CheckboxField
               label="Invoiced"
