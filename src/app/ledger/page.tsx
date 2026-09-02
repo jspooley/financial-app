@@ -29,7 +29,7 @@ import {
   poNumbersForClient,
   poNumbersFromLedgerEntries,
 } from "@/lib/client-po-db";
-import { ledgerDetailFields, ledgerDetailColumns, ledgerDebitColumns, ledgerDebitColumnTotals, mapLedgerTableRow, downloadGoodsAndServicesLedgerCsv } from "@/lib/ledger-display";
+import { ledgerDetailFields, ledgerDetailColumns, ledgerDebitColumns, ledgerDebitColumnTotals, ledgerGoodsServicesCardFields, mapLedgerTableRow, downloadGoodsAndServicesLedgerCsv } from "@/lib/ledger-display";
 import { computePlTotals } from "@/lib/pl-report";
 import { loadLedgerLockTargets } from "@/lib/record-lock";
 import { createClient } from "@/lib/supabase/client";
@@ -38,7 +38,6 @@ import type { Client, ClientPoNumber, LedgerEntry, TradePartner } from "@/lib/ty
 import {
   formatCurrency,
   getLedgerCustomerPrice,
-  getLedgerInvoicedAmount,
   purchaserFromEmail,
 } from "@/lib/utils";
 import { SelectField } from "@/components/ui/FormFields";
@@ -738,17 +737,17 @@ function LedgerPageContent() {
                       <div className="mb-4 border-b border-slate-100 pb-4">
                         {entryActions(entry)}
                       </div>
-                      <div className="flex items-start justify-between gap-3">
-                        <p className="text-sm font-medium text-slate-500">Invoiced Amount</p>
-                        <p className="text-right font-semibold text-brand-800">
-                          {formatCurrency(getLedgerInvoicedAmount(entry))}
-                        </p>
-                      </div>
-                      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-                        {ledgerDetailFields(entry, invoicedPoKeys).map((field) => (
-                          <div key={field.label}>
-                            <dt className="text-slate-500">{field.label}</dt>
-                            <dd>{field.value}</dd>
+                      <dl className="space-y-2 text-sm">
+                        {(group.title === GOODS_AND_SERVICES_LABEL
+                          ? ledgerGoodsServicesCardFields(entry, invoicedPoKeys)
+                          : ledgerDetailFields(entry, invoicedPoKeys)
+                        ).map((field) => (
+                          <div
+                            key={field.label}
+                            className="flex items-start justify-between gap-3"
+                          >
+                            <dt className="shrink-0 text-slate-500">{field.label}</dt>
+                            <dd className="min-w-0 text-right text-slate-800">{field.value}</dd>
                           </div>
                         ))}
                       </dl>
