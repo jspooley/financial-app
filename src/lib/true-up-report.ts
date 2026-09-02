@@ -43,11 +43,14 @@ export type TrueUpCategoryRow = {
   transactions?: TrueUpTransaction[];
 };
 
+export type TrueUpPendingReason = "no_activity" | "awaiting_payment";
+
 export type TrueUpBlock = {
   id: string;
   groupLabel: string;
   secondaryLabel: string;
   status?: "pending";
+  pendingReason?: TrueUpPendingReason;
   categoryRows: TrueUpCategoryRow[];
   subtotal: PartnerAmounts;
   required: PartnerAmounts;
@@ -132,7 +135,7 @@ export const TRUE_UP_EXCLUSIONS: { label: string; detail: string }[] = [
   {
     label: "Sales & use tax collected on invoices",
     detail:
-      "Stripped from 100 Sales Income as pass-through to the state. Shipping and payment fees stay in sales income and are reimbursed to whoever paid them.",
+      "Stripped from 100 Sales Income as pass-through to the state. Shipping, receiving, and payment fees are reimbursed to whoever paid them.",
   },
 ];
 
@@ -506,6 +509,31 @@ function addCostToGroup(
   group.cogsTransactions.push(trueUpTransactionFromEntry(entry, party, amount));
 }
 
+/** Wholesale use tax paid on purchase — reimbursed to purchaser like other COGS. */
+function wholesalePurchaseTax(
+  entry: Pick<LedgerEntry, "wholesale_retail" | "tax_amount">
+) {
+  if (entry.wholesale_retail !== "wholesale") return 0;
+  return roundMoney(Number(entry.tax_amount ?? 0));
+}
+
+function hasClientPayment(income: PartnerAmounts) {
+  return hasAmount(income);
+}
+
+function awaitingClientPaymentBlock(
+  block: TrueUpBlock,
+  reason: TrueUpPendingReason = "awaiting_payment"
+): TrueUpBlock {
+  return {
+    ...block,
+    status: "pending",
+    pendingReason: reason,
+    required: emptyPartnerAmounts(),
+    discrepancy: subtractPartnerAmounts(emptyPartnerAmounts(), block.recorded),
+  };
+}
+
 function jobHasPurchaseOrPayment(
   entries: LedgerEntry[],
   jobKey: string,
@@ -559,6 +587,7 @@ function buildPendingSalesBlocks(
       groupLabel: poNumber,
       secondaryLabel: "Pending",
       status: "pending",
+      pendingReason: "no_activity",
       categoryRows: [],
       subtotal: emptyPartnerAmounts(),
       required: emptyPartnerAmounts(),
@@ -673,10 +702,15 @@ function buildSalesBlocks(
 
     if (entry.source_ledger_id) continue;
 
-    const cogs = -getLedgerTotalDesignerCost(entry);
     const g = group(invoiceId, entry.po_number);
+    const cogs = -getLedgerTotalDesignerCost(entry);
     if (cogs) {
       addCostToGroup(g, entry, cogs);
+    }
+
+    const wholesaleTax = -wholesalePurchaseTax(entry);
+    if (wholesaleTax) {
+      addCostToGroup(g, entry, wholesaleTax);
     }
 
     if (
@@ -713,7 +747,7 @@ function buildSalesBlocks(
           transactions: sortTrueUpTransactions(group.incomeTransactions),
         },
       ];
-      return finishBlock(
+      const block = finishBlock(
         `inv:${group.invoiceId}`,
         group.projectLabel,
         group.invoiceId,
@@ -722,9 +756,14 @@ function buildSalesBlocks(
         group.recorded,
         requiredProfitTransfers(group.cogs, group.income)
       );
+      if (!hasClientPayment(group.income) && hasAmount(group.cogs)) {
+        return awaitingClientPaymentBlock(block);
+      }
+      return block;
     })
     .filter(
       (block) =>
+        block.status === "pending" ||
         block.categoryRows.some((row) => hasAmount(row.amounts)) ||
         hasAmount(block.recorded) ||
         hasAmount(block.required)
@@ -837,8 +876,9 @@ function buildExpenseBlocks(
 }
 
 function ytdTotalsFromBlocks(blocks: TrueUpBlock[]): TrueUpYtdTotals {
-  const required = sumPartnerAmounts(...blocks.map((block) => block.required));
-  const recorded = sumPartnerAmounts(...blocks.map((block) => block.recorded));
+  const settled = blocks.filter((block) => block.status !== "pending");
+  const required = sumPartnerAmounts(...settled.map((block) => block.required));
+  const recorded = sumPartnerAmounts(...settled.map((block) => block.recorded));
   return {
     required,
     recorded,
