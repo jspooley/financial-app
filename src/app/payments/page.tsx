@@ -29,7 +29,7 @@ import {
   type Client,
   type LedgerEntry,
   type PaymentType,
-  type Purchaser,
+  type KnownPurchaser,
 } from "@/lib/types";
 import {
   calculateAutoPaymentFee,
@@ -56,7 +56,7 @@ type PaymentView = "outstanding" | "history";
 type PaymentRowDraft = {
   editing: boolean;
   date_paid: string;
-  paid_to: Purchaser;
+  paid_to: KnownPurchaser;
   payment_type: PaymentType;
   payment_amount: number;
   payment_fee: number;
@@ -188,7 +188,7 @@ const paymentsTableScrollClass =
   "hidden max-h-[70vh] overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block";
 
 const defaultPaymentType: PaymentType = "Cash";
-const defaultPaidTo: Purchaser = "Jess";
+const defaultPaidTo: KnownPurchaser = "Jess";
 
 function defaultPaymentAmount(entry: LedgerEntry) {
   const saved = Number(entry.payment_amount);
@@ -1459,7 +1459,7 @@ export default function PaymentsPage() {
                       value={draft.paid_to}
                       disabled={!draft.editing}
                       onChange={(event) =>
-                        updateDraft(entry.id, { paid_to: event.target.value as Purchaser })
+                        updateDraft(entry.id, { paid_to: event.target.value as KnownPurchaser })
                       }
                     >
                       <option value="Jess">Jess</option>
@@ -1618,7 +1618,7 @@ export default function PaymentsPage() {
                         value={draft.paid_to}
                         disabled={!draft.editing}
                         onChange={(event) =>
-                          updateDraft(entry.id, { paid_to: event.target.value as Purchaser })
+                          updateDraft(entry.id, { paid_to: event.target.value as KnownPurchaser })
                         }
                       >
                         <option value="Jess">Jess</option>
@@ -1975,7 +1975,7 @@ export default function PaymentsPage() {
                             value={draft.paid_to}
                             onChange={(event) =>
                               updateDraft(entry.id, {
-                                paid_to: event.target.value as Purchaser,
+                                paid_to: event.target.value as KnownPurchaser,
                               })
                             }
                           >
@@ -2176,7 +2176,7 @@ export default function PaymentsPage() {
                               value={draft.paid_to}
                               onChange={(event) =>
                                 updateDraft(entry.id, {
-                                  paid_to: event.target.value as Purchaser,
+                                  paid_to: event.target.value as KnownPurchaser,
                                 })
                               }
                             >

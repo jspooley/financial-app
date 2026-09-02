@@ -75,7 +75,7 @@ import {
   type CashflowAccount,
   type ChartOfAccount,
   type LedgerEntry,
-  type Purchaser,
+  type KnownPurchaser,
 } from "@/lib/types";
 import {
   formatCurrency,
@@ -876,7 +876,7 @@ export default function CashflowPage() {
   const [editingAccountEntries, setEditingAccountEntries] = useState<
     LedgerEntry[] | null
   >(null);
-  const [defaultDesigner, setDefaultDesigner] = useState<Purchaser>("Jess");
+  const [defaultDesigner, setDefaultDesigner] = useState<KnownPurchaser>("Jess");
   /** Empty = show all accounts; otherwise match any selected account. */
   const [accountFilter, setAccountFilter] = useState<CashflowAccount[]>([]);
   const [showCardPaydowns, setShowCardPaydowns] = useState(false);

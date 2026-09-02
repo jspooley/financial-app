@@ -8,10 +8,10 @@ import {
   isUnreimbursedBusinessPersonalCardCharge,
 } from "@/lib/card-reimbursement";
 import { partnerFromEntry } from "@/lib/true-up-report";
-import type { LedgerEntry, Purchaser } from "@/lib/types";
+import type { LedgerEntry, KnownPurchaser } from "@/lib/types";
 import { roundMoney } from "@/lib/utils";
 
-export type PersonalFundsPartnerFilter = Purchaser | "Both";
+export type PersonalFundsPartnerFilter = KnownPurchaser | "Both";
 
 export type PersonalFundsLine = {
   id: string;
@@ -19,7 +19,7 @@ export type PersonalFundsLine = {
   account: string;
   description: string;
   category: string;
-  partner: Purchaser;
+  partner: KnownPurchaser;
   amount: number;
 };
 
@@ -38,7 +38,7 @@ export type PersonalFundsReport = {
 };
 
 function matchesPartner(
-  partner: Purchaser,
+  partner: KnownPurchaser,
   filter: PersonalFundsPartnerFilter
 ) {
   return filter === "Both" || partner === filter;

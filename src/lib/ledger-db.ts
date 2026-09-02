@@ -1,5 +1,6 @@
 import type {
   CreditDebit,
+  KnownPurchaser,
   LedgerDbRow,
   LedgerEntry,
   LedgerInsert,
@@ -7,6 +8,7 @@ import type {
   Purchaser,
   WholesaleRetail,
 } from "./types";
+import { isKnownPurchaser } from "./types";
 import { deriveLedgerPaidFlag } from "./invoice-utils";
 import {
   calculateTaxFromCustomerPrice,
@@ -162,7 +164,9 @@ export function normalizeLedgerRow(
     credit_amount: Number(r.credit_amount ?? 0),
     paid: Boolean(r.paid ?? false),
     date_paid: (r.date_paid as string | null) ?? null,
-    paid_to: (r.paid_to as Purchaser | null) ?? null,
+    paid_to: isKnownPurchaser(r.paid_to as string | null)
+      ? (r.paid_to as KnownPurchaser)
+      : null,
     payment_type: (r.payment_type as PaymentType | null) ?? null,
     payment_fee: Number(r.payment_fee ?? 0),
     payment_amount: Number(r.payment_amount ?? 0),

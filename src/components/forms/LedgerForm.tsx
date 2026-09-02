@@ -7,18 +7,19 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
 import { ledgerFormToDb, normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
-import { accountMoveFields } from "@/lib/account-move";
+import { accountMoveFields, isCashflowAccount } from "@/lib/account-move";
 import { syncCostCompanions } from "@/lib/cost-companions";
 import { syncPaymentCompanionFromParent } from "@/lib/payment-companions";
 import { deriveLedgerPaidFlag } from "@/lib/invoice-utils";
 import {
-  CASHFLOW_ACCOUNTS,
   CASHFLOW_DEPARTMENTS,
-  type CashflowAccount,
+  PURCHASER_ACCOUNT_OPTIONS,
+  isKnownPurchaser,
   type Client,
   type ClientPoNumber,
   type LedgerEntry,
   type Purchaser,
+  type PurchaserAccount,
   type TradePartner,
 } from "@/lib/types";
 import {
@@ -38,6 +39,7 @@ import {
   calculateRetailPriceFromMarkup,
   calculateMarkupPercentFromPricing,
   calculateTaxFromCustomerPrice,
+  purchaserAccountForPurchaser,
   checkingAccountForPurchaser,
   formatCurrency,
   formatPercent,
@@ -86,18 +88,14 @@ const schema = z
     tax_amount: z.coerce.number().min(0).transform(roundMoney),
     client_id: z.string().uuid("Select a client"),
     po_number: z.string().trim().min(1, "PO number is required"),
-    purchaser: z
-      .string()
-      .refine((value): value is Purchaser => value === "Jess" || value === "Molly", {
-        message: "Select a purchaser",
-      }),
-    account: z
-      .string()
-      .refine(
-        (value): value is CashflowAccount =>
-          (CASHFLOW_ACCOUNTS as readonly string[]).includes(value),
-        { message: "Select an account" }
-      ),
+    purchaser: z.enum(["Jess", "Molly", "TBD"], {
+      required_error: "Select a purchaser",
+      invalid_type_error: "Select a purchaser",
+    }),
+    account: z.enum(PURCHASER_ACCOUNT_OPTIONS, {
+      required_error: "Select an account",
+      invalid_type_error: "Select an account",
+    }),
     department: z.enum(CASHFLOW_DEPARTMENTS, {
       required_error: "Department is required",
     }),
@@ -292,8 +290,7 @@ export function LedgerForm({
       client_id: initial?.client_id ?? "",
       po_number: initial?.po_number?.trim() ?? "",
       purchaser: initial?.purchaser ?? ("" as unknown as Purchaser),
-      account:
-        initial?.account ?? ("" as unknown as CashflowAccount),
+      account: initial?.account ?? ("" as unknown as PurchaserAccount),
       department: initial?.department ?? "Interior Design",
       income_statement: initial?.income_statement ?? false,
     },
@@ -641,12 +638,27 @@ export function LedgerForm({
 
   useEffect(() => {
     if (initial) return;
+    if (selectedPurchaser === "TBD") return;
     if (selectedPurchaser !== "Jess" && selectedPurchaser !== "Molly") return;
     if (selectedAccount) return;
     setValue("account", checkingAccountForPurchaser(selectedPurchaser), {
       shouldValidate: true,
     });
   }, [initial, selectedAccount, selectedPurchaser, setValue]);
+
+  // When purchaser is unknown, keep account on TBD until purchase happens.
+  useEffect(() => {
+    if (isWholesale) return;
+    if (selectedPurchaser === "TBD") {
+      setValue("account", "TBD", { shouldValidate: true });
+      return;
+    }
+    if (isKnownPurchaser(selectedPurchaser) && selectedAccount === "TBD") {
+      setValue("account", purchaserAccountForPurchaser(selectedPurchaser), {
+        shouldValidate: true,
+      });
+    }
+  }, [isWholesale, selectedPurchaser, selectedAccount, setValue]);
 
   function resetDesignerCostAutoCalc() {
     retailManuallyEdited.current = true;
@@ -759,12 +771,13 @@ export function LedgerForm({
         department: values.department,
         balance_sheet: personalUse,
       }),
-      account: values.account as CashflowAccount,
       income_statement: values.income_statement,
       balance_sheet: personalUse,
       ...(initial
-        ? accountMoveFields(initial, values.account as CashflowAccount)
-        : {}),
+        ? isCashflowAccount(values.account)
+          ? accountMoveFields(initial, values.account)
+          : { account: values.account as PurchaserAccount, moved_from_account: null }
+        : { account: values.account as PurchaserAccount }),
     };
 
     const paid = deriveLedgerPaidFlag({
@@ -1035,23 +1048,24 @@ export function LedgerForm({
                 ? selectedTradePartner?.account_owner
                   ? "Defaults to the trade partner account owner for wholesale. Change if needed."
                   : "Select a trade partner with an account owner (Molly or Jess)."
-                : undefined
+                : "Choose TBD when who will purchase is not known yet."
             }
             {...register("purchaser")}
           >
             <option value="">Select purchaser</option>
             <option value="Jess">Jess</option>
             <option value="Molly">Molly</option>
+            <option value="TBD">TBD</option>
           </SelectField>
           <SelectField
             label="Account"
             required
             error={errors.account?.message}
-            hint="Select the account used for this purchase."
+            hint="Select the account used for this purchase. Choose TBD when the purchase account is not known yet."
             {...register("account")}
           >
             <option value="">Select account</option>
-            {CASHFLOW_ACCOUNTS.map((account) => (
+            {PURCHASER_ACCOUNT_OPTIONS.map((account) => (
               <option key={account} value={account}>
                 {account}
               </option>

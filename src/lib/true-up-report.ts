@@ -20,7 +20,8 @@ import {
   normalizeInvoiceId,
 } from "@/lib/invoice-utils";
 import { isPaymentCompanionRow } from "@/lib/payment-companions";
-import type { LedgerEntry, Purchaser } from "@/lib/types";
+import type { LedgerEntry, KnownPurchaser, Purchaser } from "@/lib/types";
+import { isKnownPurchaser, isPendingPurchase } from "@/lib/types";
 import {
   getLedgerInvoicedAmountExcludingPaymentFee,
   getLedgerTotalDesignerCost,
@@ -228,8 +229,9 @@ export function requiredProfitTransfers(
 
 export function partnerFromAccount(
   account: string | null | undefined
-): Purchaser | null {
+): KnownPurchaser | null {
   const value = account ?? "";
+  if (value === "TBD") return null;
   if (value.includes("Molly")) return "Molly";
   if (value.includes("Jess")) return "Jess";
   return null;
@@ -238,17 +240,18 @@ export function partnerFromAccount(
 export function partnerFromEntry(
   entry: Pick<LedgerEntry, "purchaser" | "paid_to" | "account">,
   prefer: "payer" | "payee" = "payer"
-): Purchaser {
-  if (prefer === "payee" && (entry.paid_to === "Jess" || entry.paid_to === "Molly")) {
+): KnownPurchaser {
+  if (prefer === "payee" && isKnownPurchaser(entry.paid_to)) {
     return entry.paid_to;
   }
-  return (
-    partnerFromAccount(entry.account) ??
-    (entry.purchaser === "Molly" ? "Molly" : "Jess")
-  );
+  const fromAccount = partnerFromAccount(entry.account);
+  if (fromAccount) return fromAccount;
+  if (entry.purchaser === "Molly") return "Molly";
+  if (entry.purchaser === "Jess") return "Jess";
+  return "Jess";
 }
 
-function otherPartner(party: Purchaser): Purchaser {
+function otherPartner(party: KnownPurchaser): KnownPurchaser {
   return party === "Molly" ? "Jess" : "Molly";
 }
 
@@ -514,6 +517,7 @@ function addCostToGroup(
   amount: number
 ) {
   if (Math.abs(amount) < 0.005) return;
+  if (isPendingPurchase(entry)) return;
   const party = partnerFromEntry(entry, "payer");
   group.cogs = addPartnerAmount(group.cogs, party, amount);
   group.cogsTransactions.push(trueUpTransactionFromEntry(entry, party, amount));
@@ -887,6 +891,7 @@ function buildExpenseBlocks(
 
     const amount = netCash(entry);
     if (Math.abs(amount) < 0.005) continue;
+    if (isPendingPurchase(entry)) continue;
     const category = entry.coa_category?.trim() || "Expense";
     const party = partnerFromEntry(entry, "payer");
     const group = monthGroup(key);

@@ -636,7 +636,7 @@ export function buildReconciliationReport(
       const accountOwner = partner.account_owner?.trim() || "";
       if (!accountOwner) return null;
       const purchaser = (entry.purchaser ?? "").trim();
-      if (!purchaser || purchaser === accountOwner) return null;
+      if (!purchaser || purchaser === "TBD" || purchaser === accountOwner) return null;
       return {
         id: entry.id,
         entryDate: entry.entry_date,

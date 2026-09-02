@@ -12,12 +12,14 @@ import {
 import { isCostCompanionRow, COST_COMPANION_KINDS } from "@/lib/cost-companions";
 import {
   CASHFLOW_ACCOUNTS,
-  type CashflowAccount,
+  PURCHASER_ACCOUNT_OPTIONS,
+  isPurchaserAccount,
   type ChartOfAccount,
   type LedgerEntry,
   type Purchaser,
+  type PurchaserAccount,
 } from "@/lib/types";
-import { accountMoveFields, isCheckingAccount, personalCardRoleFields } from "@/lib/account-move";
+import { accountMoveFields, isCashflowAccount, isCheckingAccount, personalCardRoleFields } from "@/lib/account-move";
 import { syncCardReimburseMate } from "@/lib/card-reimbursement";
 import { Button } from "@/components/ui/Button";
 import { SelectField } from "@/components/ui/FormFields";
@@ -38,9 +40,8 @@ function sharedAccount(entries: LedgerEntry[]): string {
       entries
         .map((entry) => entry.account)
         .filter(
-          (account): account is CashflowAccount =>
-            typeof account === "string" &&
-            (CASHFLOW_ACCOUNTS as readonly string[]).includes(account)
+          (account): account is PurchaserAccount =>
+            typeof account === "string" && isPurchaserAccount(account)
         )
     ),
   ];
@@ -53,7 +54,8 @@ function sharedPurchaser(entries: LedgerEntry[]): Purchaser | "" {
       entries
         .map((entry) => entry.purchaser)
         .filter(
-          (value): value is Purchaser => value === "Jess" || value === "Molly"
+          (value): value is Purchaser =>
+            value === "Jess" || value === "Molly" || value === "TBD"
         )
     ),
   ];
@@ -144,7 +146,11 @@ export function LedgerAccountForm({
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
-    if (!(CASHFLOW_ACCOUNTS as readonly string[]).includes(account)) {
+    if (
+      canEditPurchaser
+        ? !isPurchaserAccount(account)
+        : !(CASHFLOW_ACCOUNTS as readonly string[]).includes(account)
+    ) {
       setError("Select an account");
       return;
     }
@@ -156,24 +162,36 @@ export function LedgerAccountForm({
       setError("Select a CoA category");
       return;
     }
-    if (canEditPurchaser && purchaser !== "Jess" && purchaser !== "Molly") {
+    if (
+      canEditPurchaser &&
+      purchaser !== "Jess" &&
+      purchaser !== "Molly" &&
+      purchaser !== "TBD"
+    ) {
       setError("Select a purchaser");
       return;
     }
     setSaving(true);
     const supabase = createClient();
-    const nextAccount = account as CashflowAccount;
+    const nextAccount = account as PurchaserAccount;
     for (const entry of entries) {
-      const move = accountMoveFields(entry, nextAccount);
+      const move = isCashflowAccount(nextAccount)
+        ? accountMoveFields(entry, nextAccount)
+        : { account: nextAccount, moved_from_account: null };
       const payload: Record<string, unknown> = {
         account: move.account,
         moved_from_account: move.moved_from_account,
-        ...personalCardRoleFields(entry, nextAccount),
+        ...(isCashflowAccount(nextAccount)
+          ? personalCardRoleFields(entry, nextAccount)
+          : {}),
       };
       if (isCheckingAccount(move.account)) {
         payload.reimbursed_by_ledger_id = null;
       }
-      if (canEditPurchaser && (purchaser === "Jess" || purchaser === "Molly")) {
+      if (
+        canEditPurchaser &&
+        (purchaser === "Jess" || purchaser === "Molly" || purchaser === "TBD")
+      ) {
         payload.purchaser = purchaser;
       }
       if (canEditCoa && coaCategory) {
@@ -206,7 +224,10 @@ export function LedgerAccountForm({
         }
       }
     }
-    if (canEditPurchaser && (purchaser === "Jess" || purchaser === "Molly")) {
+    if (
+      canEditPurchaser &&
+      (purchaser === "Jess" || purchaser === "Molly" || purchaser === "TBD")
+    ) {
       const parentIds = [
         ...new Set(
           entries
@@ -343,11 +364,13 @@ export function LedgerAccountForm({
         onChange={(event) => setAccount(event.target.value)}
       >
         <option value="">Select Account</option>
-        {CASHFLOW_ACCOUNTS.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
+        {(canEditPurchaser ? PURCHASER_ACCOUNT_OPTIONS : CASHFLOW_ACCOUNTS).map(
+          (option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          )
+        )}
       </SelectField>
 
       {canEditPurchaser ? (
@@ -357,7 +380,11 @@ export function LedgerAccountForm({
           value={purchaser}
           onChange={(event) => {
             const value = event.target.value;
-            setPurchaser(value === "Molly" || value === "Jess" ? value : "");
+            setPurchaser(
+              value === "Molly" || value === "Jess" || value === "TBD"
+                ? value
+                : ""
+            );
           }}
         >
           {sharedPurchaser(entries) ? null : (
@@ -365,6 +392,7 @@ export function LedgerAccountForm({
           )}
           <option value="Jess">Jess</option>
           <option value="Molly">Molly</option>
+          <option value="TBD">TBD</option>
         </SelectField>
       ) : null}
 

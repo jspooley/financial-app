@@ -1,4 +1,4 @@
-import type { LedgerEntry, Purchaser } from "./types";
+import type { LedgerEntry, KnownPurchaser } from "./types";
 
 export const COA_SALES_INCOME_CATEGORY = "100 Sales Income";
 export const COA_COGS_CATEGORY = "101 COGS";
@@ -111,7 +111,7 @@ export function isBusinessLoanPaybackCoa(
  */
 export function partnerFromOwnerCapitalCoa(
   category: string | null | undefined
-): Purchaser | null {
+): KnownPurchaser | null {
   const n = coaAccountNumber(category);
   if (n === 300 || n === 306) return "Jess";
   if (n === 310 || n === 305) return "Molly";
