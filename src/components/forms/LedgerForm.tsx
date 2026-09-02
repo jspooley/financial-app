@@ -311,6 +311,7 @@ export function LedgerForm({
   const skipPoReset = useRef(true);
   const previousClientIdRef = useRef<string | null>(null);
   const previousTradePartnerIdRef = useRef<string | null>(null);
+  const previousPurchaserTradePartnerIdRef = useRef<string | undefined>(undefined);
   const skipDesignerCostReset = useRef(!!initial);
   const skipRetailFromDesignerReset = useRef(!!initial);
   const designerCostManuallyEdited = useRef(!!initial);
@@ -606,14 +607,32 @@ export function LedgerForm({
     }
   }, [isService, selectedTradePartnerId, setValue, getValues]);
 
-  // Wholesale: purchaser is always the trade partner account owner (read-only in the UI).
+  // Wholesale: default purchaser to trade partner account owner when partner changes.
   useEffect(() => {
     if (!isWholesale) return;
     const owner = selectedTradePartner?.account_owner;
-    if (owner === "Jess" || owner === "Molly") {
-      setValue("purchaser", owner, { shouldValidate: true });
+    if (owner !== "Jess" && owner !== "Molly") return;
+
+    const currentTradePartnerId = selectedTradePartnerId ?? "";
+    const previousTradePartnerId = previousPurchaserTradePartnerIdRef.current;
+    previousPurchaserTradePartnerIdRef.current = currentTradePartnerId;
+
+    if (previousTradePartnerId === undefined) {
+      if (!initial) {
+        setValue("purchaser", owner, { shouldValidate: true });
+      }
+      return;
     }
-  }, [isWholesale, selectedTradePartner?.account_owner, setValue]);
+    if (previousTradePartnerId === currentTradePartnerId) return;
+
+    setValue("purchaser", owner, { shouldValidate: true });
+  }, [
+    initial,
+    isWholesale,
+    selectedTradePartnerId,
+    selectedTradePartner?.account_owner,
+    setValue,
+  ]);
 
   function resetDesignerCostAutoCalc() {
     retailManuallyEdited.current = true;
@@ -687,11 +706,6 @@ export function LedgerForm({
 
     const tradePartner = tradePartners.find((tp) => tp.id === values.trade_partner_id);
     const wholesaleOwner = tradePartner?.account_owner;
-    const purchaserForSave =
-      values.wholesale_retail === "wholesale" &&
-      (wholesaleOwner === "Jess" || wholesaleOwner === "Molly")
-        ? wholesaleOwner
-        : values.purchaser;
 
     if (
       values.wholesale_retail === "wholesale" &&
@@ -727,7 +741,7 @@ export function LedgerForm({
         sand_u_tax: clientSandUTaxRate,
         client_id: values.client_id,
         po_number: poNumber,
-        purchaser: purchaserForSave,
+        purchaser: values.purchaser,
         department: values.department,
         balance_sheet: personalUse,
       }),
@@ -1005,12 +1019,11 @@ export function LedgerForm({
             hint={
               isWholesale
                 ? selectedTradePartner?.account_owner
-                  ? "Locked to the trade partner account owner for wholesale."
+                  ? "Defaults to the trade partner account owner for wholesale. Change if needed."
                   : "Select a trade partner with an account owner (Molly or Jess)."
                 : undefined
             }
             {...register("purchaser")}
-            disabled={isWholesale}
           >
             <option value="Jess">Jess</option>
             <option value="Molly">Molly</option>
