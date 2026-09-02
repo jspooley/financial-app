@@ -1,4 +1,4 @@
-import { getLedgerOutstandingBalance } from "@/lib/invoice-utils";
+import { getLedgerOutstandingBalance, isLedgerLineFullyPaid } from "@/lib/invoice-utils";
 import { computePlTotals, isPlBalanceSheetEntry, ledgerLineGrossProfit, ledgerLineNetProfit } from "@/lib/pl-report";
 import type { LedgerEntry } from "@/lib/types";
 import {
@@ -10,8 +10,145 @@ import {
   getLedgerInvoicedAmount,
   getLedgerRetailSubtotal,
   getLedgerTotalDesignerCost,
+  ledgerUsesCostMarkup,
   roundMoney,
 } from "@/lib/utils";
+
+function ledgerCreditDebitLabel(entry: LedgerEntry) {
+  return entry.credit_debit === "debit" ? "Client Debit" : "Credit (receivable)";
+}
+
+function ledgerWholesaleRetailLabel(entry: LedgerEntry) {
+  if (entry.wholesale_retail === "wholesale") return "Wholesale";
+  if (entry.wholesale_retail === "service") return "Service";
+  return "Retail";
+}
+
+/** Read-only fields for Goods & Services mobile cards — matches LedgerForm field order. */
+export function ledgerGoodsServicesCardFields(
+  entry: LedgerEntry,
+  invoicedPoKeys?: Set<string>
+) {
+  const isDebit = entry.credit_debit === "debit";
+  const discountLabel = ledgerUsesCostMarkup(entry) ? "Markup %" : "Discount %";
+  const fields: { label: string; value: string }[] = [
+    { label: "Client", value: entry.clients?.name ?? "—" },
+    { label: "Description", value: entry.description?.trim() || "—" },
+    { label: "Date", value: formatDate(entry.entry_date) },
+    { label: "Department", value: entry.department ?? "—" },
+    { label: "Credit / Debit", value: ledgerCreditDebitLabel(entry) },
+    { label: "PO Number", value: entry.po_number ?? "—" },
+    {
+      label: "Trade Partner",
+      value: entry.trade_partners?.company_name?.trim() || "—",
+    },
+    {
+      label: "Wholesale / Retail / Service",
+      value: ledgerWholesaleRetailLabel(entry),
+    },
+    { label: "Quantity", value: formatQuantity(Number(entry.quantity)) },
+    { label: "Retail Price", value: formatCurrency(Number(entry.retail_price ?? 0)) },
+    {
+      label: "Retail Price × Qty",
+      value: formatCurrency(getLedgerRetailSubtotal(entry)),
+    },
+    { label: "Purchaser", value: entry.purchaser },
+    { label: "Account", value: entry.account ?? "—" },
+    { label: "Designer Cost", value: formatCurrency(Number(entry.designer_cost)) },
+    {
+      label: "Total Designer Cost",
+      value: formatCurrency(getLedgerTotalDesignerCost(entry)),
+    },
+    {
+      label: "Customer Price × Qty",
+      value: formatCurrency(getLedgerCustomerPrice(entry)),
+    },
+    { label: discountLabel, value: `${Number(entry.discount_percent)}%` },
+    {
+      label: "Shipping",
+      value: formatCurrency(Number(entry.shipping_receiving_amount ?? 0)),
+    },
+    {
+      label: "Receiving",
+      value: formatCurrency(Number(entry.receiving_amount ?? 0)),
+    },
+    { label: "Payment Fee", value: formatCurrency(Number(entry.payment_fee ?? 0)) },
+    {
+      label: "Invoiced Amount",
+      value: formatCurrency(getLedgerInvoicedAmount(entry)),
+    },
+    { label: "Tax Amount", value: ledgerTaxDisplay(entry) },
+    {
+      label: "Sales and Use Tax Paid",
+      value: entry.sales_and_use_tax_paid ? "Yes" : "No",
+    },
+    {
+      label: "Payment Type",
+      value: isDebit ? (entry.payment_type ?? "—") : "—",
+    },
+    { label: "Invoiced", value: entry.invoiced ? "Yes" : "No" },
+    { label: "Invoice ID", value: entry.invoice_id ?? "—" },
+    {
+      label: "Paid",
+      value: isDebit ? (isLedgerLineFullyPaid(entry) ? "Yes" : "No") : "—",
+    },
+    {
+      label: "Paid Amount",
+      value: isDebit ? formatCurrency(Number(entry.payment_amount ?? 0)) : "—",
+    },
+    {
+      label: "Date Paid",
+      value: isDebit && entry.date_paid ? formatDate(entry.date_paid) : "—",
+    },
+    {
+      label: "Paid To",
+      value: isDebit ? (entry.paid_to ?? "—") : "—",
+    },
+    {
+      label: "Outstanding Balance",
+      value: isDebit ? formatCurrency(getLedgerOutstandingBalance(entry)) : "—",
+    },
+    { label: "Expense", value: isDebit ? (entry.expense ? "Yes" : "No") : "—" },
+    {
+      label: "Expense Amount",
+      value: isDebit ? formatCurrency(Number(entry.expense_amount ?? 0)) : "—",
+    },
+    {
+      label: "Variance Accepted",
+      value: isDebit ? (entry.variance_accepted ? "Yes" : "No") : "—",
+    },
+    {
+      label: "Variance Amount",
+      value: isDebit ? formatCurrency(Number(entry.variance_amount ?? 0)) : "—",
+    },
+  ];
+
+  if (
+    isDebit &&
+    (entry.variance_accepted ||
+      Math.abs(Number(entry.variance_amount ?? 0)) >= 0.005)
+  ) {
+    fields.push({
+      label: "Variance Notes",
+      value: entry.variance_notes?.trim() || "—",
+    });
+  }
+
+  if (!isPlBalanceSheetEntry(entry)) {
+    fields.push(
+      {
+        label: "Gross Profit",
+        value: formatCurrency(ledgerLineGrossProfit(entry, invoicedPoKeys)),
+      },
+      {
+        label: "Net Profit",
+        value: formatCurrency(ledgerLineNetProfit(entry, invoicedPoKeys)),
+      }
+    );
+  }
+
+  return fields;
+}
 
 export function ledgerTaxDisplay(entry: LedgerEntry) {
   return entry.wholesale_retail === "wholesale"
