@@ -1151,7 +1151,7 @@ export function LedgerForm({
             aria-expanded={showPaymentDetails}
             className="text-sm font-medium text-brand-700 underline-offset-2 hover:underline"
           >
-            {showPaymentDetails ? "Hide details" : "Show details"}
+            {showPaymentDetails ? "Hide additional details" : "Show additional details"}
           </button>
           {showPaymentDetails ? (
             <>
