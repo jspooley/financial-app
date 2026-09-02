@@ -24,7 +24,7 @@ function ledgerWholesaleRetailLabel(entry: LedgerEntry) {
   return "Retail";
 }
 
-/** Read-only fields for Goods & Services mobile cards — matches the main create form. */
+/** Read-only fields for Goods & Services list cards — matches the main create form. */
 export function ledgerGoodsServicesCardFields(entry: LedgerEntry) {
   const discountLabel = ledgerUsesCostMarkup(entry) ? "Markup %" : "Discount %";
   return [

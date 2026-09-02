@@ -145,8 +145,9 @@ function GoodsAndServicesSectionHeader({
           </ul>
         ) : null}
         <p className="mt-1 text-sm text-slate-500">
-          {GOODS_AND_SERVICES_LABEL} — includes Invoiced, Invoice ID, Paid, and payment
-          columns. Totals are customer price × qty (no tax, fees, shipping, or receiving).
+          Rows show the main create-form fields through Invoiced Amount. The header total
+          is customer price × qty (no tax, fees, shipping, or receiving). Download Table
+          includes the full detail columns.
         </p>
       </div>
       <Button
