@@ -283,7 +283,7 @@ function BlockRows({
     });
   }
 
-  if (block.status === "pending") {
+  if (block.status === "pending" && block.pendingReason !== "awaiting_payment") {
     return (
       <>
         {showDivider ? (
@@ -309,11 +309,32 @@ function BlockRows({
     );
   }
 
+  const isAwaitingPayment =
+    block.status === "pending" && block.pendingReason === "awaiting_payment";
+
   return (
     <>
       {showDivider ? (
         <tr>
           <td colSpan={6} className="h-3 bg-white p-0" />
+        </tr>
+      ) : null}
+      {isAwaitingPayment ? (
+        <tr className="border-b border-slate-100 bg-amber-50/60">
+          <td className="whitespace-nowrap px-3 py-1.5 font-medium text-slate-900">
+            {block.groupLabel}
+          </td>
+          <td className="whitespace-nowrap px-3 py-1.5 font-medium text-amber-800">
+            Pending
+          </td>
+          <td
+            colSpan={4}
+            className="px-3 py-1.5 text-sm text-amber-900/80"
+          >
+            Purchases recorded; awaiting client payment before true-up. COGS is
+            not shared — the payee will reimburse whoever bought the goods once
+            payment is received.
+          </td>
         </tr>
       ) : null}
       {block.categoryRows.map((row, index) => {
@@ -326,7 +347,7 @@ function BlockRows({
               className={`border-b border-slate-100 ${index === 0 ? "bg-slate-50" : ""}`}
             >
               <td className="whitespace-nowrap px-3 py-1.5 font-medium text-slate-900">
-                {index === 0 ? block.groupLabel : ""}
+                {index === 0 && !isAwaitingPayment ? block.groupLabel : ""}
               </td>
               <td className="whitespace-nowrap px-3 py-1.5 text-slate-600">
                 {index === 0 ? block.secondaryLabel : ""}
@@ -385,7 +406,7 @@ function BlockRows({
           </Fragment>
         );
       })}
-      {block.categoryRows.length === 0 ? (
+      {block.categoryRows.length === 0 && !isAwaitingPayment ? (
         <tr className="border-b border-slate-100 bg-slate-50">
           <td className="px-3 py-1.5 font-medium text-slate-900">{block.groupLabel}</td>
           <td className="px-3 py-1.5 text-slate-600">{block.secondaryLabel}</td>
@@ -393,6 +414,8 @@ function BlockRows({
           <AmountCells amounts={block.subtotal} />
         </tr>
       ) : null}
+      {!isAwaitingPayment ? (
+        <>
       <tr className="border-b border-slate-100">
         <td />
         <td />
@@ -423,6 +446,8 @@ function BlockRows({
         <AmountCells amounts={block.recorded} emphasize />
       </tr>
       <DiscrepancyRow amounts={block.discrepancy} leadingCells={2} />
+        </>
+      ) : null}
     </>
   );
 }
@@ -531,7 +556,7 @@ export default function TrueUpReportPage() {
     <AppShell>
       <PageHeader
         title="True Up Report"
-        description="Cash-basis accounting between partners. Purchases (goods, services, shipping, and fees) are attributed to whoever paid and reimbursed in full. Client payments go to whoever received them. Required transfer splits profit only 50/50: send is negative, receive is positive."
+        description="Cash-basis accounting between partners. Purchases (goods, shipping, receiving, and fees) stay with whoever paid and are reimbursed in full from client payments — never split 50/50. Client payments go to whoever received them. Required transfer reimburses the purchaser and splits profit only 50/50: send is negative, receive is positive."
         action={
           <SelectField
             label="Year"
@@ -560,7 +585,7 @@ export default function TrueUpReportPage() {
         <div className="space-y-8">
           <CollapsibleSection
             title="Sales and Revenue"
-            description="Cash in and out by invoice. Expand a COA category to see the lines on that invoice. COGS includes goods, shipping, and payment fees (negative = money out). Sales income is net of sales & use tax only. Required transfer reimburses each partner's costs and splits profit 50/50. Open jobs with no purchases or payments yet are listed as Pending."
+            description="Cash in and out by invoice. COGS includes goods, shipping, receiving, and payment fees (negative = money out, attributed to whoever paid). Sales income is net of sales & use tax only. Required transfer reimburses the purchaser from client payments and splits remaining profit 50/50. Jobs with purchases but no client payment yet show as Pending."
           >
             <BlockTable
               sectionLabel="Sales&Revenue"
