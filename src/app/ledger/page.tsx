@@ -686,8 +686,8 @@ function LedgerPageContent() {
               )}
             </p>
             <p className="mt-1 text-slate-500">
-              <strong>Gross Profit</strong> and <strong>Net Profit</strong> per row appear after
-              Paid Amount. The goods and services table footer sums those columns.
+              Rows show the main create-form fields through Invoiced Amount. On mobile,
+              gross and net profit totals appear below the goods and services list.
             </p>
             {entries.length > 0 && debitEntries.length === 0 && (
               <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950">
