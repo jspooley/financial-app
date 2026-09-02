@@ -739,7 +739,7 @@ function LedgerPageContent() {
                       </div>
                       <dl className="space-y-2 text-sm">
                         {(group.title === GOODS_AND_SERVICES_LABEL
-                          ? ledgerGoodsServicesCardFields(entry, invoicedPoKeys)
+                          ? ledgerGoodsServicesCardFields(entry)
                           : ledgerDetailFields(entry, invoicedPoKeys)
                         ).map((field) => (
                           <div
