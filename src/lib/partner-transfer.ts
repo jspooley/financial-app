@@ -3,7 +3,7 @@ import {
   cashflowClassificationFlags,
   isPartnerToPartnerTransferCoa,
 } from "@/lib/coa";
-import type { CashflowAccount, LedgerEntry, Purchaser } from "@/lib/types";
+import type { CashflowAccount, LedgerEntry, KnownPurchaser } from "@/lib/types";
 import { checkingAccountForPurchaser, roundMoney } from "@/lib/utils";
 
 export const TRANSFER_COMPANION_KIND = "transfer" as const;
@@ -26,24 +26,27 @@ export function isPartnerTransferParentRow(
   return !entry.source_ledger_id && partnerTransferCounterparty(entry) != null;
 }
 
-function otherPartner(party: Purchaser): Purchaser {
+function otherPartner(party: KnownPurchaser): KnownPurchaser {
   return party === "Molly" ? "Jess" : "Molly";
 }
 
 function ownerFromEntry(
   entry: Pick<LedgerEntry, "account" | "purchaser">
-): Purchaser {
+): KnownPurchaser | null {
   const account = entry.account ?? "";
   if (account.includes("Molly")) return "Molly";
   if (account.includes("Jess")) return "Jess";
-  return entry.purchaser === "Molly" ? "Molly" : "Jess";
+  if (entry.purchaser === "Molly") return "Molly";
+  if (entry.purchaser === "Jess") return "Jess";
+  return null;
 }
 
 /** Other partner on a 303/304 (or Paid To) transfer, if this row should have a mate. */
 export function partnerTransferCounterparty(
   entry: Pick<LedgerEntry, "account" | "purchaser" | "paid_to" | "coa_category">
-): Purchaser | null {
+): KnownPurchaser | null {
   const owner = ownerFromEntry(entry);
+  if (!owner) return null;
   if (isPartnerToPartnerTransferCoa(entry.coa_category)) {
     return otherPartner(owner);
   }
@@ -58,7 +61,7 @@ export function partnerTransferCounterparty(
 
 export function buildPartnerTransferMatePayload(
   parent: LedgerEntry,
-  counterparty: Purchaser
+  counterparty: KnownPurchaser
 ) {
   const debit = roundMoney(Number(parent.credit_amount ?? 0));
   const credit = roundMoney(Number(parent.debit_amount ?? 0));
@@ -107,7 +110,7 @@ export function buildPartnerTransferMatePayload(
 /** Display-only mate so Cashflow filters can show the other checking account. */
 export function partnerTransferDisplayRow(
   parent: LedgerEntry,
-  counterparty: Purchaser
+  counterparty: KnownPurchaser
 ): LedgerEntry {
   const debit = roundMoney(Number(parent.credit_amount ?? 0));
   const credit = roundMoney(Number(parent.debit_amount ?? 0));

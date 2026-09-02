@@ -1,9 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   CashflowAccount,
+  KnownPurchaser,
   LedgerEntry,
   PaymentType,
-  Purchaser,
 } from "./types";
 import { COA_SALES_INCOME_CATEGORY } from "./coa";
 import { checkingAccountForPurchaser, getLedgerTotalDesignerCost, roundMoney } from "./utils";
@@ -16,7 +16,7 @@ export {
 
 export type PaymentCompanionFields = {
   date_paid: string | null;
-  paid_to: Purchaser;
+  paid_to: KnownPurchaser;
   payment_type: PaymentType;
   payment_amount: number;
   payment_fee: number;
@@ -78,7 +78,7 @@ export function mergePaymentCompanionsOntoEntries(
 }
 
 export function defaultCheckingAccountForPaidTo(
-  paidTo: Purchaser | null | undefined
+  paidTo: KnownPurchaser | null | undefined
 ): CashflowAccount {
   return checkingAccountForPurchaser(paidTo);
 }

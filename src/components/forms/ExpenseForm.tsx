@@ -7,7 +7,7 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
 import { collectClientPoOptions } from "@/lib/client-po-db";
 import { cashflowClassificationFlags, isRecordedTransferCoa } from "@/lib/coa";
-import { accountMoveFields, personalCardRoleFields } from "@/lib/account-move";
+import { accountMoveFields, personalCardRoleFields, isCashflowAccount } from "@/lib/account-move";
 import { normalizeInvoiceId, poNumbersMatch } from "@/lib/invoice-utils";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 import {
@@ -24,7 +24,8 @@ import {
   CASHFLOW_DEPARTMENTS,
   type ChartOfAccount,
   type LedgerEntry,
-  type Purchaser,
+  isKnownPurchaser,
+  type KnownPurchaser,
 } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import {
@@ -71,7 +72,7 @@ type InvoiceOptionRow = {
 interface ExpenseFormProps {
   initial?: LedgerEntry | null;
   chartOfAccounts?: ChartOfAccount[];
-  defaultDesigner?: Purchaser;
+  defaultDesigner?: KnownPurchaser;
   onSuccess: () => void;
   onCancel: () => void;
   onDeleted?: () => void;
@@ -119,8 +120,12 @@ export function ExpenseForm({
       description: initial?.description ?? "",
       debit_amount: initial?.debit_amount ?? 0,
       credit_amount: initial?.credit_amount ?? 0,
-      account: initial?.account ?? checkingAccountForPurchaser(defaultDesigner),
-      designer: initial?.purchaser ?? defaultDesigner,
+      account: isCashflowAccount(initial?.account)
+        ? initial.account
+        : checkingAccountForPurchaser(defaultDesigner),
+      designer: isKnownPurchaser(initial?.purchaser)
+        ? initial.purchaser
+        : defaultDesigner,
       coa_category: initial?.coa_category ?? "",
       invoice_id: initial?.invoice_id ?? "",
       paid_to:

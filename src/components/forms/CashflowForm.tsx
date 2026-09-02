@@ -10,10 +10,11 @@ import {
   CASHFLOW_DEPARTMENTS,
   CASHFLOW_EXPENSE_TYPES,
   type CashflowEntry,
-  type Purchaser,
+  type KnownPurchaser,
 } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { InputField, SelectField, TextareaField } from "@/components/ui/FormFields";
+import { isCashflowAccount } from "@/lib/account-move";
 import { checkingAccountForPurchaser, formatMoneyInput, roundMoney } from "@/lib/utils";
 
 const schema = z
@@ -36,7 +37,7 @@ type FormValues = z.infer<typeof schema>;
 
 interface CashflowFormProps {
   initial?: CashflowEntry | null;
-  defaultDesigner?: Purchaser;
+  defaultDesigner?: KnownPurchaser;
   onSuccess: () => void;
   onCancel: () => void;
 }
@@ -74,7 +75,9 @@ export function CashflowForm({
       description: initial?.description ?? "",
       debit_amount: initial?.debit_amount ?? 0,
       credit_amount: initial?.credit_amount ?? 0,
-      account: initial?.account ?? checkingAccountForPurchaser(defaultDesigner),
+      account: isCashflowAccount(initial?.account)
+        ? initial.account
+        : checkingAccountForPurchaser(defaultDesigner),
       designer: initial?.designer ?? defaultDesigner,
     },
   });

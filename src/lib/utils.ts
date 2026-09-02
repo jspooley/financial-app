@@ -1,4 +1,4 @@
-import type { PaymentType, TradePartner } from "./types";
+import type { KnownPurchaser, PaymentType, Purchaser, TradePartner } from "./types";
 
 export function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-US", {
@@ -563,11 +563,19 @@ export function purchaserFromEmail(email: string | undefined): "Jess" | "Molly" 
   return null;
 }
 
-/** Checking register for the given purchaser (Jess / Molly). */
+/** Checking register for Jess / Molly (never TBD). */
 export function checkingAccountForPurchaser(
-  purchaser: "Jess" | "Molly" | null | undefined
+  purchaser: KnownPurchaser | null | undefined
 ): "Checking - Jess" | "Checking - Molly" {
   return purchaser === "Molly" ? "Checking - Molly" : "Checking - Jess";
+}
+
+/** Ledger purchase account, including TBD when purchase timing is unknown. */
+export function purchaserAccountForPurchaser(
+  purchaser: Purchaser | null | undefined
+): "Checking - Jess" | "Checking - Molly" | "TBD" {
+  if (purchaser === "TBD") return "TBD";
+  return checkingAccountForPurchaser(purchaser);
 }
 
 export function currentMonthKey(date = new Date()): string {
@@ -613,7 +621,7 @@ function isUnpaidSalesUseTax(entry: TaxDueEntry) {
 
 function taxPurchaserBucket(
   purchaser: string | null | undefined
-): "Jess" | "Molly" | null {
+): KnownPurchaser | null {
   if (!purchaser) return null;
   const normalized = purchaser.trim().toLowerCase();
   if (normalized === "jess") return "Jess";

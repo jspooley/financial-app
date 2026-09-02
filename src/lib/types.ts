@@ -1,7 +1,14 @@
 export type CreditDebit = "credit" | "debit";
 export type WholesaleRetail = "wholesale" | "retail" | "service";
-export type Purchaser = "Jess" | "Molly";
+export type KnownPurchaser = "Jess" | "Molly";
+export type Purchaser = KnownPurchaser | "TBD";
 export type PaymentType = "Cash" | "Check" | "CC" | "Venmo" | "Other";
+
+export function isKnownPurchaser(
+  value: string | null | undefined
+): value is KnownPurchaser {
+  return value === "Jess" || value === "Molly";
+}
 
 export const PAYMENT_TYPE_OPTIONS: PaymentType[] = [
   "Cash",
@@ -46,6 +53,29 @@ export const CASHFLOW_ACCOUNTS = [
 
 export type CashflowAccount = (typeof CASHFLOW_ACCOUNTS)[number];
 
+/** Ledger purchase account — includes TBD when purchase timing is unknown. */
+export const PURCHASER_ACCOUNT_OPTIONS = [
+  ...CASHFLOW_ACCOUNTS,
+  "TBD",
+] as const;
+
+export type PurchaserAccount = (typeof PURCHASER_ACCOUNT_OPTIONS)[number];
+
+export function isPurchaserAccount(
+  value: string | null | undefined
+): value is PurchaserAccount {
+  return (
+    typeof value === "string" &&
+    (PURCHASER_ACCOUNT_OPTIONS as readonly string[]).includes(value)
+  );
+}
+
+export function isPendingPurchase(
+  entry: Pick<{ purchaser: Purchaser; account: string | null }, "purchaser" | "account">
+) {
+  return entry.purchaser === "TBD" || entry.account === "TBD";
+}
+
 /** Companion rows split off a parent ledger line so each cost carries its own CoA. */
 export const COMPANION_KINDS = [
   "payment",
@@ -77,7 +107,7 @@ export type LedgerInsert = {
   purchaser: Purchaser;
   department?: CashflowDepartment | null;
   expense_type?: CashflowExpenseType | null;
-  account?: CashflowAccount | null;
+  account?: PurchaserAccount | null;
   moved_from_account?: CashflowAccount | null;
   reimbursed_by_ledger_id?: string | null;
   personal_card_role?: "charge" | "reimbursement" | null;
@@ -90,7 +120,7 @@ export type LedgerInsert = {
   invoice_id?: string | null;
   paid?: boolean;
   date_paid?: string | null;
-  paid_to?: Purchaser | null;
+  paid_to?: KnownPurchaser | null;
   payment_type?: PaymentType | null;
   payment_fee?: number | null;
   payment_amount?: number | null;
@@ -132,7 +162,7 @@ export interface LedgerDbRow extends Omit<
   invoice_id?: string | null;
   paid?: boolean | null;
   date_paid?: string | null;
-  paid_to?: Purchaser | null;
+  paid_to?: KnownPurchaser | null;
   payment_type?: PaymentType | null;
   payment_fee?: number | null;
   payment_amount?: number | null;
@@ -243,7 +273,7 @@ export interface CashflowEntry {
   debit_amount: number;
   credit_amount: number;
   account: CashflowAccount;
-  designer: Purchaser;
+  designer: KnownPurchaser;
   created_at: string;
   updated_at: string;
 }
@@ -338,7 +368,7 @@ export interface LedgerEntry {
   purchaser: Purchaser;
   department: CashflowDepartment;
   expense_type: CashflowExpenseType | null;
-  account: CashflowAccount | null;
+  account: PurchaserAccount | null;
   /** Original register if this row was moved (e.g. Checking → Credit Card). */
   moved_from_account: CashflowAccount | null;
   /** Checking 308 that reimbursed this personal-card charge (one 308 can cover several charges). */
@@ -354,7 +384,7 @@ export interface LedgerEntry {
   credit_amount: number;
   paid: boolean;
   date_paid: string | null;
-  paid_to: Purchaser | null;
+  paid_to: KnownPurchaser | null;
   payment_type: PaymentType | null;
   payment_fee: number;
   payment_amount: number;

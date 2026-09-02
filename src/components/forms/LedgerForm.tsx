@@ -7,18 +7,19 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
 import { ledgerFormToDb, normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
-import { accountMoveFields } from "@/lib/account-move";
+import { accountMoveFields, isCashflowAccount } from "@/lib/account-move";
 import { syncCostCompanions } from "@/lib/cost-companions";
 import { syncPaymentCompanionFromParent } from "@/lib/payment-companions";
 import { deriveLedgerPaidFlag } from "@/lib/invoice-utils";
 import {
-  CASHFLOW_ACCOUNTS,
   CASHFLOW_DEPARTMENTS,
-  type CashflowAccount,
+  PURCHASER_ACCOUNT_OPTIONS,
+  isKnownPurchaser,
   type Client,
   type ClientPoNumber,
   type LedgerEntry,
   type Purchaser,
+  type PurchaserAccount,
   type TradePartner,
 } from "@/lib/types";
 import {
@@ -38,7 +39,7 @@ import {
   calculateRetailPriceFromMarkup,
   calculateMarkupPercentFromPricing,
   calculateTaxFromCustomerPrice,
-  checkingAccountForPurchaser,
+  purchaserAccountForPurchaser,
   formatCurrency,
   formatPercent,
   formatSandUTaxPercent,
@@ -86,10 +87,10 @@ const schema = z
     tax_amount: z.coerce.number().min(0).transform(roundMoney),
     client_id: z.string().uuid("Select a client"),
     po_number: z.string().trim().min(1, "PO number is required"),
-    purchaser: z.enum(["Jess", "Molly"], {
+    purchaser: z.enum(["Jess", "Molly", "TBD"], {
       required_error: "Purchaser is required",
     }),
-    account: z.enum(CASHFLOW_ACCOUNTS, {
+    account: z.enum(PURCHASER_ACCOUNT_OPTIONS, {
       required_error: "Account is required",
     }),
     department: z.enum(CASHFLOW_DEPARTMENTS, {
@@ -290,7 +291,7 @@ export function LedgerForm({
       purchaser: initial?.purchaser ?? defaultPurchaser ?? "Jess",
       account:
         initial?.account ??
-        checkingAccountForPurchaser(defaultPurchaser),
+        purchaserAccountForPurchaser(defaultPurchaser ?? "Jess"),
       department: initial?.department ?? "Interior Design",
       income_statement: initial?.income_statement ?? false,
     },
@@ -303,6 +304,7 @@ export function LedgerForm({
   const discountPercent = useWatch({ control, name: "discount_percent" });
   const wholesaleRetail = useWatch({ control, name: "wholesale_retail" });
   const creditDebit = useWatch({ control, name: "credit_debit" });
+  const purchaser = useWatch({ control, name: "purchaser" });
   const shippingAmount = useWatch({ control, name: "shipping_receiving_amount" });
   const receivingAmount = useWatch({ control, name: "receiving_amount" });
   const retailPrice = useWatch({ control, name: "retail_price" });
@@ -615,6 +617,20 @@ export function LedgerForm({
     }
   }, [isWholesale, selectedTradePartner?.account_owner, setValue]);
 
+  // When purchaser is unknown, keep account on TBD until purchase happens.
+  useEffect(() => {
+    if (isWholesale) return;
+    if (purchaser === "TBD") {
+      setValue("account", "TBD", { shouldValidate: true });
+      return;
+    }
+    if (isKnownPurchaser(purchaser) && getValues("account") === "TBD") {
+      setValue("account", purchaserAccountForPurchaser(purchaser), {
+        shouldValidate: true,
+      });
+    }
+  }, [isWholesale, purchaser, setValue, getValues]);
+
   function resetDesignerCostAutoCalc() {
     retailManuallyEdited.current = true;
     designerCostManuallyEdited.current = false;
@@ -731,12 +747,13 @@ export function LedgerForm({
         department: values.department,
         balance_sheet: personalUse,
       }),
-      account: values.account as CashflowAccount,
       income_statement: values.income_statement,
       balance_sheet: personalUse,
       ...(initial
-        ? accountMoveFields(initial, values.account as CashflowAccount)
-        : {}),
+        ? isCashflowAccount(values.account)
+          ? accountMoveFields(initial, values.account)
+          : { account: values.account as PurchaserAccount, moved_from_account: null }
+        : { account: values.account as PurchaserAccount }),
     };
 
     const paid = deriveLedgerPaidFlag({
@@ -1007,22 +1024,23 @@ export function LedgerForm({
                 ? selectedTradePartner?.account_owner
                   ? "Locked to the trade partner account owner for wholesale."
                   : "Select a trade partner with an account owner (Molly or Jess)."
-                : undefined
+                : "Choose TBD when who will purchase is not known yet."
             }
             {...register("purchaser")}
             disabled={isWholesale}
           >
             <option value="Jess">Jess</option>
             <option value="Molly">Molly</option>
+            <option value="TBD">TBD</option>
           </SelectField>
           <SelectField
             label="Account"
             required
             error={errors.account?.message}
-            hint="Defaults to the signed-in user's checking account."
+            hint="Defaults to the signed-in user's checking account. Choose TBD when the purchase account is not known yet."
             {...register("account")}
           >
-            {CASHFLOW_ACCOUNTS.map((account) => (
+            {PURCHASER_ACCOUNT_OPTIONS.map((account) => (
               <option key={account} value={account}>
                 {account}
               </option>
