@@ -101,9 +101,20 @@ export function calculateTaxFromCustomerPrice(
   );
 }
 
+/** Retail without trade partner and services: discount_percent stores markup; customer pays full retail × qty. */
+export function ledgerUsesCostMarkup(entry: {
+  wholesale_retail?: "wholesale" | "retail" | "service";
+  trade_partner_id?: string | null;
+}) {
+  if (entry.wholesale_retail === "service") return true;
+  return (
+    entry.wholesale_retail === "retail" &&
+    !(entry.trade_partner_id ?? "").trim()
+  );
+}
+
 /** Discounted retail subtotal: retail price × (1 − discount %) × qty.
- * Retail with no trade partner: discount_percent is markup; customer pays full retail × qty.
- * Service lines use the same discount-off-retail math as wholesale (0% = full retail). */
+ * Markup lines (no-trade retail, service): customer pays full retail × qty. */
 export function getLedgerMerchandiseAmount(entry: {
   retail_price: number;
   quantity: number;
@@ -113,11 +124,7 @@ export function getLedgerMerchandiseAmount(entry: {
   trade_partner_id?: string | null;
 }) {
   const qty = normalizeQuantity(entry.quantity);
-  // No-trade-partner retail: markup is stored in discount_percent; do not markdown.
-  if (
-    entry.wholesale_retail === "retail" &&
-    !(entry.trade_partner_id ?? "").trim()
-  ) {
+  if (ledgerUsesCostMarkup(entry)) {
     return roundMoney(Number(entry.retail_price) * qty);
   }
   const retailSubtotal = Number(entry.retail_price) * qty;
@@ -126,7 +133,7 @@ export function getLedgerMerchandiseAmount(entry: {
 }
 
 /** Discounted retail only: retail price × (1 − discount %) × qty.
- * No-trade-partner retail uses full retail (markup lives in discount_percent). */
+ * Markup lines use full retail (markup lives in discount_percent). */
 export function getLedgerCustomerPrice(entry: {
   retail_price: number;
   quantity: number;
@@ -136,10 +143,7 @@ export function getLedgerCustomerPrice(entry: {
   wholesale_retail?: "wholesale" | "retail" | "service";
   trade_partner_id?: string | null;
 }) {
-  if (
-    entry.wholesale_retail === "retail" &&
-    !(entry.trade_partner_id ?? "").trim()
-  ) {
+  if (ledgerUsesCostMarkup(entry)) {
     return getLedgerMerchandiseAmount(entry);
   }
   const discountPercent = Number(entry.discount_percent) || 0;

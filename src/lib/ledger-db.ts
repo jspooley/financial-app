@@ -8,7 +8,14 @@ import type {
   WholesaleRetail,
 } from "./types";
 import { deriveLedgerPaidFlag } from "./invoice-utils";
-import { calculateTaxFromCustomerPrice, calculateCustomerPrice, getLedgerTotalDesignerCost, normalizeQuantity, roundMoney } from "./utils";
+import {
+  calculateTaxFromCustomerPrice,
+  calculateCustomerPrice,
+  getLedgerTotalDesignerCost,
+  ledgerUsesCostMarkup,
+  normalizeQuantity,
+  roundMoney,
+} from "./utils";
 import { COA_COGS_CATEGORY } from "./payment-companions";
 import { COA_SU_TAX_PAYABLE_CATEGORY } from "./coa";
 
@@ -227,11 +234,8 @@ export function ledgerFormToDb(values: {
   const quantity = normalizeQuantity(Number(values.quantity) || 1);
   const designerCost = Number(values.designer_cost) || 0;
   const discountPercent = Number(values.discount_percent) || 0;
-  const noTradeRetail =
-    values.wholesale_retail === "retail" &&
-    !(values.trade_partner_id ?? "").trim();
   const retailPrice = Number(values.retail_price) || 0;
-  const merchandise = noTradeRetail
+  const merchandise = ledgerUsesCostMarkup(values)
     ? roundMoney(retailPrice * quantity)
     : calculateCustomerPrice(retailPrice, quantity, discountPercent);
   const taxRate = Number(values.sand_u_tax ?? 0) || 0;
