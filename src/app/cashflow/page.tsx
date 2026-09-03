@@ -4,16 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
-import { CardBalanceReconciliationPanel } from "@/components/debt/CardBalanceReconciliationPanel";
 import { ExpenseForm } from "@/components/forms/ExpenseForm";
 import { LedgerAccountForm } from "@/components/forms/LedgerAccountForm";
 import { useRecordLocks } from "@/components/RecordLockProvider";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { buildCardBalanceReconciliation } from "@/lib/card-balance-reconciliation";
 import { normalizeInvoiceId } from "@/lib/invoice-utils";
-import type { PersonalFundsPartnerFilter } from "@/lib/personal-funds-report";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 import {
   coaAccountNumber,
@@ -29,6 +26,7 @@ import {
 import { isCostCompanionRow } from "@/lib/cost-companions";
 import {
   isCheckingAccount,
+  isCreditCardAccount,
   matchingCheckingAccount,
 } from "@/lib/account-move";
 import {
@@ -47,11 +45,11 @@ import {
   duplicateCardChargeGroups,
   identifyMovedRowAsCharge,
   identifyMovedRowAsReimbursement,
+  isCardChargeStillOnCard,
   isCardReimburseMateRow,
   isCheckingCardReimbursement,
   isPersonalCardCharge,
   linkCardChargeToReimbursement,
-  mergeCardReimburseDisplayMates,
   needsPersonalCardIdentification,
   persistAmountMatchedReimbursements,
   persistOldestFirstReimbursements,
@@ -83,9 +81,9 @@ import {
 import {
   formatCurrency,
   formatDate,
+  formatEnteredAt,
   getLedgerDesignerCostWithExtras,
   getLedgerTotalDesignerCost,
-  isSalesUseTaxPaid,
   purchaserFromEmail,
   roundMoney,
 } from "@/lib/utils";
@@ -107,6 +105,12 @@ function signedCashAmount(debit: number, credit: number) {
   return roundMoney(credit - debit);
 }
 
+function signedBalanceClass(value: number) {
+  if (value < -0.005) return "text-red-700";
+  if (value > 0.005) return "text-emerald-700";
+  return "text-slate-900";
+}
+
 function formatSignedCash(value: number) {
   if (Math.abs(value) < 0.005) return "—";
   return (
@@ -114,6 +118,146 @@ function formatSignedCash(value: number) {
       {formatCurrency(value)}
     </span>
   );
+}
+
+function csvCell(value: string | number | null | undefined) {
+  const text = String(value ?? "");
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+
+function shortLedgerDescription(entry: LedgerEntry, max = 48) {
+  const text = (entry.description ?? "").trim() || "No description";
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+function paidByCheckingTitle(payment: LedgerEntry) {
+  return `Paid by ${payment.account ?? "checking"} · ${formatDate(
+    payment.entry_date
+  )} · ${formatCurrency(Math.abs(cardReimburseNet(payment)))}`;
+}
+
+function paidChargesTitle(charges: LedgerEntry[], remaining: number) {
+  const total = charges.reduce(
+    (sum, charge) => sum + Math.abs(cardReimburseNet(charge)),
+    0
+  );
+  const leftover =
+    remaining >= 0.005
+      ? ` · ${formatCurrency(remaining)} extra — must match 308`
+      : remaining < -0.005
+        ? " · over allocated"
+        : "";
+  return `Paid ${charges.length} card charge${
+    charges.length === 1 ? "" : "s"
+  } · ${formatCurrency(total)}${leftover}`;
+}
+
+function cashflowCheckingCardCsvLabel(
+  entry: LedgerEntry,
+  byId: Map<string, LedgerEntry>,
+  chargesByPaymentId: Map<string, LedgerEntry[]>
+) {
+  const status = reimbursementStatus(entry, byId, chargesByPaymentId);
+  if (status.kind === "needs-identification") {
+    return "Identify charge or reimbursement";
+  }
+  if (status.kind === "card-mate") {
+    return "";
+  }
+  if (status.kind === "charge-outstanding") {
+    return "Unpaid";
+  }
+  if (status.kind === "charge-reimbursed") {
+    return `${paidByCheckingTitle(status.payment)} · ${shortLedgerDescription(
+      status.payment
+    )}`;
+  }
+  if (status.kind === "payment-unmatched") return "Unmatched";
+  if (status.kind === "payment-matched") {
+    const details = status.charges
+      .slice(0, 3)
+      .map(
+        (charge) =>
+          `${shortLedgerDescription(charge, 40)} · ${formatDate(charge.entry_date)}`
+      )
+      .join("; ");
+    const extra =
+      status.charges.length > 3 ? `; +${status.charges.length - 3} more` : "";
+    return `${paidChargesTitle(status.charges, status.remaining)} · ${details}${extra}`;
+  }
+  return "";
+}
+
+function downloadCashflowSpreadsheet(
+  entries: LedgerEntry[],
+  options: {
+    parentById: Map<string, LedgerEntry>;
+    paymentInvoiceByParentId: Map<string, string>;
+    monthFilter: string[];
+    accountFilter: CashflowAccount[];
+    showAllAccounts: boolean;
+    byId: Map<string, LedgerEntry>;
+    chargesByPaymentId: Map<string, LedgerEntry[]>;
+  }
+) {
+  const headers = [
+    "Date",
+    "Account",
+    "Description",
+    "CoA Category",
+    "Amount",
+    "Status",
+    "Entered by",
+    "Entered on",
+    "Invoice ID",
+    "Purchased By",
+    "Paid To",
+    "Department",
+  ];
+  const lines = [headers.map(csvCell).join(",")];
+  for (const entry of entries) {
+    const amounts = amountsForAccountFilter(
+      entry,
+      options.monthFilter,
+      options.accountFilter,
+      options.showAllAccounts
+    );
+    const amount = signedCashAmount(amounts.displayDebit, amounts.displayCredit);
+    lines.push(
+      [
+        displayDate(entry),
+        entry.account ?? "",
+        cashflowEntryDescriptionKey(entry, options.parentById) ||
+          entry.clients?.name ||
+          "",
+        entry.coa_category ?? "",
+        amount.toFixed(2),
+        cashflowCheckingCardCsvLabel(
+          entry,
+          options.byId,
+          options.chargesByPaymentId
+        ),
+        entry.created_by_name ?? "",
+        formatEnteredAt(entry.created_at),
+        effectiveInvoiceId(entry, options.paymentInvoiceByParentId),
+        entry.purchaser ?? "",
+        entry.paid_to ?? "",
+        entry.department ?? "",
+      ]
+        .map(csvCell)
+        .join(",")
+    );
+  }
+  const blob = new Blob([`\uFEFF${lines.join("\r\n")}`], {
+    type: "text/csv;charset=utf-8;",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `cashflow-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function reimbursementRowLabel(entry: LedgerEntry, extra?: string) {
@@ -141,6 +285,31 @@ function chargeAssignmentDetails(entry: LedgerEntry) {
   };
 }
 
+function JumpToLinkedRowButton({
+  entryId,
+  title,
+  detail,
+  onJump,
+}: {
+  entryId: string;
+  title: string;
+  detail: string;
+  onJump: (id: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onJump(entryId)}
+      className="text-left text-xs text-brand-800 hover:underline"
+    >
+      <span className="block font-medium">{title}</span>
+      {detail ? (
+        <span className="mt-0.5 block text-slate-500">{detail}</span>
+      ) : null}
+    </button>
+  );
+}
+
 function todayIsoDate() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -158,16 +327,6 @@ function accountMoveColumnError(message: string) {
     return "Run migrations 071–074 in Supabase (moved_from_account, reimbursed_by_ledger_id, personal_card_role, CoA 306/308), then try again.";
   }
   return message;
-}
-
-function reimbursementSetRole(
-  entry: LedgerEntry
-): "purchase" | "card-paydown" | null {
-  if (isCardReimburseMateRow(entry)) return "card-paydown";
-  if (isPersonalCardCharge(entry) && entry.reimbursed_by_ledger_id) {
-    return "purchase";
-  }
-  return null;
 }
 
 function isOperatingExpense(entry: LedgerEntry) {
@@ -276,6 +435,22 @@ function displayDate(entry: LedgerEntry): string {
   return formatDate(cashflowEntryDate(entry));
 }
 
+function enteredByName(entry: LedgerEntry) {
+  return entry.created_by_name?.trim() || "";
+}
+
+function cashflowEnteredDisplay(entry: LedgerEntry) {
+  const who = enteredByName(entry);
+  const when = formatEnteredAt(entry.created_at);
+  if (!who && when === "—") return "—";
+  return (
+    <span>
+      <span className="block">{who || "—"}</span>
+      <span className="mt-0.5 block text-xs text-slate-500">{when}</span>
+    </span>
+  );
+}
+
 function cashflowEntryDate(entry: LedgerEntry) {
   return isPaymentLine(entry) && entry.date_paid
     ? entry.date_paid
@@ -303,6 +478,40 @@ function cashflowEntryDescriptionKey(
 
 function cashflowPaymentRank(entry: LedgerEntry) {
   return isPaymentLine(entry) || Number(entry.payment_amount ?? 0) > 0 ? 1 : 0;
+}
+
+type CashflowSortField =
+  | "date"
+  | "description"
+  | "coaCategory"
+  | "amount"
+  | "enteredBy"
+  | "invoiceId"
+  | "purchasedBy"
+  | "paidTo"
+  | "department";
+
+const CASHFLOW_SORT_FIELDS: CashflowSortField[] = [
+  "date",
+  "description",
+  "coaCategory",
+  "amount",
+  "enteredBy",
+  "invoiceId",
+  "purchasedBy",
+  "paidTo",
+  "department",
+];
+
+function isCashflowSortField(value: string): value is CashflowSortField {
+  return (CASHFLOW_SORT_FIELDS as string[]).includes(value);
+}
+
+function compareSortText(a: string, b: string) {
+  const aBlank = !a.trim() || a === "—";
+  const bBlank = !b.trim() || b === "—";
+  if (aBlank !== bBlank) return aBlank ? 1 : -1;
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 }
 
 function isSalesIncomeCredit(entry: LedgerEntry) {
@@ -483,7 +692,11 @@ type CashflowDisplayItem =
       debit: number;
       credit: number;
     }
-  | { kind: "entry"; entry: LedgerEntry; level: number };
+  | {
+      kind: "entry";
+      entry: LedgerEntry;
+      level: number;
+    };
 
 function GroupExpandArrow({ expanded }: { expanded: boolean }) {
   return (
@@ -578,6 +791,17 @@ function bucketEntries(
   );
 }
 
+function appendFlatEntryItems(
+  entries: LedgerEntry[],
+  depth: number
+): CashflowDisplayItem[] {
+  return entries.map((entry) => ({
+    kind: "entry" as const,
+    entry,
+    level: depth,
+  }));
+}
+
 function outlineGroupTotals(
   entries: LedgerEntry[],
   ctx: CashflowGroupContext
@@ -606,11 +830,7 @@ function buildCashflowOutlineItems(
   depth = 0
 ): CashflowDisplayItem[] {
   if (depth >= levels.length) {
-    return entries.map((entry) => ({
-      kind: "entry" as const,
-      entry,
-      level: depth,
-    }));
+    return appendFlatEntryItems(entries, depth);
   }
 
   const field = levels[depth];
@@ -813,60 +1033,6 @@ function checkingBalance(
   );
 }
 
-/**
- * S&U tax collected from clients but not yet remitted to the state. Tax is a
- * liability, so it is tracked here rather than as revenue or expense. Lines are
- * cleared by marking them paid on the Sales & Use Tax page.
- */
-function salesUseTaxPayable(entries: LedgerEntry[]): number {
-  return roundMoney(
-    entries
-      .filter(
-        (entry) =>
-          entry.wholesale_retail === "wholesale" &&
-          Number(entry.tax_amount ?? 0) > 0 &&
-          !isSalesUseTaxPaid(entry)
-      )
-      .reduce((sum, entry) => sum + Number(entry.tax_amount ?? 0), 0)
-  );
-}
-
-/** Credit card balance owed: debits − credits (charges minus payments). */
-function creditCardBalance(
-  entries: LedgerEntry[],
-  options?: {
-    monthFilter?: string[];
-    accountFilter?: CashflowAccount[];
-    showAllAccounts?: boolean;
-    parentById?: Map<string, LedgerEntry>;
-  }
-): number {
-  const monthFilter = options?.monthFilter ?? [];
-  const accountFilter = options?.accountFilter ?? [];
-  const showAllAccounts = options?.showAllAccounts ?? true;
-  const parentById =
-    options?.parentById ?? new Map(entries.map((entry) => [entry.id, entry]));
-  return roundMoney(
-    entries
-      .filter((entry) => entry.account?.startsWith("Credit Card"))
-      .filter(
-        (entry) =>
-          showAllAccounts ||
-          entryMatchesAccountFilter(entry, accountFilter)
-      )
-      .reduce((sum, entry) => {
-        if (isExcludedPersonalUseCashflowRow(entry, parentById)) return sum;
-        const amounts = amountsForAccountFilter(
-          entry,
-          monthFilter,
-          accountFilter,
-          showAllAccounts
-        );
-        return sum + amounts.debit - amounts.credit;
-      }, 0)
-  );
-}
-
 export default function CashflowPage() {
   const { acquireLocks, releaseLocks } = useRecordLocks();
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
@@ -882,7 +1048,6 @@ export default function CashflowPage() {
   const [defaultDesigner, setDefaultDesigner] = useState<KnownPurchaser>("Jess");
   /** Empty = show all accounts; otherwise match any selected account. */
   const [accountFilter, setAccountFilter] = useState<CashflowAccount[]>([]);
-  const [showCardPaydowns, setShowCardPaydowns] = useState(false);
   /** Empty = all months; otherwise YYYY-MM. */
   const [monthFilter, setMonthFilter] = useState<string[]>([]);
   /** Empty = all invoices; otherwise match any selected invoice ID. */
@@ -890,9 +1055,10 @@ export default function CashflowPage() {
   /** Empty = all CoA categories; otherwise match any selected category. */
   const [coaCategoryFilter, setCoaCategoryFilter] = useState<string[]>([]);
   const [reimbursementFilter, setReimbursementFilter] = useState<
-    "all" | "needs-id" | "duplicates"
+    "all" | "needs-id" | "duplicates" | "unpaid-card"
   >("all");
-  const [sortBy, setSortBy] = useState<"date" | "description">("date");
+  const [sortBy, setSortBy] = useState<CashflowSortField>("date");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [groupLevels, setGroupLevels] = useState<
     [CashflowGroupLevel, CashflowGroupLevel, CashflowGroupLevel]
   >(DEFAULT_CASHFLOW_GROUP_LEVELS);
@@ -918,6 +1084,10 @@ export default function CashflowPage() {
     description: string;
     checkingAccount: CashflowAccount;
   } | null>(null);
+  const [pinnedEntryIds, setPinnedEntryIds] = useState<string[]>([]);
+  const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(
+    null
+  );
 
   const loadEntries = useCallback(async () => {
     setLoading(true);
@@ -1024,8 +1194,7 @@ export default function CashflowPage() {
   const showAllCoaCategories = coaCategoryFilter.length === 0;
 
   const registerEntries = useMemo(
-    () =>
-      mergeCardReimburseDisplayMates(mergePartnerTransferDisplayMates(entries)),
+    () => mergePartnerTransferDisplayMates(entries),
     [entries]
   );
 
@@ -1109,6 +1278,31 @@ export default function CashflowPage() {
     [registerEntries]
   );
 
+  const unpaidCardCharges = useMemo(() => {
+    const pool =
+      monthFilter.length > 0
+        ? entriesMatchingMonthWithInvoiceMates(registerEntries, monthFilter)
+        : registerEntries;
+    return pool.filter((entry) => {
+      if (isExcludedPersonalUseCashflowRow(entry, parentById)) return false;
+      if (
+        !showAllAccounts &&
+        !entryMatchesAccountFilter(entry, accountFilter)
+      ) {
+        return false;
+      }
+      return isCardChargeStillOnCard(entry, parentById);
+    });
+  }, [
+    registerEntries,
+    monthFilter,
+    showAllAccounts,
+    accountFilter,
+    parentById,
+  ]);
+
+  const registerListRef = useRef<HTMLDivElement>(null);
+
   const visibleEntries = useMemo(() => {
     let result =
       monthFilter.length > 0
@@ -1116,10 +1310,12 @@ export default function CashflowPage() {
         : registerEntries;
 
     result = result.filter(
-      (entry) => !isExcludedPersonalUseCashflowRow(entry, parentById)
+      (entry) =>
+        !isExcludedPersonalUseCashflowRow(entry, parentById) &&
+        !isCardReimburseMateRow(entry)
     );
 
-    if (invoiceFilter.length > 0) {
+    if (invoiceFilter.length > 0 && reimbursementFilter !== "unpaid-card") {
       const selectedInvoices = new Set(
         invoiceFilter.map((invoiceId) => invoiceId.toLowerCase())
       );
@@ -1137,7 +1333,7 @@ export default function CashflowPage() {
 
     // Filter CoA before account so 303/304 mates on the other checking account
     // are not dropped before they can match Molly/Jess.
-    if (!showAllCoaCategories) {
+    if (!showAllCoaCategories && reimbursementFilter !== "unpaid-card") {
       result = result.filter((entry) =>
         entryMatchesCoaFilter(entry, coaCategoryFilter)
       );
@@ -1170,15 +1366,19 @@ export default function CashflowPage() {
 
     if (showAllCoaCategories) {
       result = withCardReimburseCluster(result, registerEntries).filter(
-        (entry) => !isExcludedPersonalUseCashflowRow(entry, parentById)
+        (entry) =>
+          !isExcludedPersonalUseCashflowRow(entry, parentById) &&
+          !isCardReimburseMateRow(entry)
       );
+      // Keep 308s and card charges together only when both accounts are selected.
+      if (!showAllAccounts) {
+        result = result.filter((entry) =>
+          entryMatchesAccountFilter(entry, accountFilter)
+        );
+      }
     }
 
-    // Cluster invoice mates (and payment→goods parent links) by the latest date
-    // in the set so Sales Income credits sit next to related COGS debits even
-    // when purchase entry_date is earlier than date_paid.
     const paymentInvoiceByParentId = buildPaymentInvoiceByParentId(result);
-    const clusterDateByKey = new Map<string, string>();
     const clusterKeyFor = (entry: LedgerEntry): string | null => {
       const reimburseParent = cardReimburseClusterParentId(entry);
       if (reimburseParent) return `reimburse:${reimburseParent}`;
@@ -1191,38 +1391,6 @@ export default function CashflowPage() {
         return `parent:${entry.id}`;
       }
       return null;
-    };
-
-    for (const entry of result) {
-      const key = clusterKeyFor(entry);
-      if (!key) continue;
-      const date = cashflowEntryDate(entry);
-      const current = clusterDateByKey.get(key);
-      if (!current || date > current) clusterDateByKey.set(key, date);
-    }
-
-    // Payment companion parents without invoice_id still inherit the payment date.
-    for (const entry of result) {
-      if (!isPaymentCompanionRow(entry) || !entry.source_ledger_id) continue;
-      const payDate = cashflowEntryDate(entry);
-      const parentKey = `parent:${entry.source_ledger_id}`;
-      const invoiceId = normalizeInvoiceId(entry.invoice_id);
-      const invKey = invoiceId ? `inv:${invoiceId.toLowerCase()}` : null;
-      for (const key of [parentKey, invKey]) {
-        if (!key) continue;
-        const current = clusterDateByKey.get(key);
-        if (!current || payDate > current) clusterDateByKey.set(key, payDate);
-      }
-    }
-
-    const sortDate = (entry: LedgerEntry) => {
-      const key = clusterKeyFor(entry);
-      if (key && clusterDateByKey.has(key)) return clusterDateByKey.get(key)!;
-      if (isPaymentCompanionRow(entry) && entry.source_ledger_id) {
-        const parentKey = `parent:${entry.source_ledger_id}`;
-        if (clusterDateByKey.has(parentKey)) return clusterDateByKey.get(parentKey)!;
-      }
-      return cashflowEntryDate(entry);
     };
 
     const invoiceCoaRank = (entry: LedgerEntry) => {
@@ -1240,46 +1408,103 @@ export default function CashflowPage() {
         )
       );
       result = result.filter((entry) => duplicateIds.has(entry.id));
+    } else if (reimbursementFilter === "unpaid-card") {
+      result = result.filter((entry) =>
+        unpaidCardCharges.length > 0
+          ? isCardChargeStillOnCard(entry, parentById)
+          : isCreditCardAccount(entry.account)
+      );
+    }
+
+    if (pinnedEntryIds.length > 0) {
+      const have = new Set(result.map((entry) => entry.id));
+      for (const id of pinnedEntryIds) {
+        if (have.has(id)) continue;
+        const extra = registerEntries.find((entry) => entry.id === id);
+        if (extra && !isCardReimburseMateRow(extra)) {
+          result.push(extra);
+          have.add(id);
+        }
+      }
     }
 
     return [...result].sort((a, b) => {
-      if (sortBy === "description") {
-        const byDescription = cashflowEntryDescriptionKey(a, parentById).localeCompare(
-          cashflowEntryDescriptionKey(b, parentById),
-          undefined,
-          { sensitivity: "base" }
+      const applyDirection = (value: number) =>
+        sortDirection === "desc" ? -value : value;
+
+      if (sortBy === "date") {
+        const byEntryDate = applyDirection(
+          cashflowEntryDate(a).localeCompare(cashflowEntryDate(b))
         );
+        if (byEntryDate !== 0) return byEntryDate;
+
+        const keyA = clusterKeyFor(a);
+        const keyB = clusterKeyFor(b);
+        if (keyA && keyA === keyB) {
+          if (keyA.startsWith("reimburse:")) {
+            const byRole =
+              cardReimburseClusterRank(a) - cardReimburseClusterRank(b);
+            if (byRole !== 0) return byRole;
+          } else {
+            const byCoa = invoiceCoaRank(a) - invoiceCoaRank(b);
+            if (byCoa !== 0) return byCoa;
+          }
+        }
+
+        const byDescription = cashflowEntryDescriptionKey(
+          a,
+          parentById
+        ).localeCompare(cashflowEntryDescriptionKey(b, parentById), undefined, {
+          sensitivity: "base",
+        });
         if (byDescription !== 0) return byDescription;
-
-        const byDate = sortDate(b).localeCompare(sortDate(a));
-        if (byDate !== 0) return byDate;
-
         return cashflowPaymentRank(a) - cashflowPaymentRank(b);
       }
 
-      const byClusterDate = sortDate(b).localeCompare(sortDate(a));
-      if (byClusterDate !== 0) return byClusterDate;
-
-      const keyA = clusterKeyFor(a);
-      const keyB = clusterKeyFor(b);
-      if (keyA && keyA === keyB) {
-        if (keyA.startsWith("reimburse:")) {
-          const byRole = cardReimburseClusterRank(a) - cardReimburseClusterRank(b);
-          if (byRole !== 0) return byRole;
-        } else {
-          const byCoa = invoiceCoaRank(a) - invoiceCoaRank(b);
-          if (byCoa !== 0) return byCoa;
+      let primary = 0;
+      if (sortBy === "description") {
+        primary = compareSortText(
+          cashflowEntryDescriptionKey(a, parentById),
+          cashflowEntryDescriptionKey(b, parentById)
+        );
+      } else if (sortBy === "coaCategory") {
+        primary = compareCoaLabels(cashflowCoaLabel(a), cashflowCoaLabel(b));
+      } else if (sortBy === "amount") {
+        const amountA = amountsForAccountFilter(
+          a,
+          monthFilter,
+          accountFilter,
+          showAllAccounts
+        );
+        const amountB = amountsForAccountFilter(
+          b,
+          monthFilter,
+          accountFilter,
+          showAllAccounts
+        );
+        primary =
+          signedCashAmount(amountA.displayDebit, amountA.displayCredit) -
+          signedCashAmount(amountB.displayDebit, amountB.displayCredit);
+      } else if (sortBy === "enteredBy") {
+        primary = (a.created_at ?? "").localeCompare(b.created_at ?? "");
+        if (primary === 0) {
+          primary = compareSortText(enteredByName(a), enteredByName(b));
         }
+      } else if (sortBy === "invoiceId") {
+        primary = compareSortText(
+          effectiveInvoiceId(a, paymentInvoiceByParentId),
+          effectiveInvoiceId(b, paymentInvoiceByParentId)
+        );
+      } else if (sortBy === "purchasedBy") {
+        primary = compareSortText(a.purchaser ?? "", b.purchaser ?? "");
+      } else if (sortBy === "paidTo") {
+        primary = compareSortText(a.paid_to ?? "", b.paid_to ?? "");
+      } else if (sortBy === "department") {
+        primary = compareSortText(a.department ?? "", b.department ?? "");
       }
 
-      const byDescription = cashflowEntryDescriptionKey(a, parentById).localeCompare(
-        cashflowEntryDescriptionKey(b, parentById),
-        undefined,
-        { sensitivity: "base" }
-      );
-      if (byDescription !== 0) return byDescription;
-
-      return cashflowPaymentRank(a) - cashflowPaymentRank(b);
+      if (primary !== 0) return applyDirection(primary);
+      return cashflowEntryDate(b).localeCompare(cashflowEntryDate(a));
     });
   }, [
     registerEntries,
@@ -1292,45 +1517,46 @@ export default function CashflowPage() {
     showAllCoaCategories,
     reimbursementFilter,
     reimbursementMaps,
+    unpaidCardCharges,
+    pinnedEntryIds,
     sortBy,
+    sortDirection,
   ]);
 
-  const listEntries = useMemo(
-    () =>
-      showCardPaydowns
-        ? visibleEntries
-        : visibleEntries.filter((entry) => !isCardReimburseMateRow(entry)),
-    [visibleEntries, showCardPaydowns]
-  );
+  const listEntries = visibleEntries;
 
-  const hiddenCardPaydownCount = visibleEntries.length - listEntries.length;
+  const unpaidCardBalance = useMemo(
+    () =>
+      roundMoney(
+        unpaidCardCharges.reduce(
+          (sum, entry) => sum - Math.abs(cardReimburseNet(entry)),
+          0
+        )
+      ),
+    [unpaidCardCharges]
+  );
 
   const accountBalances = useMemo(
     () => ({
-      checking: checkingBalance(visibleEntries, {
+      checking: checkingBalance(registerEntries, {
         monthFilter,
         accountFilter,
         showAllAccounts,
         parentById,
       }),
-      creditCard: creditCardBalance(visibleEntries, {
-        monthFilter,
-        accountFilter,
-        showAllAccounts,
-        parentById,
-      }),
-      // Liability summary is always global (not tied to bank filters).
-      salesUseTaxPayable: salesUseTaxPayable(entries),
+      creditCard: unpaidCardBalance,
     }),
     [
-      visibleEntries,
-      entries,
+      registerEntries,
       monthFilter,
       accountFilter,
       showAllAccounts,
       parentById,
+      unpaidCardBalance,
     ]
   );
+
+  const outlineEntries = listEntries;
 
   const outlineContext = useMemo(
     () => ({
@@ -1351,18 +1577,31 @@ export default function CashflowPage() {
   const displayItems = useMemo(
     () =>
       buildCashflowOutlineItems(
-        listEntries,
+        outlineEntries,
         outlineLevels,
         expandedGroups,
         outlineContext
       ),
-    [listEntries, outlineLevels, expandedGroups, outlineContext]
+    [outlineEntries, outlineLevels, expandedGroups, outlineContext]
   );
 
   const allGroupKeys = useMemo(
-    () => collectOutlineGroupKeys(listEntries, outlineLevels, outlineContext),
-    [listEntries, outlineLevels, outlineContext]
+    () => collectOutlineGroupKeys(outlineEntries, outlineLevels, outlineContext),
+    [outlineEntries, outlineLevels, outlineContext]
   );
+
+  function toggleSort(field: CashflowSortField) {
+    if (sortBy === field) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortBy(field);
+    setSortDirection(
+      field === "date" || field === "amount" || field === "enteredBy"
+        ? "desc"
+        : "asc"
+    );
+  }
 
   function toggleGroup(key: string) {
     setExpandedGroups((current) => {
@@ -1372,6 +1611,29 @@ export default function CashflowPage() {
       return next;
     });
   }
+
+  function revealLedgerEntry(id: string) {
+    setPinnedEntryIds((current) =>
+      current.includes(id) ? current : [...current, id]
+    );
+    setHighlightedEntryId(id);
+    setExpandedGroups(new Set(allGroupKeys));
+    setReimbursementFilter("all");
+  }
+
+  useEffect(() => {
+    if (!highlightedEntryId) return;
+    const nodes = document.querySelectorAll(
+      `[data-ledger-id="${highlightedEntryId}"]`
+    );
+    for (const node of nodes) {
+      if (!(node instanceof HTMLElement) || node.offsetParent === null) {
+        continue;
+      }
+      node.scrollIntoView({ behavior: "smooth", block: "center" });
+      break;
+    }
+  }, [highlightedEntryId, displayItems]);
 
   function setGroupLevel(index: number, field: CashflowGroupLevel) {
     setGroupLevels((current) => {
@@ -1393,38 +1655,23 @@ export default function CashflowPage() {
     invoiceFilter.length > 0 ||
     !showAllCoaCategories ||
     reimbursementFilter !== "all";
+  const balanceUsesAccountOrMonth =
+    !showAllAccounts || monthFilter.length > 0;
 
-  const cardReconciliationPartner = useMemo((): PersonalFundsPartnerFilter => {
-    const cardOnly = accountFilter.filter((account) =>
-      account.startsWith("Credit Card")
-    );
-    if (!showAllAccounts && cardOnly.length === 1) {
-      return cardOnly[0].includes("Molly") ? "Molly" : "Jess";
+  function toggleUnpaidCardFilter() {
+    if (reimbursementFilter === "unpaid-card") {
+      setReimbursementFilter("all");
+      return;
     }
-    return "Both";
-  }, [accountFilter, showAllAccounts]);
-
-  const cardReconciliation = useMemo(
-    () =>
-      buildCardBalanceReconciliation(visibleEntries, cardReconciliationPartner, {
-        resolveNetAmount: (entry) => {
-          const amounts = amountsForAccountFilter(
-            entry,
-            monthFilter,
-            accountFilter,
-            showAllAccounts
-          );
-          return roundMoney(amounts.debit - amounts.credit);
-        },
-      }),
-    [
-      visibleEntries,
-      cardReconciliationPartner,
-      monthFilter,
-      accountFilter,
-      showAllAccounts,
-    ]
-  );
+    setCoaCategoryFilter([]);
+    setReimbursementFilter("unpaid-card");
+    requestAnimationFrame(() => {
+      registerListRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }
 
   function toggleAccountFilter(account: CashflowAccount) {
     setAccountFilter((current) =>
@@ -1515,11 +1762,10 @@ export default function CashflowPage() {
   async function markMovedRowAsReimbursement(entry: LedgerEntry) {
     const checking =
       matchingCheckingAccount(entry.account) ?? entry.moved_from_account;
-    const card = entry.account;
     const coa308 = personalCardReimbursementCategory(chartOfAccounts);
     if (
       !confirm(
-        `This was a checking reimbursement, not a card purchase.\n\nIt will move back to ${checking} as ${coa308}, a matching charge will be added on ${card}, and the two will be paired.`
+        `This was a checking reimbursement, not a card purchase.\n\nIt will move back to ${checking} as ${coa308} and attach to an unpaid card charge with the same amount when there is exactly one match.`
       )
     ) {
       return;
@@ -1527,29 +1773,42 @@ export default function CashflowPage() {
     setMoveError(null);
     setMovingId(entry.id);
     const supabase = createClient();
-    const error = await identifyMovedRowAsReimbursement(supabase, entry, coa308);
+    const result = await identifyMovedRowAsReimbursement(
+      supabase,
+      entry,
+      coa308,
+      registerEntries
+    );
     setMovingId(null);
-    if (error) {
+    if (result.error) {
       setMoveError(
-        error.toLowerCase().includes("column")
+        result.error.toLowerCase().includes("column")
           ? "Run migration 073_personal_card_role.sql in Supabase, then try again."
-          : error
+          : result.error
       );
       return;
     }
     await loadEntries();
+    if (!result.linkedChargeId) {
+      setMoveError(
+        "Moved to checking as 308. No unique unpaid card charge matched this amount — use Assign charges on that row to pick the purchase it paid."
+      );
+    }
   }
 
   function startLinkCharge(entry: LedgerEntry) {
     const candidates = reimbursementCandidatesForCharge(registerEntries, entry);
     const chargeAmount = Math.abs(cardReimburseNet(entry));
     const preferred =
-      candidates.find((row) => row.amountMatch && row.duplicateCharge) ??
       candidates.find(
-        (row) => row.amountMatch && row.remaining + 0.005 >= chargeAmount
+        (row) =>
+          row.amountMatch &&
+          row.duplicateCharge &&
+          Math.abs(row.remaining - chargeAmount) < 0.005
       ) ??
-      candidates.find((row) => row.remaining + 0.005 >= chargeAmount) ??
-      candidates[0];
+      candidates.find(
+        (row) => Math.abs(row.remaining - chargeAmount) < 0.005
+      );
     setMoveError(null);
     setLinking({
       kind: "charge",
@@ -1566,7 +1825,7 @@ export default function CashflowPage() {
     setLinking({
       kind: "payment",
       entryId: entry.id,
-      selectedIds: [],
+      selectedIds: linked,
       savedChargeIds: linked,
     });
   }
@@ -1913,15 +2172,35 @@ export default function CashflowPage() {
         description="Cash-basis register: deposits and credits are positive; payments and debits are negative."
         action={
           !showForm && (
-            <Button
-              onClick={() => {
-                setEditing(null);
-                setEditingAccountEntries(null);
-                setShowForm(true);
-              }}
-            >
-              Add Entry
-            </Button>
+            <>
+              <Button
+                variant="secondary"
+                disabled={listEntries.length === 0}
+                onClick={() =>
+                  downloadCashflowSpreadsheet(listEntries, {
+                    parentById,
+                    paymentInvoiceByParentId:
+                      outlineContext.paymentInvoiceByParentId,
+                    monthFilter,
+                    accountFilter,
+                    showAllAccounts,
+                    byId: reimbursementMaps.byId,
+                    chargesByPaymentId: reimbursementMaps.chargesByPaymentId,
+                  })
+                }
+              >
+                Download spreadsheet
+              </Button>
+              <Button
+                onClick={() => {
+                  setEditing(null);
+                  setEditingAccountEntries(null);
+                  setShowForm(true);
+                }}
+              >
+                Add Entry
+              </Button>
+            </>
           )
         }
       />
@@ -1951,8 +2230,8 @@ export default function CashflowPage() {
           </p>
           <p className="mt-1 text-xs text-amber-900/80">
             {linkingPanel.kind === "charge"
-              ? "Pick the Checking 308 (personal-card refund), not a 302 owner's draw and not the Credit Card “Pays the card back” line. That card credit is already the companion of the checking 308."
-              : "Check each card purchase this transfer paid. Uncheck to mark a purchase unpaid. The total cannot exceed this 308."}
+              ? "Pick the checking 308 that paid this card purchase, not a 302 owner's draw."
+              : "Check each card purchase this transfer paid. The total must equal this 308."}
           </p>
           {linkingPanel.source ? (
             <p className="mt-2 rounded border border-amber-200 bg-white px-2 py-1.5 text-xs text-amber-950">
@@ -1972,7 +2251,7 @@ export default function CashflowPage() {
           {linkingPanel.candidates.length === 0 ? (
             <p className="mt-2 text-xs">
               {linkingPanel.kind === "charge"
-                ? "No checking 308s are available to link. Enter the repayment on checking as CoA 308 (not 302 owner's draw or 306 loan payback). If it is already tied to another card charge, pick that 308 if it still has room."
+                ? "No checking 308s are available to link. Enter the repayment on checking as CoA 308 (not 302 owner's draw or 306 loan payback). Pick a 308 whose leftover equals this charge."
                 : "No outstanding card charges are available to link, and none are on this 308 yet."}
             </p>
           ) : linkingPanel.kind === "charge" ? (
@@ -1994,22 +2273,24 @@ export default function CashflowPage() {
                     ? Math.abs(cardReimburseNet(linkingPanel.source))
                     : 0;
                   const tooSmall = row.remaining + 0.005 < chargeAmount;
+                  const leavesLeftover = row.remaining - chargeAmount > 0.005;
                   return (
                     <option
                       key={row.payment.id}
                       value={row.payment.id}
-                      disabled={tooSmall}
+                      disabled={tooSmall || leavesLeftover}
                     >
                       {reimbursementRowLabel(
                         row.payment,
                         [
                           row.amountMatch ? "amount match" : null,
-                          row.hasCardPaydown
-                            ? "this is the 308 for the card pay-down"
-                            : null,
-                          row.remaining >= 0.005
-                            ? `${formatCurrency(row.remaining)} left`
-                            : "fully allocated",
+                          leavesLeftover
+                            ? `${formatCurrency(
+                                roundMoney(row.remaining - chargeAmount)
+                              )} extra — cannot leave leftover`
+                            : row.remaining >= 0.005
+                              ? `${formatCurrency(row.remaining)} left`
+                              : "fully allocated",
                           tooSmall ? "does not fit this charge" : null,
                           row.needsCoa308 ? "will become 308" : null,
                         ]
@@ -2037,11 +2318,16 @@ export default function CashflowPage() {
                 return (
                   <>
               <p className="text-xs text-amber-900/80">
-                {`This 308 is ${formatCurrency(paymentAmount)}. ${formatCurrency(leftover)} left if you Save with the boxes below.`}
+                {Math.abs(leftover) < 0.005
+                  ? `This 308 is ${formatCurrency(paymentAmount)}. Assigned charges total that amount.`
+                  : leftover > 0
+                    ? `This 308 is ${formatCurrency(paymentAmount)}. ${formatCurrency(leftover)} extra — assign more charges or change the 308 amount so it matches exactly.`
+                    : `This 308 is ${formatCurrency(paymentAmount)}. Assigned charges are ${formatCurrency(-leftover)} too high. Uncheck some purchases.`}
               </p>
               <p className="text-xs text-amber-900/80">
-                Nothing is checked yet. Check the purchase this repayment
-                paid, or Cancel to leave the saved match as-is.
+                Check every purchase this repayment paid. Save is available only
+                when the total matches the 308. Cancel leaves the saved match
+                as-is.
               </p>
               {(["saved", "available"] as const).map((section) => {
                 const savedIds = new Set(linking.savedChargeIds);
@@ -2232,7 +2518,15 @@ export default function CashflowPage() {
               disabled={
                 (linking.kind === "charge" && !linking.selectedId) ||
                 (linking.kind === "payment" &&
-                  linking.selectedIds.length === 0) ||
+                  (!linkingPanel.source ||
+                    linking.selectedIds.length === 0 ||
+                    Math.abs(
+                      remainingReimbursementAmount(
+                        linkingPanel.source,
+                        registerEntries,
+                        { selectedChargeIds: linking.selectedIds }
+                      )
+                    ) >= 0.005)) ||
                 linkingPanel.candidates.length === 0 ||
                 Boolean(movingId)
               }
@@ -2441,7 +2735,7 @@ export default function CashflowPage() {
         </div>
       ) : (
         <>
-          <section className="mb-6 grid gap-3 sm:grid-cols-2 lg:max-w-3xl lg:grid-cols-3">
+          <section className="mb-6 grid gap-3 sm:grid-cols-2 lg:max-w-4xl">
             <Link
               href="/bank-cashflow"
               className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-brand-200 hover:shadow-md"
@@ -2449,31 +2743,59 @@ export default function CashflowPage() {
               <p className="text-xs uppercase tracking-wide text-slate-500">
                 Cash Balance (Bank Statement)
               </p>
-              <p className="mt-1 text-2xl font-bold text-brand-800">
+              <p
+                className={`mt-1 text-2xl font-bold tabular-nums ${signedBalanceClass(accountBalances.checking)}`}
+              >
                 {formatCurrency(accountBalances.checking)}
               </p>
               <p className="mt-1 text-xs text-slate-500">
                 Credits − debits
-                {hasActiveListFilters ? " (current filters)" : ""}
+                {balanceUsesAccountOrMonth ? " (selected accounts/months)" : ""}
               </p>
               <p className="mt-2 text-xs font-medium text-brand-700">
                 Checking Reconciliation →
               </p>
             </Link>
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="text-xs uppercase tracking-wide text-slate-500">
-                Credit Card Balance
-              </p>
-              <p className="mt-1 text-2xl font-bold text-brand-800">
-                {formatCurrency(accountBalances.creditCard)}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Amount owed (debits − credits)
-                {hasActiveListFilters ? " (current filters)" : ""}
-              </p>
+            <div
+              className={`rounded-xl border shadow-sm ${
+                reimbursementFilter === "unpaid-card"
+                  ? "border-brand-300 bg-brand-50 ring-1 ring-brand-200"
+                  : "border-slate-200 bg-white"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={toggleUnpaidCardFilter}
+                aria-pressed={reimbursementFilter === "unpaid-card"}
+                className="w-full cursor-pointer rounded-xl p-4 text-left transition hover:bg-white/60"
+              >
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  Credit Card Balance
+                </p>
+                <p
+                  className={`mt-1 text-2xl font-bold tabular-nums ${signedBalanceClass(accountBalances.creditCard)}`}
+                >
+                  {formatCurrency(accountBalances.creditCard)}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Unpaid card charges
+                  {balanceUsesAccountOrMonth ? " (selected accounts/months)" : ""}
+                </p>
+                <p className="mt-2 text-xs font-medium text-brand-700">
+                  {reimbursementFilter === "unpaid-card"
+                    ? unpaidCardCharges.length > 0
+                      ? "Showing unpaid charges · click to show all"
+                      : "Showing card register · click to show all"
+                    : unpaidCardCharges.length > 0
+                      ? `${unpaidCardCharges.length} unpaid charge${
+                          unpaidCardCharges.length === 1 ? "" : "s"
+                        } · click to view →`
+                      : "Unpaid purchase rows: none"}
+                </p>
+              </button>
               {reimbursementMaps.amountMatchPairs > 0 ||
               reimbursementFilter !== "all" ? (
-                <div className="mt-2 space-y-2">
+                <div className="space-y-2 px-4 pb-4">
                   {reimbursementFilter !== "all" ||
                   reimbursementMaps.amountMatchPairs > 0 ? (
                     <div className="flex flex-wrap gap-2">
@@ -2505,32 +2827,7 @@ export default function CashflowPage() {
                 </div>
               ) : null}
             </div>
-            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="text-xs uppercase tracking-wide text-slate-500">
-                S&amp;U Tax Payable
-              </p>
-              <p className="mt-1 text-2xl font-bold text-brand-800">
-                {formatCurrency(accountBalances.salesUseTaxPayable)}
-              </p>
-              <p className="mt-1 text-xs text-slate-500">
-                Collected, not yet remitted
-              </p>
-            </div>
           </section>
-
-          <div className="mb-6">
-            <CardBalanceReconciliationPanel
-              compact
-              reconciliation={cardReconciliation}
-              relatedHref="/debt-tracking"
-              relatedLabel="Open Business Debt"
-              filteredNote={
-                hasActiveListFilters
-                  ? "Totals use the current Cashflow filters and should match the Credit Card Balance card above."
-                  : undefined
-              }
-            />
-          </div>
 
           <div className="mb-4 space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <div>
@@ -2573,15 +2870,6 @@ export default function CashflowPage() {
                   </label>
                 ))}
               </div>
-              <label className="mt-3 inline-flex items-center gap-2 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={showCardPaydowns}
-                  onChange={(event) => setShowCardPaydowns(event.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500"
-                />
-                Show card payments from checking
-              </label>
               {needsIdentificationCount > 0 ||
               reimbursementMaps.duplicateGroups.length > 0 ? (
                 <div className="mt-4 max-w-md space-y-3">
@@ -2625,7 +2913,7 @@ export default function CashflowPage() {
 
             <div className="border-t border-slate-100 pt-4">
               <p className="text-sm font-medium text-slate-900">Filters</p>
-              <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <div>
                   <MultiSelectDropdown
                     label="CoA Categories"
@@ -2666,21 +2954,6 @@ export default function CashflowPage() {
                   onToggle={toggleInvoiceFilter}
                   onClear={() => setInvoiceFilter([])}
                 />
-                <label className="block text-sm">
-                  <span className="mb-1 block font-medium text-slate-900">
-                    Sort by
-                  </span>
-                  <select
-                    value={sortBy}
-                    onChange={(event) =>
-                      setSortBy(event.target.value as "date" | "description")
-                    }
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                  >
-                    <option value="date">Date</option>
-                    <option value="description">Description</option>
-                  </select>
-                </label>
               </div>
             </div>
 
@@ -2693,14 +2966,18 @@ export default function CashflowPage() {
                   <div className="flex gap-3 text-xs">
                     <button
                       type="button"
-                      onClick={() => setExpandedGroups(new Set(allGroupKeys))}
+                      onClick={() => {
+                        setExpandedGroups(new Set(allGroupKeys));
+                      }}
                       className="font-medium text-brand-700 hover:underline"
                     >
                       Expand all
                     </button>
                     <button
                       type="button"
-                      onClick={() => setExpandedGroups(new Set())}
+                      onClick={() => {
+                        setExpandedGroups(new Set());
+                      }}
                       className="font-medium text-brand-700 hover:underline"
                     >
                       Collapse all
@@ -2751,17 +3028,16 @@ export default function CashflowPage() {
 
             {hasActiveListFilters && (
               <p className="border-t border-slate-100 pt-3 text-xs text-slate-500">
-                Checking and credit card balances above use the current filters
-                (selected accounts only). 303/304 transfers show on both checking
-                registers: the sender as a deduction, the receiver as an addition.
-                Showing {displayItems.length} rows ({listEntries.length}{" "}
+                Checking and credit card balances
+                {balanceUsesAccountOrMonth
+                  ? " use the selected accounts and months"
+                  : " are the full checking and card registers"}
+                . CoA and invoice filters apply to the table only. 303/304
+                transfers show on both checking registers: the sender as a
+                deduction, the receiver as an addition. Showing{" "}
+                {displayItems.length} rows ({listEntries.length}{" "}
                 source {listEntries.length === 1 ? "entry" : "entries"}) of{" "}
                 {entries.length} total
-                {hiddenCardPaydownCount > 0
-                  ? ` · ${hiddenCardPaydownCount} card payment${
-                      hiddenCardPaydownCount === 1 ? "" : "s"
-                    } from checking hidden`
-                  : ""}
               </p>
             )}
           </div>
@@ -2802,6 +3078,29 @@ export default function CashflowPage() {
             </div>
           ) : null}
 
+          {reimbursementFilter === "unpaid-card" ? (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+              {unpaidCardCharges.length > 0 ? (
+                <>
+                  Showing unpaid card charges. Linked purchases drop out of the
+                  card balance.{" "}
+                </>
+              ) : (
+                <>
+                  No unpaid purchase rows. Card balance is unpaid charges only.{" "}
+                </>
+              )}
+              <button
+                type="button"
+                className="font-semibold underline"
+                onClick={() => setReimbursementFilter("all")}
+              >
+                Show all rows
+              </button>
+            </div>
+          ) : null}
+
+          <div ref={registerListRef}>
           <DataTable
             stickyFirstColumn
             stickyHeader
@@ -2816,17 +3115,29 @@ export default function CashflowPage() {
             columns={[
               { key: "group", label: "\u00a0", className: "min-w-[16rem]" },
               { key: "actions", label: "Actions" },
-              { key: "date", label: "Date" },
+              { key: "date", label: "Date", sortable: true },
               { key: "account", label: "Account" },
-              { key: "description", label: "Description" },
-              { key: "coaCategory", label: "CoA Category" },
-              { key: "amount", label: "Amount" },
-              { key: "reimbursed", label: "Reimbursed" },
-              { key: "invoiceId", label: "Invoice ID" },
-              { key: "purchasedBy", label: "Purchased By" },
-              { key: "paidTo", label: "Paid To" },
-              { key: "department", label: "Department" },
+              { key: "description", label: "Description", sortable: true },
+              { key: "coaCategory", label: "CoA Category", sortable: true },
+              { key: "amount", label: "Amount", sortable: true },
+              { key: "reimbursed", label: "Status" },
+              { key: "enteredBy", label: "Entered", sortable: true },
+              { key: "invoiceId", label: "Invoice ID", sortable: true },
+              { key: "purchasedBy", label: "Purchased By", sortable: true },
+              { key: "paidTo", label: "Paid To", sortable: true },
+              { key: "department", label: "Department", sortable: true },
             ]}
+            sortKey={sortBy}
+            sortDirection={sortDirection}
+            onSort={(key) => {
+              if (isCashflowSortField(key)) toggleSort(key);
+            }}
+            highlightedRowId={highlightedEntryId}
+            getRowId={(_row, index) => {
+              const item = displayItems[index];
+              if (!item || item.kind === "group") return undefined;
+              return item.entry.id;
+            }}
             rows={displayItems.map((item) => {
               if (item.kind === "group") {
                 const expanded = expandedGroups.has(item.key);
@@ -2869,6 +3180,7 @@ export default function CashflowPage() {
                   paidTo: "—",
                   department: "—",
                   reimbursed: "—",
+                  enteredBy: "—",
                 };
               }
 
@@ -2881,23 +3193,20 @@ export default function CashflowPage() {
                 accountFilter,
                 showAllAccounts
               );
-              const setRole = reimbursementSetRole(entry);
               return {
                 group: (
-                  <div
-                    className="text-slate-400"
-                    style={{
-                      paddingLeft:
-                        setRole === "card-paydown"
-                          ? `${Math.max(item.level, 0) * 1.25 + 1.25}rem`
-                          : item.level === 0
+                    <div
+                      className="text-slate-400"
+                      style={{
+                        paddingLeft:
+                          item.level === 0
                             ? undefined
                             : `${item.level * 1.25 + 1.75}rem`,
-                    }}
-                  >
-                    {item.level === 0 && setRole !== "card-paydown" ? "" : "·"}
-                  </div>
-                ),
+                      }}
+                    >
+                      {item.level === 0 ? "" : "·"}
+                    </div>
+                  ),
                 actions: (
                   <div className="flex flex-col gap-1.5">
                     {isExpense ? (
@@ -2931,6 +3240,27 @@ export default function CashflowPage() {
                         }}
                       >
                         {movingId === entry.id ? "Saving..." : "Change to 308"}
+                      </Button>
+                    ) : null}
+                    {isCheckingCardReimbursement(entry) ||
+                    reimbursementMaps.chargesByPaymentId.has(entry.id) ? (
+                      <Button
+                        variant="secondary"
+                        className="w-full min-h-[33px] px-3 py-1.5"
+                        onClick={() => startLinkPayment(entry)}
+                      >
+                        Assign charges
+                      </Button>
+                    ) : null}
+                    {isPersonalCardCharge(entry) ? (
+                      <Button
+                        variant="secondary"
+                        className="w-full min-h-[33px] px-3 py-1.5"
+                        onClick={() => startLinkCharge(entry)}
+                      >
+                        {entry.reimbursed_by_ledger_id
+                          ? "Change payment"
+                          : "Link checking"}
                       </Button>
                     ) : null}
                     {needsPersonalCardIdentification(entry) ? (
@@ -2992,38 +3322,10 @@ export default function CashflowPage() {
                   </div>
                 ),
                 date: displayDate(entry),
-                account: (
-                  <span>
-                    {entry.account ?? "—"}
-                    {setRole === "purchase" ? (
-                      <span className="mt-0.5 block text-xs font-medium text-slate-600">
-                        1 · Card purchase
-                      </span>
-                    ) : null}
-                    {setRole === "card-paydown" ? (
-                      <span className="mt-0.5 block text-xs font-medium text-slate-600">
-                        2 · Pays the card back
-                      </span>
-                    ) : null}
-                    {entry.moved_from_account ? (
-                      <span className="mt-0.5 block text-xs font-medium text-amber-800">
-                        Moved from {entry.moved_from_account}
-                      </span>
-                    ) : null}
-                  </span>
-                ),
+                account: entry.account ?? "—",
                 coaCategory: (
                   <span className="text-slate-600">
-                    {setRole === "card-paydown"
-                      ? "Card pay-down"
-                      : (entry.coa_category ?? "—")}
-                    {setRole === "card-paydown" &&
-                    entry.coa_category &&
-                    isPersonalCardReimbursementCoa(entry.coa_category) ? (
-                      <span className="mt-0.5 block text-xs text-slate-500">
-                        {entry.coa_category}
-                      </span>
-                    ) : null}
+                    {entry.coa_category ?? "—"}
                     {isCheckingAccount(entry.account) &&
                     reimbursementMaps.chargesByPaymentId.has(entry.id) &&
                     !isPersonalCardReimbursementCoa(entry.coa_category) ? (
@@ -3052,11 +3354,6 @@ export default function CashflowPage() {
                     {cashflowEntryDescriptionKey(entry, parentById) ||
                       entry.clients?.name ||
                       "—"}
-                    {isCardReimburseMateRow(entry) ? (
-                      <span className="mt-0.5 block text-xs text-slate-500">
-                        Offset of the checking 308 — not a second purchase
-                      </span>
-                    ) : null}
                   </span>
                 ),
                 reimbursed: (() => {
@@ -3073,14 +3370,7 @@ export default function CashflowPage() {
                     );
                   }
                   if (status.kind === "card-mate") {
-                    return (
-                      <span>
-                        <span className="text-slate-700">Pays the card back</span>
-                        <span className="mt-0.5 block text-xs text-slate-500">
-                          Nets the card charge to $0
-                        </span>
-                      </span>
-                    );
+                    return "—";
                   }
                   if (status.kind === "charge-outstanding") {
                     const canSelect = isUnreimbursedBusinessPersonalCardCharge(
@@ -3101,13 +3391,15 @@ export default function CashflowPage() {
                               <span className="block font-medium text-amber-800">
                                 Unpaid
                               </span>
-                              <span className="mt-0.5 block text-xs text-slate-500">
-                                Check to include in a 308
+                              <span className="mt-0.5 block text-xs text-amber-900">
+                                Check to pay from checking
                               </span>
                             </span>
                           </label>
                         ) : (
-                          <span className="font-medium text-amber-800">Unpaid</span>
+                          <span className="font-medium text-amber-800">
+                            Unpaid
+                          </span>
                         )}
                         {reimbursementMaps.duplicateChargeIds.has(entry.id) ? (
                           <span className="mt-0.5 block text-xs text-amber-900">
@@ -3120,11 +3412,14 @@ export default function CashflowPage() {
                   if (status.kind === "charge-reimbursed") {
                     return (
                       <span>
-                        <span className="text-xs text-slate-700">
-                          Paid · {coaAccountNumber(status.payment.coa_category) ?? 308}{" "}
-                          {formatDate(status.payment.entry_date)}
-                          {status.mismatch ? " · amount differs" : ""}
-                        </span>
+                        <JumpToLinkedRowButton
+                          entryId={status.payment.id}
+                          title={paidByCheckingTitle(status.payment)}
+                          detail={`${shortLedgerDescription(status.payment)}${
+                            status.mismatch ? " · amount differs" : ""
+                          }`}
+                          onJump={revealLedgerEntry}
+                        />
                         {reimbursementMaps.duplicateChargeIds.has(entry.id) ? (
                           <span className="mt-0.5 block text-xs text-amber-900">
                             Possible duplicate · {cardChargeOriginNote(entry)}
@@ -3136,43 +3431,51 @@ export default function CashflowPage() {
                   if (status.kind === "payment-unmatched") {
                     return (
                       <span className="font-medium text-amber-800">
-                        Unmatched 308
+                        Unmatched
                       </span>
                     );
                   }
                   if (status.kind === "payment-matched") {
-                    const chargeCount = status.charges.length;
-                    const dates = status.charges
-                      .slice(0, 3)
-                      .map((row) => formatDate(row.entry_date));
-                    const extra =
-                      chargeCount > 3 ? ` +${chargeCount - 3} more` : "";
                     return (
-                      <span>
-                        <span className="text-slate-700">
-                          Pays {chargeCount} card charge{chargeCount === 1 ? "" : "s"}
+                      <span className="space-y-1">
+                        <span className="block text-xs text-slate-700">
+                          {paidChargesTitle(status.charges, status.remaining)}
                         </span>
-                        <span className="mt-0.5 block text-xs text-slate-500">
-                          {dates.join(", ")}{extra}
-                          {status.remaining >= 0.005
-                            ? ` · ${formatCurrency(status.remaining)} left`
-                            : status.remaining < -0.005
-                              ? " · over allocated"
-                              : ""}
-                        </span>
+                        {status.charges.slice(0, 3).map((charge) => (
+                          <JumpToLinkedRowButton
+                            key={charge.id}
+                            entryId={charge.id}
+                            title={shortLedgerDescription(charge, 40)}
+                            detail={`${formatDate(charge.entry_date)} · ${formatCurrency(
+                              Math.abs(cardReimburseNet(charge))
+                            )}`}
+                            onJump={revealLedgerEntry}
+                          />
+                        ))}
+                        {status.charges.length > 3 ? (
+                          <span className="block text-xs text-slate-500">
+                            +{status.charges.length - 3} more
+                          </span>
+                        ) : null}
                       </span>
                     );
                   }
                   return "—";
                 })(),
+                enteredBy: cashflowEnteredDisplay(entry),
               };
             })}
             emptyMessage={
-              hasActiveListFilters
-                ? "No cashflow entries match the current filters."
-                : "No cashflow entries yet."
+              reimbursementFilter === "unpaid-card"
+                ? unpaidCardCharges.length > 0
+                  ? "No unpaid card charges match the current filters."
+                  : "No credit card rows to show."
+                : hasActiveListFilters
+                  ? "No cashflow entries match the current filters."
+                  : "No cashflow entries yet."
             }
           />
+          </div>
         </>
       )}
     </AppShell>

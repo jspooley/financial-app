@@ -86,12 +86,12 @@ const BUCKET_META: Record<
     hint: "Same total as Business Debt. Checking has not reimbursed these yet.",
   },
   "reimbursed-charge": {
-    label: "Reimbursed purchases (still on card)",
-    hint: "Linked to a checking 308 but the charge debit is still on the card register.",
+    label: "Paid by checking",
+    hint: "Linked to a checking 308. Not in the unpaid card balance.",
   },
   "card-paydown": {
-    label: "308 card paydowns",
-    hint: "Credits that offset checking 308 reimbursements (“Pays the card back”).",
+    label: "Old card paydown credits",
+    hint: "Leftover hidden credits from the previous card-offset approach. Run migration 082 to remove them.",
   },
   "needs-identification": {
     label: "Needs charge or reimbursement ID",
@@ -460,9 +460,14 @@ export function buildCardBalanceReconciliation(
     };
   });
 
-  const creditCardBalance = roundMoney(
-    buckets.reduce((sum, bucket) => sum + bucket.total, 0)
+  const unpaidTotal = roundMoney(
+    grouped.unreimbursed.reduce((sum, line) => sum + line.amount, 0) +
+      grouped["needs-identification"].reduce(
+        (sum, line) => sum + line.amount,
+        0
+      )
   );
+  const creditCardBalance = roundMoney(-unpaidTotal);
 
   const paydownPairing = buildCardPaydownPairing(
     entries,

@@ -7,7 +7,6 @@ import { DataTable } from "@/components/ui/DataTable";
 import { selectFieldClass } from "@/components/ui/FormFields";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { buildCardBalanceReconciliation } from "@/lib/card-balance-reconciliation";
-import { mergeCardReimburseDisplayMates } from "@/lib/card-reimbursement";
 import { fetchAllLedgerRows, normalizeLedgerRow } from "@/lib/ledger-db";
 import {
   buildPersonalFundsReport,
@@ -145,8 +144,7 @@ export default function DebtTrackingPage() {
   );
 
   const cardReconciliation = useMemo(() => {
-    const registerEntries = mergeCardReimburseDisplayMates(entries);
-    return buildCardBalanceReconciliation(registerEntries, partner);
+    return buildCardBalanceReconciliation(entries, partner);
   }, [entries, partner]);
 
   const unreimbursedDisplay = -report.unreimbursedTotal;
@@ -207,15 +205,6 @@ export default function DebtTrackingPage() {
 
           <CardBalanceReconciliationPanel reconciliation={cardReconciliation} />
 
-          <LinesTable
-            title="Unreimbursed personal credit card charges"
-            hint="Business purchases on a personal card that checking has not reimbursed yet. On Cashflow, check the unpaid purchases, then Mark Items as Reimbursed."
-            lines={report.unreimbursedCardCharges.map((line) => ({
-              ...line,
-              amount: -line.amount,
-            }))}
-            emptyMessage="No unreimbursed personal credit card charges for this partner."
-          />
           <LinesTable
             title="Business Loan"
             hint="300 Owner's Contribution - Jes and 310 Owner's Contribution - Molly."

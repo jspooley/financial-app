@@ -48,6 +48,7 @@ export const CASHFLOW_ACCOUNTS = [
   "Checking - Jess",
   "Checking - Molly",
   "Credit Card - Jess",
+  "Lowes CC - Jess",
   "Credit Card - Molly",
 ] as const;
 
@@ -177,6 +178,8 @@ export interface LedgerDbRow extends Omit<
   variance_notes?: string | null;
   created_at?: string;
   updated_at?: string;
+  created_by?: string | null;
+  created_by_name?: string | null;
   clients?: { name: string } | null;
   trade_partners?: { company_name: string } | null;
 }
@@ -397,6 +400,8 @@ export interface LedgerEntry {
   variance_notes: string;
   created_at: string;
   updated_at: string;
+  created_by?: string | null;
+  created_by_name?: string | null;
   clients?: Pick<Client, "name"> | null;
   trade_partners?: Pick<TradePartner, "company_name"> | null;
 }

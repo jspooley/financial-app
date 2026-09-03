@@ -514,6 +514,18 @@ export function nowTimeInputValue() {
   return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 }
 
+/** Local calendar date for a timestamptz (when the row was entered). */
+export function formatEnteredAt(value: string | Date | null | undefined) {
+  if (value == null || value === "") return "—";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return formatDate(value);
+  return new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  }).format(date);
+}
+
 export function formatDate(value: string | Date | null | undefined) {
   const iso = toDateInputValue(value);
   if (!iso) return "—";

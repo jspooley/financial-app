@@ -181,6 +181,8 @@ export function normalizeLedgerRow(
     variance_notes: String(r.variance_notes ?? "").slice(0, VARIANCE_NOTES_MAX_LENGTH),
     created_at: r.created_at as string,
     updated_at: r.updated_at as string,
+    created_by: (r.created_by as string | null) ?? null,
+    created_by_name: ((r.created_by_name as string | null) ?? "").trim() || null,
     clients: r.clients ?? null,
     trade_partners: r.trade_partners ?? null,
   };

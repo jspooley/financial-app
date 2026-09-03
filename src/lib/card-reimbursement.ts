@@ -165,17 +165,18 @@ export function withCardReimburseCluster(
   matched: LedgerEntry[],
   pool: LedgerEntry[]
 ) {
+  const included = new Set(matched.map((entry) => entry.id));
   const parentIds = new Set<string>();
   for (const entry of matched) {
+    if (isCheckingCardReimbursement(entry)) parentIds.add(entry.id);
     const parentId = cardReimburseClusterParentId(entry);
     if (parentId) parentIds.add(parentId);
   }
   if (parentIds.size === 0) return matched;
 
-  const included = new Set(matched.map((entry) => entry.id));
   const extras = pool.filter((entry) => {
     if (included.has(entry.id)) return false;
-    if (isCheckingCardReimbursement(entry)) return false;
+    if (parentIds.has(entry.id)) return true;
     const parentId = cardReimburseClusterParentId(entry);
     return parentId != null && parentIds.has(parentId);
   });
@@ -559,6 +560,62 @@ export function chargesByPaymentId(entries: LedgerEntry[]) {
   return map;
 }
 
+export function paydownsByPaymentId(entries: LedgerEntry[]) {
+  const map = new Map<string, LedgerEntry[]>();
+  for (const entry of entries) {
+    if (!isCardReimburseMateRow(entry) || !entry.source_ledger_id) continue;
+    const list = map.get(entry.source_ledger_id) ?? [];
+    list.push(entry);
+    map.set(entry.source_ledger_id, list);
+  }
+  return map;
+}
+
+export type ChargeCardPaydownKind = "posted" | "missing" | "other-card";
+
+export function chargeCardPaydownKind(
+  charge: Pick<LedgerEntry, "account">,
+  paydowns: LedgerEntry[]
+): { kind: ChargeCardPaydownKind; paydownAccount?: string } {
+  if (paydowns.length === 0) return { kind: "missing" };
+  if (paydowns.some((row) => row.account === charge.account)) {
+    return { kind: "posted" };
+  }
+  return {
+    kind: "other-card",
+    paydownAccount: paydowns[0]?.account ?? undefined,
+  };
+}
+
+/** Unpaid card purchase (or a moved row that still needs ID). Linked charges are paid. */
+export function isCardChargeStillOnCard(
+  entry: LedgerEntry,
+  parentById?: Map<string, LedgerEntry>
+) {
+  if (needsPersonalCardIdentification(entry)) return true;
+  return isUnreimbursedBusinessPersonalCardCharge(entry, parentById);
+}
+
+/** One unpaid charge on this card with the same leftover amount, or null if 0/many. */
+export function uniqueUnpaidChargeMatchingPayment(
+  payment: LedgerEntry,
+  entries: LedgerEntry[],
+  cardAccount?: string | null
+): LedgerEntry | null {
+  const amountKey = reimbursementAmountKey(payment);
+  const remaining = remainingReimbursementAmount(payment, entries);
+  const owner = ownerFromAccount(payment.account, payment.purchaser);
+  const matches = outstandingPersonalCardCharges(entries).filter((charge) => {
+    if (charge.id === payment.id) return false;
+    if (cardAccount && charge.account !== cardAccount) return false;
+    if (reimbursementAmountKey(charge) !== amountKey) return false;
+    const chargeOwner = ownerFromAccount(charge.account, charge.purchaser);
+    if (owner && chargeOwner && owner !== chargeOwner) return false;
+    return Math.abs(cardReimburseNet(charge)) <= remaining + 0.005;
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export function allocatedReimbursementAmount(
   entries: LedgerEntry[],
   paymentId: string
@@ -599,6 +656,20 @@ export function remainingReimbursementAmount(
     }
   }
   return roundMoney(paymentAmount - allocated);
+}
+
+export function leftoverReimbursementMessage(remaining: number): string | null {
+  if (remaining > 0.005) {
+    return `This 308 is ${remaining.toFixed(
+      2
+    )} more than the assigned charges. Assign more charges, or change the 308 amount or CoA so it matches exactly.`;
+  }
+  if (remaining < -0.005) {
+    return `Assigned charges exceed this 308 by ${(-remaining).toFixed(
+      2
+    )}. Uncheck some charges.`;
+  }
+  return null;
 }
 
 export function unmatchedCheckingReimbursements(entries: LedgerEntry[]) {
@@ -782,8 +853,14 @@ export async function linkCardChargeToReimbursement(
     excludeChargeId: charge.id,
   });
   const chargeAmount = roundMoney(Math.abs(cardReimburseNet(charge)));
-  if (remaining + 0.005 < chargeAmount) {
-    return `This 308 only has ${remaining.toFixed(2)} left, which is less than this charge (${chargeAmount.toFixed(2)}). Unlink other charges first, or allocate from the 308.`;
+  const leftover = leftoverReimbursementMessage(
+    roundMoney(remaining - chargeAmount)
+  );
+  if (leftover) {
+    if (remaining + 0.005 < chargeAmount) {
+      return `This 308 only has ${remaining.toFixed(2)} left, which is less than this charge (${chargeAmount.toFixed(2)}). Unlink other charges first, or pick a 308 that matches this amount.`;
+    }
+    return leftover;
   }
 
   const { error: linkError } = await supabase
@@ -828,10 +905,9 @@ export async function applyPaymentChargeAllocations(
   const remaining = remainingReimbursementAmount(paymentRow, entries, {
     selectedChargeIds: uniqueIds,
   });
-  if (remaining < -0.005) {
-    return `Those charges add up to more than this 308 (${roundMoney(
-      Math.abs(cardReimburseNet(paymentRow))
-    ).toFixed(2)}). Uncheck some charges.`;
+  const leftover = leftoverReimbursementMessage(remaining);
+  if (leftover) {
+    return leftover;
   }
 
   const currentlyLinked = chargesByPaymentId(entries).get(paymentRow.id) ?? [];
@@ -993,57 +1069,6 @@ export async function unlinkCardChargeReimbursement(
   return error?.message ?? null;
 }
 
-function buildPersonalCardChargeDuplicate(
-  parent: LedgerEntry,
-  cardAccount: CashflowAccount
-) {
-  const debit = roundMoney(Number(parent.debit_amount ?? 0));
-  const credit = roundMoney(Number(parent.credit_amount ?? 0));
-  const coa = parent.coa_category ?? "";
-  return {
-    entry_date: parent.entry_date,
-    designer_cost: 0,
-    quantity: 1,
-    credit_debit: debit >= credit ? ("debit" as const) : ("credit" as const),
-    description: parent.description,
-    wholesale_retail: parent.wholesale_retail ?? "retail",
-    trade_partner_id: parent.trade_partner_id,
-    discount_percent: parent.discount_percent ?? 0,
-    shipping_receiving_amount: 0,
-    receiving_amount: 0,
-    retail_price: 0,
-    tax_amount: 0,
-    customer_price: 0,
-    client_id: parent.client_id,
-    po_number: parent.po_number,
-    purchaser: parent.purchaser,
-    department: parent.department ?? "Interior Design",
-    coa_category: parent.coa_category,
-    debit_amount: debit,
-    credit_amount: credit,
-    account: cardAccount,
-    moved_from_account: null,
-    personal_card_role: "charge" as const,
-    reimbursed_by_ledger_id: parent.id,
-    expense_type: null,
-    invoiced: false,
-    invoice_id: parent.invoice_id,
-    paid: false,
-    date_paid: null,
-    paid_to: parent.paid_to,
-    payment_type: null,
-    payment_fee: 0,
-    payment_amount: 0,
-    expense_amount: 0,
-    ...cashflowClassificationFlags(coa),
-    variance_accepted: false,
-    variance_amount: 0,
-    variance_notes: "",
-    source_ledger_id: null,
-    companion_kind: null,
-  };
-}
-
 export async function identifyMovedRowAsCharge(
   supabase: SupabaseClient,
   entry: LedgerEntry
@@ -1061,10 +1086,14 @@ export async function identifyMovedRowAsCharge(
 export async function identifyMovedRowAsReimbursement(
   supabase: SupabaseClient,
   entry: LedgerEntry,
-  coa308: string
-): Promise<string | null> {
+  coa308: string,
+  entries: LedgerEntry[] = []
+): Promise<{ error: string | null; linkedChargeId: string | null }> {
   if (!needsPersonalCardIdentification(entry)) {
-    return "This row does not need charge vs reimbursement identification.";
+    return {
+      error: "This row does not need charge vs reimbursement identification.",
+      linkedChargeId: null,
+    };
   }
   const cardAccount = isCreditCardAccount(entry.account) ? entry.account : null;
   const checkingAccount =
@@ -1073,7 +1102,10 @@ export async function identifyMovedRowAsReimbursement(
       ? entry.moved_from_account
       : null);
   if (!cardAccount || !checkingAccount) {
-    return "This row is not on a personal credit card that maps to checking.";
+    return {
+      error: "This row is not on a personal credit card that maps to checking.",
+      linkedChargeId: null,
+    };
   }
 
   const move = accountMoveFields(entry, checkingAccount);
@@ -1088,12 +1120,7 @@ export async function identifyMovedRowAsReimbursement(
       ...flags,
     })
     .eq("id", entry.id);
-  if (updateError) return updateError.message;
-
-  const { error: insertError } = await supabase
-    .from("ledger")
-    .insert(buildPersonalCardChargeDuplicate(entry, cardAccount));
-  if (insertError) return insertError.message;
+  if (updateError) return { error: updateError.message, linkedChargeId: null };
 
   const payment: LedgerEntry = {
     ...entry,
@@ -1103,7 +1130,18 @@ export async function identifyMovedRowAsReimbursement(
     reimbursed_by_ledger_id: null,
     ...flags,
   };
-  return syncCardReimburseMate(supabase, payment);
+  const pool = [...entries.filter((row) => row.id !== entry.id), payment];
+  const charge = uniqueUnpaidChargeMatchingPayment(payment, pool, cardAccount);
+  if (charge) {
+    const { error: linkError } = await supabase
+      .from("ledger")
+      .update({ reimbursed_by_ledger_id: payment.id })
+      .eq("id", charge.id);
+    if (linkError) return { error: linkError.message, linkedChargeId: null };
+  }
+
+  const mateError = await deleteCardReimburseMate(supabase, payment.id);
+  return { error: mateError, linkedChargeId: charge?.id ?? null };
 }
 
 export async function recodeCheckingPaymentToPersonalCardReimburse(
@@ -1220,10 +1258,14 @@ export function isCardReimbursementParent(
   return isCheckingCardReimbursement(entry);
 }
 
-export function buildCardReimburseMatePayload(parent: LedgerEntry) {
+export function buildCardReimburseMatePayload(
+  parent: LedgerEntry,
+  cardAccount?: CashflowAccount | null
+) {
   const debit = roundMoney(Number(parent.credit_amount ?? 0));
   const credit = roundMoney(Number(parent.debit_amount ?? 0));
-  const account = matchingCreditCardAccount(parent.account) as CashflowAccount;
+  const account = (cardAccount ??
+    matchingCreditCardAccount(parent.account)) as CashflowAccount;
   return {
     entry_date: parent.entry_date,
     designer_cost: 0,
@@ -1304,35 +1346,12 @@ export function mergeCardReimburseDisplayMates(entries: LedgerEntry[]) {
   return extras.length === 0 ? entries : [...entries, ...extras];
 }
 
+/** Removes leftover card_reimburse companion rows. New 308s do not post a card credit. */
 export async function syncCardReimburseMate(
   supabase: SupabaseClient,
   parent: LedgerEntry
 ): Promise<string | null> {
-  const { data: existing, error: loadError } = await supabase
-    .from("ledger")
-    .select("id")
-    .eq("source_ledger_id", parent.id)
-    .eq("companion_kind", CARD_REIMBURSE_COMPANION_KIND)
-    .maybeSingle();
-  if (loadError) return loadError.message;
-
-  const shouldHaveMate =
-    isCardReimbursementParent(parent) &&
-    matchingCreditCardAccount(parent.account) != null;
-
-  if (!shouldHaveMate) {
-    if (existing?.id) {
-      const { error } = await supabase.from("ledger").delete().eq("id", existing.id);
-      if (error) return error.message;
-    }
-    return null;
-  }
-
-  const payload = buildCardReimburseMatePayload(parent);
-  const { error } = existing?.id
-    ? await supabase.from("ledger").update(payload).eq("id", existing.id)
-    : await supabase.from("ledger").insert(payload);
-  return error?.message ?? null;
+  return deleteCardReimburseMate(supabase, parent.id);
 }
 
 export async function deleteCardReimburseMate(
@@ -1350,18 +1369,26 @@ export async function deleteCardReimburseMate(
 export function reimbursementStatus(
   entry: LedgerEntry,
   byId: Map<string, LedgerEntry>,
-  chargesByPaymentId: Map<string, LedgerEntry[]>
+  chargesByPaymentId: Map<string, LedgerEntry[]>,
+  paydownsByPayment: Map<string, LedgerEntry[]> = new Map()
 ):
   | { kind: "na" }
   | { kind: "needs-identification" }
   | { kind: "charge-outstanding" }
-  | { kind: "charge-reimbursed"; payment: LedgerEntry; mismatch: boolean }
+  | {
+      kind: "charge-reimbursed";
+      payment: LedgerEntry;
+      mismatch: boolean;
+      cardPaydown: ChargeCardPaydownKind;
+      paydownAccount?: string;
+    }
   | { kind: "payment-unmatched" }
   | {
       kind: "payment-matched";
       charges: LedgerEntry[];
       remaining: number;
       mismatch: boolean;
+      cardPaydownPosted: boolean;
     }
   | { kind: "card-mate"; parent?: LedgerEntry } {
   if (needsPersonalCardIdentification(entry)) {
@@ -1382,7 +1409,17 @@ export function reimbursementStatus(
     const mismatch =
       siblings.length === 1 &&
       Math.abs(cardReimburseNet(entry) - cardReimburseNet(payment)) >= 0.005;
-    return { kind: "charge-reimbursed", payment, mismatch };
+    const paydown = chargeCardPaydownKind(
+      entry,
+      paydownsByPayment.get(payment.id) ?? []
+    );
+    return {
+      kind: "charge-reimbursed",
+      payment,
+      mismatch,
+      cardPaydown: paydown.kind,
+      paydownAccount: paydown.paydownAccount,
+    };
   }
   if (
     isCheckingCardReimbursement(entry) ||
@@ -1394,7 +1431,13 @@ export function reimbursementStatus(
     if (charges.length === 0) return { kind: "payment-unmatched" };
     const remaining = remainingReimbursementAmount(entry, [...byId.values()]);
     const mismatch = remaining < -0.005;
-    return { kind: "payment-matched", charges, remaining, mismatch };
+    return {
+      kind: "payment-matched",
+      charges,
+      remaining,
+      mismatch,
+      cardPaydownPosted: (paydownsByPayment.get(entry.id) ?? []).length > 0,
+    };
   }
   return { kind: "na" };
 }

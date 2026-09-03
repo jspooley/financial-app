@@ -11,7 +11,9 @@ export function isCheckingAccount(
 export function isCreditCardAccount(
   account: string | null | undefined
 ): account is CashflowAccount {
-  return Boolean(account?.startsWith("Credit Card"));
+  return Boolean(
+    account?.startsWith("Credit Card") || account?.startsWith("Lowes CC")
+  );
 }
 
 export function wasMovedFromChecking(
@@ -28,6 +30,9 @@ export function isCardBillPaymentCoa(category: string | null | undefined) {
 export function matchingCreditCardAccount(
   account: string | null | undefined
 ): CashflowAccount | null {
+  if (account === "Lowes CC - Jess") {
+    return "Lowes CC - Jess";
+  }
   if (account === "Checking - Jess" || account === "Credit Card - Jess") {
     return "Credit Card - Jess";
   }
@@ -40,7 +45,11 @@ export function matchingCreditCardAccount(
 export function matchingCheckingAccount(
   account: string | null | undefined
 ): CashflowAccount | null {
-  if (account === "Credit Card - Jess" || account === "Checking - Jess") {
+  if (
+    account === "Credit Card - Jess" ||
+    account === "Checking - Jess" ||
+    account === "Lowes CC - Jess"
+  ) {
     return "Checking - Jess";
   }
   if (account === "Credit Card - Molly" || account === "Checking - Molly") {

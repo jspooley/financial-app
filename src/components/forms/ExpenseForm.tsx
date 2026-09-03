@@ -6,8 +6,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
 import { collectClientPoOptions } from "@/lib/client-po-db";
-import { cashflowClassificationFlags, isRecordedTransferCoa } from "@/lib/coa";
-import { accountMoveFields, personalCardRoleFields, isCashflowAccount } from "@/lib/account-move";
+import { cashflowClassificationFlags, isPersonalCardReimbursementCoa, isRecordedTransferCoa } from "@/lib/coa";
+import { accountMoveFields, personalCardRoleFields, isCashflowAccount, isCheckingAccount } from "@/lib/account-move";
 import { normalizeInvoiceId, poNumbersMatch } from "@/lib/invoice-utils";
 import { normalizeLedgerRow } from "@/lib/ledger-db";
 import {
@@ -17,6 +17,7 @@ import {
 import {
   deleteCardReimburseMate,
   isCheckingCardReimbursement,
+  leftoverReimbursementMessage,
   syncCardReimburseMate,
 } from "@/lib/card-reimbursement";
 import {
@@ -223,6 +224,41 @@ export function ExpenseForm({
     const debit = roundMoney(values.debit_amount);
     const credit = roundMoney(values.credit_amount);
     const supabase = createClient();
+
+    if (
+      initial &&
+      isCheckingAccount(values.account) &&
+      isPersonalCardReimbursementCoa(values.coa_category)
+    ) {
+      const { data: linkedRows, error: linkedError } = await supabase
+        .from("ledger")
+        .select("debit_amount, credit_amount")
+        .eq("reimbursed_by_ledger_id", initial.id);
+      if (linkedError) {
+        setError(linkedError.message);
+        return;
+      }
+      const linked = linkedRows ?? [];
+      if (linked.length > 0) {
+        const allocated = roundMoney(
+          linked.reduce(
+            (sum, row) =>
+              sum +
+              Math.abs(
+                Number(row.debit_amount ?? 0) - Number(row.credit_amount ?? 0)
+              ),
+            0
+          )
+        );
+        const leftover = leftoverReimbursementMessage(
+          roundMoney(Math.abs(debit - credit) - allocated)
+        );
+        if (leftover) {
+          setError(leftover);
+          return;
+        }
+      }
+    }
     const payload = {
       entry_date: values.entry_date,
       department: values.department,
