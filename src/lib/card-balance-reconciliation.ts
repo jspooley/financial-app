@@ -13,7 +13,7 @@ import {
 } from "@/lib/card-reimbursement";
 import type { PersonalFundsPartnerFilter } from "@/lib/personal-funds-report";
 import { isPaymentCompanionRow } from "@/lib/payment-companions";
-import { partnerFromEntry } from "@/lib/true-up-report";
+import { knownPartnerFromEntry } from "@/lib/true-up-report";
 import type { CashflowAccount, LedgerEntry, KnownPurchaser } from "@/lib/types";
 import { roundMoney } from "@/lib/utils";
 
@@ -182,7 +182,7 @@ function reconciliationLineFromEntry(
     account: entry.account ?? "—",
     description: entry.description?.trim() || "—",
     category: entry.coa_category?.trim() || "—",
-    partner: partnerFromEntry(entry),
+    partner: knownPartnerFromEntry(entry),
     bucket,
     amount,
   };

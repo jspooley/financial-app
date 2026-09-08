@@ -659,11 +659,6 @@ export function remainingReimbursementAmount(
 }
 
 export function leftoverReimbursementMessage(remaining: number): string | null {
-  if (remaining > 0.005) {
-    return `This 308 is ${remaining.toFixed(
-      2
-    )} more than the assigned charges. Assign more charges, or change the 308 amount or CoA so it matches exactly.`;
-  }
   if (remaining < -0.005) {
     return `Assigned charges exceed this 308 by ${(-remaining).toFixed(
       2
@@ -905,9 +900,8 @@ export async function applyPaymentChargeAllocations(
   const remaining = remainingReimbursementAmount(paymentRow, entries, {
     selectedChargeIds: uniqueIds,
   });
-  const leftover = leftoverReimbursementMessage(remaining);
-  if (leftover) {
-    return leftover;
+  if (remaining < -0.005) {
+    return leftoverReimbursementMessage(remaining);
   }
 
   const currentlyLinked = chargesByPaymentId(entries).get(paymentRow.id) ?? [];

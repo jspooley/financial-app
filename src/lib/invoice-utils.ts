@@ -208,9 +208,11 @@ export function isLedgerLineFullyPaid(entry: LedgerAmountEntry) {
   return getLedgerUnderpaymentAmount(entry) < 0.005;
 }
 
-/** Debit goods/services line that has been paid — locked on the Ledger page. */
+/** Debit goods/services line that has been paid — locked on the Ledger page.
+ * Personal-use lines are not client-paid; $0 billed would otherwise lock Edit. */
 export function isPaidLedgerRecord(entry: LedgerAmountEntry) {
   if (entry.credit_debit !== "debit") return false;
+  if (entry.balance_sheet) return false;
   return Boolean(entry.paid) || isLedgerLineFullyPaid(entry);
 }
 

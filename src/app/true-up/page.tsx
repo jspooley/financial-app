@@ -3,29 +3,120 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { SelectField } from "@/components/ui/FormFields";
+import { SelectField, selectFieldClass } from "@/components/ui/FormFields";
+import { TrueUpExcludeReasonModal } from "@/components/true-up/TrueUpExcludeReasonModal";
 import { createClient } from "@/lib/supabase/client";
 import { fetchAllLedgerRows, normalizeLedgerRow } from "@/lib/ledger-db";
 import {
   addPartnerAmount,
   buildTrueUpReport,
   emptyPartnerAmounts,
+  isTrueUpExcludeSchemaError,
   partnerTotal,
+  TRUE_UP_EXCLUDE_SETUP_SQL,
   TRUE_UP_EXCLUSIONS,
   type PartnerAmounts,
   type TrueUpBlock,
+  type TrueUpGroupBy,
   type TrueUpTransaction,
   type TrueUpUntaggedTransfer,
   type TrueUpYtdTotals,
 } from "@/lib/true-up-report";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import type { LedgerEntry } from "@/lib/types";
+
+const BLOCK_COL_SPAN = 8;
+const PENDING_NOTE_COL_SPAN = 6;
+const excludeSelectClass = `${selectFieldClass} h-8 min-h-8 w-[4.75rem] px-1.5 py-0 pr-7 text-sm`;
 
 function money(value: number) {
   return formatCurrency(value);
 }
 
+type ExcludeValue = "yes" | "no" | "mixed";
+
+function excludeValueFromTransactions(
+  transactions: TrueUpTransaction[]
+): ExcludeValue {
+  if (transactions.length === 0) return "no";
+  const excludedCount = transactions.filter((txn) => txn.excluded).length;
+  if (excludedCount === 0) return "no";
+  if (excludedCount === transactions.length) return "yes";
+  return "mixed";
+}
+
+function excludeReasonFromTransactions(
+  transactions: TrueUpTransaction[]
+): string {
+  const reasons = [
+    ...new Set(
+      transactions
+        .filter((txn) => txn.excluded)
+        .map((txn) => (txn.excludeReason ?? "").trim())
+        .filter(Boolean)
+    ),
+  ];
+  if (reasons.length === 0) return "";
+  if (reasons.length === 1) return reasons[0];
+  return "Multiple reasons";
+}
+
+function ExcludeCell({
+  value = "no",
+  onChange,
+  disabled,
+  empty,
+  label,
+  reason,
+}: {
+  value?: ExcludeValue;
+  onChange?: (excluded: boolean) => void;
+  disabled?: boolean;
+  empty?: boolean;
+  label?: string;
+  reason?: string;
+}) {
+  if (empty || !onChange) return <td />;
+  return (
+    <td className="px-3 py-1.5">
+      <select
+        aria-label={label ?? "Exclude from true up"}
+        className={excludeSelectClass}
+        disabled={disabled}
+        title={reason || undefined}
+        value={value === "yes" ? "yes" : value === "mixed" ? "mixed" : "no"}
+        onChange={(event) => {
+          const next = event.target.value;
+          if (next === "mixed") return;
+          onChange(next === "yes");
+        }}
+      >
+        <option value="no">No</option>
+        <option value="yes">Yes</option>
+        {value === "mixed" ? (
+          <option value="mixed" disabled>
+            Mixed
+          </option>
+        ) : null}
+      </select>
+      {reason ? (
+        <p
+          className="mt-0.5 max-w-[9rem] truncate text-[11px] text-slate-500"
+          title={reason}
+        >
+          {reason}
+        </p>
+      ) : null}
+    </td>
+  );
+}
+
 function isSettled(amounts: PartnerAmounts) {
-  return Math.abs(amounts.jess) < 0.005 && Math.abs(amounts.molly) < 0.005;
+  return (
+    Math.abs(amounts.jess) < 0.005 &&
+    Math.abs(amounts.molly) < 0.005 &&
+    Math.abs(amounts.tbd) < 0.005
+  );
 }
 
 function amountClass(
@@ -49,12 +140,27 @@ function AmountCells({
   amounts,
   emphasize,
   tone,
+  unknown,
 }: {
   amounts: PartnerAmounts;
   emphasize?: boolean;
   tone?: "danger" | "success";
+  unknown?: boolean;
 }) {
   const total = partnerTotal(amounts);
+  const unknownClass = `px-3 py-1.5 text-right italic ${
+    emphasize ? "font-bold" : "font-normal"
+  } text-slate-500`;
+  if (unknown) {
+    return (
+      <>
+        <td className={unknownClass}>TBD</td>
+        <td className={unknownClass}>TBD</td>
+        <td className={unknownClass}>TBD</td>
+        <td className={amountClass(0, emphasize, tone)}>{money(0)}</td>
+      </>
+    );
+  }
   return (
     <>
       <td className={amountClass(amounts.jess, emphasize, tone)}>
@@ -62,6 +168,9 @@ function AmountCells({
       </td>
       <td className={amountClass(amounts.molly, emphasize, tone)}>
         {money(amounts.molly)}
+      </td>
+      <td className={amountClass(amounts.tbd, emphasize, tone)}>
+        {money(amounts.tbd)}
       </td>
       <td className={amountClass(total, emphasize, tone)}>{money(total)}</td>
     </>
@@ -71,9 +180,11 @@ function AmountCells({
 function DiscrepancyRow({
   amounts,
   leadingCells,
+  showExclude,
 }: {
   amounts: PartnerAmounts;
   leadingCells: number;
+  showExclude?: boolean;
 }) {
   const settled = isSettled(amounts);
   const labelClass = settled
@@ -85,6 +196,7 @@ function DiscrepancyRow({
         <td key={index} />
       ))}
       <td className={labelClass}>Discrepancy</td>
+      {showExclude ? <td /> : null}
       <AmountCells
         amounts={amounts}
         emphasize
@@ -99,11 +211,13 @@ function TransferYtdRows({
   totals,
   extraLeading = 0,
   grouped,
+  showExclude,
 }: {
   groupLabel: string;
   totals: TrueUpYtdTotals;
   extraLeading?: number;
   grouped?: boolean;
+  showExclude?: boolean;
 }) {
   const rowClass = grouped
     ? "border-b border-slate-100 bg-slate-50"
@@ -118,6 +232,7 @@ function TransferYtdRows({
         <td className="px-3 py-1.5 font-bold text-slate-900">
           Required Transfer
         </td>
+        {showExclude ? <td /> : null}
         <AmountCells amounts={totals.required} emphasize />
       </tr>
       <tr className="border-b border-slate-100">
@@ -128,25 +243,57 @@ function TransferYtdRows({
         <td className="px-3 py-1.5 font-bold text-slate-900">
           Recorded Transfers
         </td>
+        {showExclude ? <td /> : null}
         <AmountCells amounts={totals.recorded} emphasize />
       </tr>
-      <DiscrepancyRow amounts={totals.discrepancy} leadingCells={1 + extraLeading} />
+      <DiscrepancyRow
+        amounts={totals.discrepancy}
+        leadingCells={1 + extraLeading}
+        showExclude={showExclude}
+      />
+      <tr className="border-b border-slate-100">
+        <td />
+        {Array.from({ length: extraLeading }, (_, index) => (
+          <td key={index} />
+        ))}
+        <td className="px-3 py-1.5 font-bold text-slate-900">
+          Unassigned (TBD)
+        </td>
+        {showExclude ? <td /> : null}
+        <AmountCells amounts={totals.unassigned} emphasize />
+      </tr>
     </>
   );
 }
 
 function BlockTable({
   sectionLabel,
+  groupHeader,
   secondaryHeader,
+  categoryHeader = "COA Category",
   blocks,
   ytdTotals,
   expandableCategories = false,
+  showRecordedRows = true,
+  stickyHeader = false,
+  onExclude,
+  excluding,
 }: {
   sectionLabel: string;
+  groupHeader?: string;
   secondaryHeader: string;
+  categoryHeader?: string;
   blocks: TrueUpBlock[];
   ytdTotals?: TrueUpYtdTotals;
   expandableCategories?: boolean;
+  showRecordedRows?: boolean;
+  stickyHeader?: boolean;
+  onExclude?: (
+    ids: string[],
+    excluded: boolean,
+    context?: { label: string }
+  ) => void;
+  excluding?: boolean;
 }) {
   if (blocks.length === 0) {
     return (
@@ -157,17 +304,29 @@ function BlockTable({
     );
   }
 
+  const headerCellClass = stickyHeader
+    ? "sticky top-0 z-10 bg-slate-50 px-3 py-2 font-semibold shadow-[0_1px_0_0_rgb(226,232,240)]"
+    : "px-3 py-2 font-semibold";
+
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+    <div
+      className={`rounded-xl border border-slate-200 bg-white shadow-sm ${
+        stickyHeader ? "max-h-[70vh] overflow-auto" : "overflow-x-auto"
+      }`}
+    >
       <table className="min-w-full text-sm">
-        <thead>
+        <thead className={stickyHeader ? "sticky top-0 z-10 bg-slate-50" : undefined}>
           <tr className="border-b border-slate-200 bg-slate-50 text-left text-slate-600">
-            <th className="px-3 py-2 font-semibold">{sectionLabel}</th>
-            <th className="px-3 py-2 font-semibold">{secondaryHeader}</th>
-            <th className="px-3 py-2 font-semibold">COA Category</th>
-            <th className="px-3 py-2 text-right font-semibold">Jess</th>
-            <th className="px-3 py-2 text-right font-semibold">Molly</th>
-            <th className="px-3 py-2 text-right font-semibold">Total</th>
+            <th className={headerCellClass}>
+              {groupHeader ?? sectionLabel}
+            </th>
+            <th className={headerCellClass}>{secondaryHeader}</th>
+            <th className={headerCellClass}>{categoryHeader}</th>
+            <th className={headerCellClass}>Exclude from true up</th>
+            <th className={`${headerCellClass} text-right`}>Jess</th>
+            <th className={`${headerCellClass} text-right`}>Molly</th>
+            <th className={`${headerCellClass} text-right`}>TBD</th>
+            <th className={`${headerCellClass} text-right`}>Total</th>
           </tr>
         </thead>
         <tbody>
@@ -177,18 +336,22 @@ function BlockTable({
               block={block}
               showDivider={blockIndex > 0}
               expandableCategories={expandableCategories}
+              showRecordedRows={showRecordedRows}
+              onExclude={onExclude}
+              excluding={excluding}
             />
           ))}
           {ytdTotals ? (
             <>
               <tr>
-                <td colSpan={6} className="h-3 bg-white p-0" />
+                <td colSpan={BLOCK_COL_SPAN} className="h-3 bg-white p-0" />
               </tr>
               <TransferYtdRows
                 groupLabel="YTD"
                 totals={ytdTotals}
                 extraLeading={1}
                 grouped
+                showExclude
               />
             </>
           ) : null}
@@ -265,10 +428,20 @@ function BlockRows({
   block,
   showDivider,
   expandableCategories = false,
+  showRecordedRows = true,
+  onExclude,
+  excluding,
 }: {
   block: TrueUpBlock;
   showDivider: boolean;
   expandableCategories?: boolean;
+  showRecordedRows?: boolean;
+  onExclude?: (
+    ids: string[],
+    excluded: boolean,
+    context?: { label: string }
+  ) => void;
+  excluding?: boolean;
 }) {
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     () => new Set()
@@ -288,7 +461,7 @@ function BlockRows({
       <>
         {showDivider ? (
           <tr>
-            <td colSpan={6} className="h-3 bg-white p-0" />
+            <td colSpan={BLOCK_COL_SPAN} className="h-3 bg-white p-0" />
           </tr>
         ) : null}
         <tr className="border-b border-slate-100 bg-amber-50/60">
@@ -299,7 +472,7 @@ function BlockRows({
             Pending
           </td>
           <td
-            colSpan={4}
+            colSpan={PENDING_NOTE_COL_SPAN}
             className="px-3 py-1.5 text-sm text-amber-900/80"
           >
             Open job with no purchases or client payments recorded yet.
@@ -323,7 +496,7 @@ function BlockRows({
     <>
       {showDivider ? (
         <tr>
-          <td colSpan={6} className="h-3 bg-white p-0" />
+          <td colSpan={BLOCK_COL_SPAN} className="h-3 bg-white p-0" />
         </tr>
       ) : null}
       {isAwaitingPayment ? (
@@ -335,14 +508,16 @@ function BlockRows({
             Pending
           </td>
           <td
-            colSpan={4}
+            colSpan={PENDING_NOTE_COL_SPAN}
             className="px-3 py-1.5 text-sm text-amber-900/80"
           >
             Purchases recorded; awaiting client payment before true-up. COGS is
             not shared — the payee will reimburse whoever bought the goods once
-            payment is received.
+            payment is received. Invoiced amounts sit in TBD until cash is
+            received. Unpurchased goods (purchaser or account TBD) sit in TBD
+            until someone buys them.
             {hasProjectedBreakdown
-              ? " Projected profit below uses invoiced amounts."
+              ? " Projected profit below uses invoiced totals, not who will be paid."
               : null}
           </td>
         </tr>
@@ -387,13 +562,31 @@ function BlockRows({
                   row.category
                 )}
               </td>
+              <ExcludeCell
+                value={excludeValueFromTransactions(transactions)}
+                reason={excludeReasonFromTransactions(transactions)}
+                disabled={excluding || !onExclude || transactions.length === 0}
+                onChange={
+                  onExclude && transactions.length > 0
+                    ? (excluded) =>
+                        onExclude(
+                          [...new Set(transactions.map((txn) => txn.id))],
+                          excluded,
+                          { label: row.category }
+                        )
+                    : undefined
+                }
+                label={`Exclude ${row.category} from true up`}
+              />
               <AmountCells amounts={row.amounts} />
             </tr>
             {canExpand && isOpen
               ? transactions.map((txn) => (
                   <tr
                     key={`${block.id}-txn-${row.category}-${txn.id}`}
-                    className="border-b border-slate-50 bg-slate-50/60"
+                    className={`border-b border-slate-50 bg-slate-50/60 ${
+                      txn.excluded ? "text-slate-400" : ""
+                    }`}
                   >
                     <td />
                     <td className="whitespace-nowrap px-3 py-1 text-slate-500">
@@ -409,6 +602,20 @@ function BlockRows({
                         </span>
                       ) : null}
                     </td>
+                    <ExcludeCell
+                      value={txn.excluded ? "yes" : "no"}
+                      reason={txn.excludeReason}
+                      disabled={excluding || !onExclude}
+                      onChange={
+                        onExclude
+                          ? (excluded) =>
+                              onExclude([txn.id], excluded, {
+                                label: txn.description,
+                              })
+                          : undefined
+                      }
+                      label={`Exclude ${txn.description} from true up`}
+                    />
                     <AmountCells amounts={transactionAmounts(txn)} />
                   </tr>
                 ))
@@ -424,6 +631,24 @@ function BlockRows({
           <td />
           <td />
           <td className="px-3 py-1.5 italic text-slate-700">{row.category}</td>
+          <ExcludeCell
+            value={excludeValueFromTransactions(row.transactions ?? [])}
+            reason={excludeReasonFromTransactions(row.transactions ?? [])}
+            disabled={
+              excluding || !onExclude || (row.transactions?.length ?? 0) === 0
+            }
+            onChange={
+              onExclude && (row.transactions?.length ?? 0) > 0
+                ? (excluded) =>
+                    onExclude(
+                      [...new Set((row.transactions ?? []).map((txn) => txn.id))],
+                      excluded,
+                      { label: row.category }
+                    )
+                : undefined
+            }
+            label={`Exclude ${row.category} from true up`}
+          />
           <AmountCells amounts={row.amounts} />
         </tr>
       ))}
@@ -432,6 +657,7 @@ function BlockRows({
           <td className="px-3 py-1.5 font-medium text-slate-900">{block.groupLabel}</td>
           <td className="px-3 py-1.5 text-slate-600">{block.secondaryLabel}</td>
           <td className="px-3 py-1.5 text-slate-500">No category activity</td>
+          <ExcludeCell empty />
           <AmountCells amounts={block.subtotal} />
         </tr>
       ) : null}
@@ -441,22 +667,27 @@ function BlockRows({
         <td />
         <td />
         <td className="px-3 py-1.5 font-bold text-slate-900">Subtotal</td>
+        <ExcludeCell empty />
         <AmountCells amounts={block.subtotal} emphasize />
       </tr>
       <tr className="border-b border-slate-100">
         <td />
         <td />
         <td className="px-3 py-1.5 font-bold text-slate-900">Required Transfer</td>
+        <ExcludeCell empty />
         <AmountCells amounts={block.required} emphasize />
       </tr>
+      {showRecordedRows ? (
+        <>
       <tr>
-        <td colSpan={6} className="h-2 bg-white p-0" />
+        <td colSpan={BLOCK_COL_SPAN} className="h-2 bg-white p-0" />
       </tr>
       {block.recordedRows.map((row) => (
         <tr key={`${block.id}-rec-${row.category}`} className="border-b border-slate-100">
           <td />
           <td />
           <td className="px-3 py-1.5 text-slate-800">{row.category}</td>
+          <ExcludeCell empty />
           <AmountCells amounts={row.amounts} />
         </tr>
       ))}
@@ -464,9 +695,16 @@ function BlockRows({
         <td />
         <td />
         <td className="px-3 py-1.5 font-bold text-slate-900">Recorded Transfers</td>
+        <ExcludeCell empty />
         <AmountCells amounts={block.recorded} emphasize />
       </tr>
-      <DiscrepancyRow amounts={block.discrepancy} leadingCells={2} />
+      <DiscrepancyRow
+        amounts={block.discrepancy}
+        leadingCells={2}
+        showExclude
+      />
+        </>
+      ) : null}
         </>
       ) : isAwaitingPayment ? (
         <>
@@ -476,6 +714,7 @@ function BlockRows({
         <td className="px-3 py-1.5 font-bold text-slate-900">
           {hasProjectedBreakdown ? "Subtotal (projected)" : "Subtotal"}
         </td>
+        <ExcludeCell empty />
         <AmountCells amounts={projectedSubtotal} emphasize />
       </tr>
       <tr className="border-b border-slate-100 bg-amber-50/30">
@@ -486,7 +725,12 @@ function BlockRows({
             ? "Required Transfer (projected)"
             : "Required Transfer (after payment)"}
         </td>
-        <AmountCells amounts={projectedRequired} emphasize />
+        <ExcludeCell empty />
+        <AmountCells
+          amounts={projectedRequired}
+          emphasize
+          unknown={block.projectedPayeeUnknown}
+        />
       </tr>
         </>
       ) : null}
@@ -557,10 +801,80 @@ function UntaggedTransfersTable({ rows }: { rows: TrueUpUntaggedTransfer[] }) {
 export default function TrueUpReportPage() {
   const currentYear = new Date().getFullYear();
   const [year, setYear] = useState(currentYear);
+  const [groupBy, setGroupBy] = useState<TrueUpGroupBy>("month");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [entries, setEntries] = useState<ReturnType<typeof normalizeLedgerRow>[]>(
     []
+  );
+  const [excluding, setExcluding] = useState(false);
+  const [excludeError, setExcludeError] = useState<string | null>(null);
+  const [excludePrompt, setExcludePrompt] = useState<{
+    ids: string[];
+    label: string;
+  } | null>(null);
+
+  const patchEntry = useCallback((id: string, patch: Partial<LedgerEntry>) => {
+    setEntries((current) =>
+      current.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry))
+    );
+  }, []);
+
+  const saveExclude = useCallback(
+    async (ids: string[], excluded: boolean, reason = "") => {
+      const unique = [...new Set(ids.filter(Boolean))];
+      if (unique.length === 0) return;
+      if (excluded && !reason.trim()) return;
+      const previous = new Map(
+        unique.map((id) => {
+          const entry = entries.find((item) => item.id === id);
+          return [
+            id,
+            {
+              true_up_eligible: entry?.true_up_eligible ?? null,
+              true_up_payment_id: entry?.true_up_payment_id ?? null,
+              true_up_exclude_reason: entry?.true_up_exclude_reason ?? "",
+            },
+          ] as const;
+        })
+      );
+      const patch: Partial<LedgerEntry> = {
+        true_up_eligible: excluded ? false : true,
+        true_up_exclude_reason: excluded ? reason.trim() : "",
+        ...(excluded ? { true_up_payment_id: null } : {}),
+      };
+      setExcludeError(null);
+      setExcluding(true);
+      for (const id of unique) patchEntry(id, patch);
+      const supabase = createClient();
+      const { error } = await supabase.from("ledger").update(patch).in("id", unique);
+      setExcluding(false);
+      if (!error) return;
+      for (const id of unique) {
+        const prior = previous.get(id);
+        if (prior) patchEntry(id, prior);
+      }
+      setExcludeError(
+        isTrueUpExcludeSchemaError(error.message)
+          ? `Run migrations 083 and 084 in Supabase so exclude can save.\n\n${TRUE_UP_EXCLUDE_SETUP_SQL}`
+          : error.message
+      );
+    },
+    [entries, patchEntry]
+  );
+
+  const requestExclude = useCallback(
+    (ids: string[], excluded: boolean, context?: { label: string }) => {
+      if (excluded) {
+        setExcludePrompt({
+          ids,
+          label: context?.label ?? "this item",
+        });
+        return;
+      }
+      void saveExclude(ids, false, "");
+    },
+    [saveExclude]
   );
 
   const loadData = useCallback(async () => {
@@ -584,7 +898,10 @@ export default function TrueUpReportPage() {
     void loadData();
   }, [loadData]);
 
-  const report = useMemo(() => buildTrueUpReport(entries, year), [entries, year]);
+  const report = useMemo(
+    () => buildTrueUpReport(entries, year, groupBy),
+    [entries, year, groupBy]
+  );
   const yearOptions = useMemo(() => {
     const years = new Set<number>([currentYear, currentYear - 1, currentYear - 2]);
     for (const entry of entries) {
@@ -600,24 +917,43 @@ export default function TrueUpReportPage() {
         title="True Up Report"
         description="Cash-basis accounting between partners. Purchases (goods, shipping, receiving, and fees) stay with whoever paid and are reimbursed in full from client payments — never split 50/50. Client payments go to whoever received them. Required transfer reimburses the purchaser and splits profit only 50/50: send is negative, receive is positive."
         action={
-          <SelectField
-            label="Year"
-            className="min-w-32"
-            value={String(year)}
-            onChange={(event) => setYear(Number(event.target.value))}
-          >
-            {yearOptions.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </SelectField>
+          <div className="flex flex-wrap gap-2">
+            <SelectField
+              label="Year"
+              className="min-w-32"
+              value={String(year)}
+              onChange={(event) => setYear(Number(event.target.value))}
+            >
+              {yearOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </SelectField>
+            <SelectField
+              label="Group expenses by"
+              className="min-w-44"
+              value={groupBy}
+              onChange={(event) =>
+                setGroupBy(event.target.value as TrueUpGroupBy)
+              }
+            >
+              <option value="month">Month</option>
+              <option value="coa">COA category</option>
+            </SelectField>
+          </div>
         }
       />
 
       {loadError ? (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           Could not load ledger data: {loadError}
+        </div>
+      ) : null}
+
+      {excludeError ? (
+        <div className="mb-4 whitespace-pre-wrap rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {excludeError}
         </div>
       ) : null}
 
@@ -635,19 +971,31 @@ export default function TrueUpReportPage() {
               blocks={report.sales}
               ytdTotals={report.ytdSales}
               expandableCategories
+              stickyHeader
+              onExclude={requestExclude}
+              excluding={excluding}
             />
           </CollapsibleSection>
 
           <CollapsibleSection
             title="Expenses"
-            description="Operating cash by month and COA category. Expand a category to see its transactions. Expenses (debits) are negative. Required transfer splits that month's cash 50/50: send is negative, receive is positive."
+            description={
+              groupBy === "coa"
+                ? "Operating cash by COA category, with months inside each category. Expand a month to see its transactions. Expenses (debits) are negative. Required transfer splits that category's cash 50/50: send is negative, receive is positive. Recorded transfers stay on the YTD row because they are not tagged to an expense category."
+                : "Operating cash by month and COA category. Expand a category to see its transactions. Expenses (debits) are negative. Required transfer splits that month's cash 50/50: send is negative, receive is positive."
+            }
           >
             <BlockTable
               sectionLabel="Expenses"
-              secondaryHeader="Date"
+              groupHeader={groupBy === "coa" ? "COA Category" : "Expenses"}
+              secondaryHeader={groupBy === "coa" ? "" : "Date"}
+              categoryHeader={groupBy === "coa" ? "Month" : "COA Category"}
               blocks={report.expenses}
               ytdTotals={report.ytdExpenses}
               expandableCategories
+              showRecordedRows={groupBy !== "coa"}
+              onExclude={requestExclude}
+              excluding={excluding}
             />
           </CollapsibleSection>
 
@@ -657,7 +1005,9 @@ export default function TrueUpReportPage() {
               Year-to-date Required, Recorded, and Discrepancy for Goods and
               Services and for Expenses, then Grand Total YTD for both.
               Positive = received; negative = sent. Discrepancy is required
-              minus recorded.
+              minus recorded. Unassigned (TBD) is invoiced income not yet
+              received and purchases not yet assigned to Jess or Molly — it is
+              not part of Required or Recorded.
             </p>
             <div className="mb-3 space-y-1 text-sm">
               <p className="font-semibold text-slate-900">
@@ -679,6 +1029,7 @@ export default function TrueUpReportPage() {
                     <th className="px-3 py-2 font-semibold">COA Category</th>
                     <th className="px-3 py-2 text-right font-semibold">Jess</th>
                     <th className="px-3 py-2 text-right font-semibold">Molly</th>
+                    <th className="px-3 py-2 text-right font-semibold">TBD</th>
                     <th className="px-3 py-2 text-right font-semibold">Total</th>
                   </tr>
                 </thead>
@@ -721,8 +1072,21 @@ export default function TrueUpReportPage() {
               ))}
             </ul>
           </section>
+
         </div>
       )}
+      {excludePrompt ? (
+        <TrueUpExcludeReasonModal
+          itemLabel={excludePrompt.label}
+          count={excludePrompt.ids.length}
+          onCancel={() => setExcludePrompt(null)}
+          onConfirm={(reason) => {
+            const ids = excludePrompt.ids;
+            setExcludePrompt(null);
+            void saveExclude(ids, true, reason);
+          }}
+        />
+      ) : null}
     </AppShell>
   );
 }

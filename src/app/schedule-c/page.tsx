@@ -4,41 +4,79 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
-import { coaAccountNumber } from "@/lib/coa";
-import { normalizeLedgerRow } from "@/lib/ledger-db";
+import { fetchAllLedgerRows, normalizeLedgerRow } from "@/lib/ledger-db";
+import {
+  buildScheduleCReport,
+  type ScheduleCSplit,
+} from "@/lib/schedule-c";
 import { createClient } from "@/lib/supabase/client";
 import type { ChartOfAccount, LedgerEntry } from "@/lib/types";
 import { formatCurrency, roundMoney } from "@/lib/utils";
 
-type ScheduleCRow = {
-  category: string;
-  debits: number;
-  credits: number;
-  scheduleCAmount: number;
-  treatment: string;
-  lineCount: number;
-};
-
-function scheduleCTreatment(category: string) {
-  const accountNumber = coaAccountNumber(category);
-  if (accountNumber === 100) return "Gross receipts";
-  if (accountNumber === 101) return "Cost of goods sold";
-  if (accountNumber != null && accountNumber >= 200 && accountNumber < 300) {
-    return "Other expense";
-  }
-  return "Excluded from Schedule C";
+function money(value: number) {
+  return formatCurrency(value);
 }
 
-function scheduleCAmount(category: string, debits: number, credits: number) {
-  const accountNumber = coaAccountNumber(category);
-  if (accountNumber === 100) return roundMoney(credits - debits);
-  if (
-    accountNumber === 101 ||
-    (accountNumber != null && accountNumber >= 200 && accountNumber < 300)
-  ) {
-    return roundMoney(debits - credits);
-  }
-  return 0;
+function moneyOrDash(value: number, hidden?: boolean) {
+  if (hidden) return "—";
+  return money(value);
+}
+
+function signedClass(value: number) {
+  if (value < 0) return "text-red-700";
+  if (value > 0) return "text-emerald-700";
+  return "text-slate-900";
+}
+
+function combineDesignerShare(split: ScheduleCSplit): ScheduleCSplit {
+  return {
+    ...split,
+    jess: roundMoney(split.jess + split.perDesigner),
+    molly: roundMoney(split.molly + split.perDesigner),
+    perDesigner: 0,
+  };
+}
+
+function SplitCells({
+  split,
+  negate,
+  showBreakout,
+}: {
+  split: ScheduleCSplit;
+  negate?: boolean;
+  showBreakout: boolean;
+}) {
+  const display = showBreakout ? split : combineDesignerShare(split);
+  const jess = negate ? -display.jess : display.jess;
+  const molly = negate ? -display.molly : display.molly;
+  const perDesigner = negate ? -split.perDesigner : split.perDesigner;
+  const tbd = negate ? -display.tbd : display.tbd;
+  const business = negate ? -display.business : display.business;
+  return (
+    <>
+      <td className={`px-3 py-1.5 text-right tabular-nums ${signedClass(jess)}`}>
+        {money(jess)}
+      </td>
+      <td className={`px-3 py-1.5 text-right tabular-nums ${signedClass(molly)}`}>
+        {money(molly)}
+      </td>
+      {showBreakout ? (
+        <td
+          className={`px-3 py-1.5 text-right tabular-nums ${signedClass(perDesigner)}`}
+        >
+          {money(perDesigner)}
+        </td>
+      ) : null}
+      <td className={`px-3 py-1.5 text-right tabular-nums ${signedClass(tbd)}`}>
+        {money(tbd)}
+      </td>
+      <td
+        className={`px-3 py-1.5 text-right tabular-nums font-semibold ${signedClass(business)}`}
+      >
+        {money(business)}
+      </td>
+    </>
+  );
 }
 
 export default function ScheduleCPage() {
@@ -46,6 +84,7 @@ export default function ScheduleCPage() {
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [chartOfAccounts, setChartOfAccounts] = useState<ChartOfAccount[]>([]);
   const [year, setYear] = useState(currentYear);
+  const [showBreakout, setShowBreakout] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -55,7 +94,7 @@ export default function ScheduleCPage() {
     const supabase = createClient();
     const [{ data: ledgerData, error: ledgerError }, { data: coaData, error: coaError }] =
       await Promise.all([
-        supabase.from("ledger").select("*").limit(10000),
+        fetchAllLedgerRows(supabase, "*"),
         supabase
           .from("chart_of_accounts")
           .select("*")
@@ -63,11 +102,11 @@ export default function ScheduleCPage() {
       ]);
 
     if (ledgerError || coaError) {
-      setLoadError(ledgerError?.message ?? coaError?.message ?? "Could not load report.");
+      setLoadError(ledgerError ?? coaError?.message ?? "Could not load report.");
       setEntries([]);
       setChartOfAccounts([]);
     } else {
-      setEntries((ledgerData ?? []).map((row) => normalizeLedgerRow(row)));
+      setEntries(ledgerData.map((row) => normalizeLedgerRow(row)));
       setChartOfAccounts(coaData ?? []);
     }
     setLoading(false);
@@ -86,117 +125,51 @@ export default function ScheduleCPage() {
     return [...years].sort((a, b) => b.localeCompare(a));
   }, [currentYear, entries]);
 
-  const filteredEntries = useMemo(
-    () => entries.filter((entry) => entry.entry_date.startsWith(`${year}-`)),
-    [entries, year]
+  const report = useMemo(
+    () => buildScheduleCReport(entries, chartOfAccounts, year),
+    [chartOfAccounts, entries, year]
   );
 
-  const rows = useMemo<ScheduleCRow[]>(() => {
-    const categories = new Set(
-      chartOfAccounts.map((account) => account.category.trim()).filter(Boolean)
-    );
-    for (const entry of filteredEntries) {
-      categories.add(entry.coa_category?.trim() || "Uncategorized");
-    }
-
-    return [...categories]
-      .map((category) => {
-        const categoryEntries = filteredEntries.filter(
-          (entry) => (entry.coa_category?.trim() || "Uncategorized") === category
-        );
-        const debits = roundMoney(
-          categoryEntries.reduce(
-            (sum, entry) => sum + Number(entry.debit_amount ?? 0),
-            0
-          )
-        );
-        const credits = roundMoney(
-          categoryEntries.reduce(
-            (sum, entry) => sum + Number(entry.credit_amount ?? 0),
-            0
-          )
-        );
-        const scheduleEntries = categoryEntries.filter(
-          (entry) => !entry.balance_sheet
-        );
-        const scheduleDebits = roundMoney(
-          scheduleEntries.reduce(
-            (sum, entry) => sum + Number(entry.debit_amount ?? 0),
-            0
-          )
-        );
-        const scheduleCredits = roundMoney(
-          scheduleEntries.reduce(
-            (sum, entry) => sum + Number(entry.credit_amount ?? 0),
-            0
-          )
-        );
-
-        return {
-          category,
-          debits,
-          credits,
-          scheduleCAmount: scheduleCAmount(
-            category,
-            scheduleDebits,
-            scheduleCredits
-          ),
-          treatment: scheduleCTreatment(category),
-          lineCount: categoryEntries.length,
-        };
-      })
-      .sort((a, b) => {
-        const aNumber = coaAccountNumber(a.category) ?? Number.MAX_SAFE_INTEGER;
-        const bNumber = coaAccountNumber(b.category) ?? Number.MAX_SAFE_INTEGER;
-        return aNumber - bNumber || a.category.localeCompare(b.category);
-      });
-  }, [chartOfAccounts, filteredEntries]);
-
-  const totals = useMemo(() => {
-    let grossReceipts = 0;
-    let cogs = 0;
-    let otherExpenses = 0;
-    for (const row of rows) {
-      const accountNumber = coaAccountNumber(row.category);
-      if (accountNumber === 100) grossReceipts += row.scheduleCAmount;
-      else if (accountNumber === 101) cogs += row.scheduleCAmount;
-      else if (accountNumber != null && accountNumber >= 200 && accountNumber < 300) {
-        otherExpenses += row.scheduleCAmount;
-      }
-    }
-    grossReceipts = roundMoney(grossReceipts);
-    cogs = roundMoney(cogs);
-    otherExpenses = roundMoney(otherExpenses);
-    return {
-      grossReceipts,
-      cogs,
-      otherExpenses,
-      netProfit: roundMoney(grossReceipts - cogs - otherExpenses),
-    };
-  }, [rows]);
+  const jessTotalNet = roundMoney(
+    report.netProfit.jess + report.netProfit.perDesigner
+  );
+  const mollyTotalNet = roundMoney(
+    report.netProfit.molly + report.netProfit.perDesigner
+  );
 
   return (
     <AppShell>
       <PageHeader
         title="Schedule C Report"
-        description="Chart of accounts breakout for business income and expenses."
+        description="Chart of accounts breakout for business income and expenses. Sales, COGS, and most operating expenses split 50/50 unless a line is excluded from true-up. 203 commissions and fees and 214 taxes stay with whoever paid them."
       />
 
       <section className="mb-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="max-w-xs">
-          <label className="block text-sm">
-            <span className="mb-1 block font-medium text-slate-900">Year</span>
-            <select
-              value={year}
-              onChange={(event) => setYear(event.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2"
-            >
-              {yearOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div className="max-w-xs">
+            <label className="block text-sm">
+              <span className="mb-1 block font-medium text-slate-900">Year</span>
+              <select
+                value={year}
+                onChange={(event) => setYear(event.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              >
+                {yearOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              checked={showBreakout}
+              onChange={(event) => setShowBreakout(event.target.checked)}
+              className="h-4 w-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500"
+            />
+            Show excluded vs 50/50 breakout
           </label>
         </div>
       </section>
@@ -211,10 +184,10 @@ export default function ScheduleCPage() {
         <>
           <section className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {[
-              ["Gross Receipts", totals.grossReceipts],
-              ["Cost of Goods Sold", -totals.cogs],
-              ["Other Expenses", -totals.otherExpenses],
-              ["Net Profit", totals.netProfit],
+              ["Gross Receipts", report.grossReceipts.business],
+              ["Cost of Goods Sold", -report.cogs.business],
+              ["Other Expenses", -report.otherExpenses.business],
+              ["Net Profit", report.netProfit.business],
             ].map(([label, amount]) => (
               <div
                 key={String(label)}
@@ -224,29 +197,123 @@ export default function ScheduleCPage() {
                   {label}
                 </p>
                 <p
-                  className={`mt-1 text-xl font-semibold ${
-                    Number(amount) < 0
-                      ? "text-red-700"
-                      : Number(amount) > 0
-                        ? "text-emerald-700"
-                        : "text-slate-900"
-                  }`}
+                  className={`mt-1 text-xl font-semibold ${signedClass(Number(amount))}`}
                 >
-                  {formatCurrency(Number(amount))}
+                  {money(Number(amount))}
                 </p>
               </div>
             ))}
+          </section>
+
+          <section className="mb-5 overflow-x-auto rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <h2 className="text-sm font-semibold text-slate-900">
+              {showBreakout ? "Jess, Molly, and Per Designer" : "Jess and Molly"}
+            </h2>
+            <p className="mb-3 mt-1 text-sm text-slate-600">
+              {showBreakout
+                ? "Jess and Molly are lines excluded from true-up. Per Designer is each person’s half of everything still shared. Each designer’s Schedule C net is their column plus Per Designer."
+                : "Jess and Molly include each person’s half of shared amounts plus any lines excluded from true-up. Check “Show excluded vs 50/50 breakout” to separate those."}
+            </p>
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-left text-slate-600">
+                  <th className="px-3 py-2 font-semibold"> </th>
+                  <th className="px-3 py-2 text-right font-semibold">Jess</th>
+                  <th className="px-3 py-2 text-right font-semibold">Molly</th>
+                  {showBreakout ? (
+                    <th className="px-3 py-2 text-right font-semibold">
+                      Per Designer
+                    </th>
+                  ) : null}
+                  <th className="px-3 py-2 text-right font-semibold">TBD</th>
+                  <th className="px-3 py-2 text-right font-semibold">
+                    Business
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b border-slate-100">
+                  <td className="px-3 py-1.5 font-medium text-slate-900">
+                    Gross Receipts
+                  </td>
+                  <SplitCells
+                    split={report.grossReceipts}
+                    showBreakout={showBreakout}
+                  />
+                </tr>
+                <tr className="border-b border-slate-100">
+                  <td className="px-3 py-1.5 font-medium text-slate-900">
+                    Cost of Goods Sold
+                  </td>
+                  <SplitCells
+                    split={report.cogs}
+                    negate
+                    showBreakout={showBreakout}
+                  />
+                </tr>
+                <tr className="border-b border-slate-100">
+                  <td className="px-3 py-1.5 font-medium text-slate-900">
+                    Other Expenses
+                  </td>
+                  <SplitCells
+                    split={report.otherExpenses}
+                    negate
+                    showBreakout={showBreakout}
+                  />
+                </tr>
+                <tr className="border-b border-slate-200 bg-slate-50">
+                  <td className="px-3 py-1.5 font-bold text-slate-900">
+                    Net Profit
+                  </td>
+                  <SplitCells
+                    split={report.netProfit}
+                    showBreakout={showBreakout}
+                  />
+                </tr>
+                {showBreakout ? (
+                  <tr className="border-b border-slate-100">
+                    <td className="px-3 py-1.5 font-bold text-slate-900">
+                      Schedule C net (column + Per Designer)
+                    </td>
+                    <td
+                      className={`px-3 py-1.5 text-right tabular-nums font-bold ${signedClass(jessTotalNet)}`}
+                    >
+                      {money(jessTotalNet)}
+                    </td>
+                    <td
+                      className={`px-3 py-1.5 text-right tabular-nums font-bold ${signedClass(mollyTotalNet)}`}
+                    >
+                      {money(mollyTotalNet)}
+                    </td>
+                    <td className="px-3 py-1.5 text-right text-slate-400">—</td>
+                    <td
+                      className={`px-3 py-1.5 text-right tabular-nums font-bold ${signedClass(report.netProfit.tbd)}`}
+                    >
+                      {money(report.netProfit.tbd)}
+                    </td>
+                    <td
+                      className={`px-3 py-1.5 text-right tabular-nums font-bold ${signedClass(report.netProfit.business)}`}
+                    >
+                      {money(report.netProfit.business)}
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
           </section>
 
           <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <p className="mb-4 text-sm text-slate-600">
               Uses posted debit and credit amounts by entry date. Balance-sheet,
               equity (300-series), and liability (400-series) activity is shown for
-              review but excluded from Schedule C net profit. Per Designer is half
-              of the Schedule C amount.
+              review but excluded from Schedule C net profit.
+              {showBreakout
+                ? " Jess and Molly are excluded-from-true-up lines, plus 203 fees and 214 taxes with the payer. Per Designer is half of shared 100, 101, and other 200-series amounts."
+                : " Jess and Molly include each person’s 50/50 share, plus excluded lines, 203 fees, and 214 taxes with the payer."}
             </p>
             <DataTable
               stickyHeader
+              stickyFirstColumn
               mobileTitleKey="category"
               columns={[
                 { key: "category", label: "CoA Category" },
@@ -254,24 +321,35 @@ export default function ScheduleCPage() {
                 { key: "lines", label: "Lines" },
                 { key: "debits", label: "Debits" },
                 { key: "credits", label: "Credits" },
-                { key: "scheduleC", label: "Schedule C Amount" },
-                { key: "perDesigner", label: "Per Designer" },
+                { key: "jess", label: "Jess" },
+                { key: "molly", label: "Molly" },
+                ...(showBreakout
+                  ? [{ key: "perDesigner", label: "Per Designer" }]
+                  : []),
+                { key: "tbd", label: "TBD" },
               ]}
-              rows={rows.map((row) => ({
-                category: row.category,
-                treatment: row.treatment,
-                lines: row.lineCount,
-                debits: formatCurrency(row.debits),
-                credits: formatCurrency(row.credits),
-                scheduleC:
-                  row.treatment === "Excluded from Schedule C"
-                    ? "—"
-                    : formatCurrency(row.scheduleCAmount),
-                perDesigner:
-                  row.treatment === "Excluded from Schedule C"
-                    ? "—"
-                    : formatCurrency(roundMoney(row.scheduleCAmount / 2)),
-              }))}
+              rows={report.rows.map((row) => {
+                const excluded = row.treatment === "Excluded from Schedule C";
+                const jess = showBreakout
+                  ? row.jess
+                  : roundMoney(row.jess + row.perDesigner);
+                const molly = showBreakout
+                  ? row.molly
+                  : roundMoney(row.molly + row.perDesigner);
+                return {
+                  category: row.category,
+                  treatment: row.treatment,
+                  lines: row.lineCount,
+                  debits: money(row.debits),
+                  credits: money(row.credits),
+                  jess: moneyOrDash(jess, excluded),
+                  molly: moneyOrDash(molly, excluded),
+                  ...(showBreakout
+                    ? { perDesigner: moneyOrDash(row.perDesigner, excluded) }
+                    : {}),
+                  tbd: moneyOrDash(row.tbd, excluded),
+                };
+              })}
               emptyMessage="No chart of accounts categories found."
             />
           </section>

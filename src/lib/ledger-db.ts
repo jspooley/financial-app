@@ -104,6 +104,7 @@ CREATE INDEX IF NOT EXISTS idx_ledger_variance_accepted ON ledger(variance_accep
 NOTIFY pgrst, 'reload schema';`;
 
 export const VARIANCE_NOTES_MAX_LENGTH = 250;
+export const TRUE_UP_EXCLUDE_REASON_MAX_LENGTH = 250;
 
 export const LEDGER_SHORTFALL_SETUP_SQL = LEDGER_VARIANCE_SETUP_SQL;
 
@@ -151,6 +152,13 @@ export function normalizeLedgerRow(
     moved_from_account:
       (r.moved_from_account as LedgerEntry["moved_from_account"]) ?? null,
     reimbursed_by_ledger_id: (r.reimbursed_by_ledger_id as string | null) ?? null,
+    true_up_eligible:
+      typeof r.true_up_eligible === "boolean" ? r.true_up_eligible : null,
+    true_up_payment_id: (r.true_up_payment_id as string | null) ?? null,
+    true_up_exclude_reason: String(r.true_up_exclude_reason ?? "").slice(
+      0,
+      TRUE_UP_EXCLUDE_REASON_MAX_LENGTH
+    ),
     personal_card_role:
       r.personal_card_role === "charge" || r.personal_card_role === "reimbursement"
         ? r.personal_card_role

@@ -540,6 +540,15 @@ export function formatDate(value: string | Date | null | undefined) {
   }).format(date);
 }
 
+/** Numeric month/day (e.g. 8/3) for dense tables already scoped to a year. */
+export function formatShortDate(value: string | Date | null | undefined) {
+  const iso = toDateInputValue(value);
+  if (!iso) return "—";
+  const parts = parseDateOnlyParts(iso);
+  if (!parts) return "—";
+  return `${parts.month}/${parts.day}`;
+}
+
 /** Format a DB TIME / HH:MM value for display (e.g. 2:30 PM). */
 export function formatTime(value: string | null | undefined) {
   const hhmm = toTimeInputValue(value);

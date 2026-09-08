@@ -15,6 +15,7 @@ import {
 import { isCostCompanionRow } from "@/lib/cost-companions";
 import {
   isInvoicedDebitLine,
+  isLedgerLineFullyPaid,
   jobKeysByStatus,
   ledgerJobKey,
   normalizeInvoiceId,
@@ -31,6 +32,7 @@ import {
 export type PartnerAmounts = {
   jess: number;
   molly: number;
+  tbd: number;
 };
 
 export type TrueUpTransaction = {
@@ -41,6 +43,8 @@ export type TrueUpTransaction = {
   invoiceId: string;
   party: Purchaser;
   amount: number;
+  excluded?: boolean;
+  excludeReason?: string;
 };
 
 export type TrueUpCategoryRow = {
@@ -67,13 +71,19 @@ export type TrueUpBlock = {
   projectedCategoryRows?: TrueUpCategoryRow[];
   projectedSubtotal?: PartnerAmounts;
   projectedRequired?: PartnerAmounts;
+  /** Invoiced income is unassigned; required partner split is not knowable yet. */
+  projectedPayeeUnknown?: boolean;
 };
 
 export type TrueUpYtdTotals = {
   required: PartnerAmounts;
   recorded: PartnerAmounts;
   discrepancy: PartnerAmounts;
+  /** Invoiced income and unpurchased COGS not yet assigned to Jess or Molly. */
+  unassigned: PartnerAmounts;
 };
+
+export type TrueUpGroupBy = "month" | "coa";
 
 export type TrueUpReport = {
   year: number;
@@ -150,13 +160,17 @@ export const TRUE_UP_EXCLUSIONS: { label: string; detail: string }[] = [
   },
 ];
 
-const ZERO: PartnerAmounts = { jess: 0, molly: 0 };
+const ZERO: PartnerAmounts = { jess: 0, molly: 0, tbd: 0 };
 
 export function emptyPartnerAmounts(): PartnerAmounts {
   return { ...ZERO };
 }
 
 export function partnerTotal(amounts: PartnerAmounts) {
+  return roundMoney(amounts.jess + amounts.molly + amounts.tbd);
+}
+
+export function knownPartnerTotal(amounts: PartnerAmounts) {
   return roundMoney(amounts.jess + amounts.molly);
 }
 
@@ -169,7 +183,8 @@ export function addPartnerAmount(
   const amount = roundMoney(value);
   if (!amount) return next;
   if (party === "Molly") next.molly = roundMoney(next.molly + amount);
-  else next.jess = roundMoney(next.jess + amount);
+  else if (party === "Jess") next.jess = roundMoney(next.jess + amount);
+  else next.tbd = roundMoney(next.tbd + amount);
   return next;
 }
 
@@ -178,6 +193,7 @@ export function sumPartnerAmounts(...groups: PartnerAmounts[]): PartnerAmounts {
     (acc, group) => ({
       jess: roundMoney(acc.jess + group.jess),
       molly: roundMoney(acc.molly + group.molly),
+      tbd: roundMoney(acc.tbd + group.tbd),
     }),
     emptyPartnerAmounts()
   );
@@ -190,6 +206,7 @@ export function subtractPartnerAmounts(
   return {
     jess: roundMoney(left.jess - right.jess),
     molly: roundMoney(left.molly - right.molly),
+    tbd: roundMoney(left.tbd - right.tbd),
   };
 }
 
@@ -199,9 +216,9 @@ export function subtractPartnerAmounts(
  * positive on theirs.
  */
 export function requiredTransfers(amounts: PartnerAmounts): PartnerAmounts {
-  const half = roundMoney(partnerTotal(amounts) / 2);
+  const half = roundMoney(knownPartnerTotal(amounts) / 2);
   const jess = roundMoney(half - amounts.jess);
-  return { jess, molly: roundMoney(-jess) };
+  return { jess, molly: roundMoney(-jess), tbd: 0 };
 }
 
 /**
@@ -214,17 +231,21 @@ export function requiredProfitTransfers(
   costs: PartnerAmounts,
   income: PartnerAmounts
 ): PartnerAmounts {
+  if (Math.abs(income.tbd) >= 0.005 || Math.abs(costs.tbd) >= 0.005) {
+    return emptyPartnerAmounts();
+  }
+
   const position = sumPartnerAmounts(costs, income);
   const profit = partnerTotal(position);
 
   if (profit > 0) {
     const halfProfit = roundMoney(profit / 2);
     const jess = roundMoney(halfProfit - position.jess);
-    return { jess, molly: roundMoney(-jess) };
+    return { jess, molly: roundMoney(-jess), tbd: 0 };
   }
 
   const netToMolly = roundMoney(-costs.molly + costs.jess);
-  return { molly: netToMolly, jess: roundMoney(-netToMolly) };
+  return { molly: netToMolly, jess: roundMoney(-netToMolly), tbd: 0 };
 }
 
 export function partnerFromAccount(
@@ -240,7 +261,7 @@ export function partnerFromAccount(
 export function partnerFromEntry(
   entry: Pick<LedgerEntry, "purchaser" | "paid_to" | "account">,
   prefer: "payer" | "payee" = "payer"
-): KnownPurchaser {
+): Purchaser {
   if (prefer === "payee" && isKnownPurchaser(entry.paid_to)) {
     return entry.paid_to;
   }
@@ -248,7 +269,16 @@ export function partnerFromEntry(
   if (fromAccount) return fromAccount;
   if (entry.purchaser === "Molly") return "Molly";
   if (entry.purchaser === "Jess") return "Jess";
+  if (entry.purchaser === "TBD" || entry.account === "TBD") return "TBD";
   return "Jess";
+}
+
+export function knownPartnerFromEntry(
+  entry: Pick<LedgerEntry, "purchaser" | "paid_to" | "account">,
+  prefer: "payer" | "payee" = "payer"
+): KnownPurchaser {
+  const party = partnerFromEntry(entry, prefer);
+  return isKnownPurchaser(party) ? party : "Jess";
 }
 
 function otherPartner(party: KnownPurchaser): KnownPurchaser {
@@ -276,6 +306,8 @@ function trueUpTransactionFromEntry(
     invoiceId: invoiceKey(entry),
     party,
     amount,
+    excluded: isExcludedFromTrueUp(entry),
+    excludeReason: (entry.true_up_exclude_reason ?? "").trim() || undefined,
   };
 }
 
@@ -319,7 +351,17 @@ function netCash(entry: Pick<LedgerEntry, "debit_amount" | "credit_amount">) {
 }
 
 function hasAmount(amounts: PartnerAmounts) {
-  return Math.abs(amounts.jess) >= 0.005 || Math.abs(amounts.molly) >= 0.005;
+  return (
+    Math.abs(amounts.jess) >= 0.005 ||
+    Math.abs(amounts.molly) >= 0.005 ||
+    Math.abs(amounts.tbd) >= 0.005
+  );
+}
+
+function compareCoaLabels(a: string, b: string) {
+  const aNum = coaAccountNumber(a) ?? 999;
+  const bNum = coaAccountNumber(b) ?? 999;
+  return aNum - bNum || a.localeCompare(b);
 }
 
 function recordedRowsFromMap(
@@ -327,11 +369,7 @@ function recordedRowsFromMap(
 ): TrueUpCategoryRow[] {
   return [...byCategory.entries()]
     .filter(([, amounts]) => hasAmount(amounts))
-    .sort(([a], [b]) => {
-      const aNum = coaAccountNumber(a) ?? 999;
-      const bNum = coaAccountNumber(b) ?? 999;
-      return aNum - bNum || a.localeCompare(b);
-    })
+    .sort(([a], [b]) => compareCoaLabels(a, b))
     .map(([category, amounts]) => ({
       category,
       amounts,
@@ -357,7 +395,9 @@ function finishBlock(
     id,
     groupLabel,
     secondaryLabel,
-    categoryRows: categoryRows.filter((row) => hasAmount(row.amounts)),
+    categoryRows: categoryRows.filter(
+      (row) => hasAmount(row.amounts) || (row.transactions?.length ?? 0) > 0
+    ),
     subtotal,
     required,
     recordedRows,
@@ -382,7 +422,7 @@ function addToCategoryMap(
 function recordedTransferCounterparty(entry: LedgerEntry): Purchaser | null {
   const owner = partnerFromEntry(entry, "payer");
   if (isPartnerToPartnerTransferCoa(entry.coa_category)) {
-    return otherPartner(owner);
+    return isKnownPurchaser(owner) ? otherPartner(owner) : null;
   }
   if (
     (entry.paid_to === "Jess" || entry.paid_to === "Molly") &&
@@ -427,6 +467,7 @@ function collectUntaggedTransfers(
 }
 
 function addRecordedTransfer(map: Map<string, PartnerAmounts>, entry: LedgerEntry) {
+  if (isExcludedFromTrueUp(entry)) return;
   const amount = netCash(entry);
   if (Math.abs(amount) < 0.005) return;
   const owner = partnerFromEntry(entry, "payer");
@@ -462,6 +503,12 @@ function skipTrueUpShare(entry: LedgerEntry) {
     isTaxesAndLicensesCoa(entry.coa_category) ||
     isLiabilityCoa(entry.coa_category)
   );
+}
+
+export function isExcludedFromTrueUp(
+  entry: Pick<LedgerEntry, "true_up_eligible">
+) {
+  return entry.true_up_eligible === false;
 }
 
 function isSalesTransferRow(entry: LedgerEntry) {
@@ -517,10 +564,32 @@ function addCostToGroup(
   amount: number
 ) {
   if (Math.abs(amount) < 0.005) return;
-  if (isPendingPurchase(entry)) return;
-  const party = partnerFromEntry(entry, "payer");
-  group.cogs = addPartnerAmount(group.cogs, party, amount);
-  group.cogsTransactions.push(trueUpTransactionFromEntry(entry, party, amount));
+  const party = isPendingPurchase(entry)
+    ? "TBD"
+    : partnerFromEntry(entry, "payer");
+  const transaction = trueUpTransactionFromEntry(entry, party, amount);
+  group.cogsTransactions.push(transaction);
+  if (!transaction.excluded) {
+    group.cogs = addPartnerAmount(group.cogs, party, amount);
+  }
+}
+
+function addIncomeToGroup(
+  group: {
+    income: PartnerAmounts;
+    incomeTransactions: TrueUpTransaction[];
+  },
+  entry: LedgerEntry,
+  party: Purchaser,
+  income: number,
+  date?: string
+) {
+  if (Math.abs(income) < 0.005) return;
+  const transaction = trueUpTransactionFromEntry(entry, party, income, date);
+  group.incomeTransactions.push(transaction);
+  if (!transaction.excluded) {
+    group.income = addPartnerAmount(group.income, party, income);
+  }
 }
 
 /** Wholesale use tax paid on purchase — reimbursed to purchaser like other COGS. */
@@ -535,26 +604,62 @@ function hasClientPayment(income: PartnerAmounts) {
   return hasAmount(income);
 }
 
-function projectedInvoicedIncome(
+function invoiceLineCountsForTrueUp(
+  entry: LedgerEntry,
+  invoiceId: string,
+  parentById: Map<string, LedgerEntry>
+) {
+  if (invoiceKey(entry) !== invoiceId) return false;
+  if (entry.source_ledger_id) return false;
+  if (!isInvoicedDebitLine(entry)) return false;
+  if (skipTrueUpShare(entry)) return false;
+  if (isPersonalUseTrueUpEntry(entry, parentById)) return false;
+  return true;
+}
+
+/** Invoice is closed: every true-up line is paid in full, including by accepted variance. */
+function invoiceSettledForTrueUp(
   entries: LedgerEntry[],
   invoiceId: string,
   parentById: Map<string, LedgerEntry>
-): PartnerAmounts {
-  let amounts = emptyPartnerAmounts();
+) {
+  let sawLine = false;
   for (const entry of entries) {
-    if (invoiceKey(entry) !== invoiceId) continue;
-    if (entry.source_ledger_id) continue;
-    if (!isInvoicedDebitLine(entry)) continue;
-    if (skipTrueUpShare(entry)) continue;
-    if (isPersonalUseTrueUpEntry(entry, parentById)) continue;
+    if (!invoiceLineCountsForTrueUp(entry, invoiceId, parentById)) continue;
+    sawLine = true;
+    if (!isLedgerLineFullyPaid(entry)) return false;
+  }
+  return sawLine;
+}
+
+function collectInvoicedIncome(
+  entries: LedgerEntry[],
+  invoiceId: string,
+  parentById: Map<string, LedgerEntry>
+): { amounts: PartnerAmounts; transactions: TrueUpTransaction[] } {
+  let amounts = emptyPartnerAmounts();
+  const transactions: TrueUpTransaction[] = [];
+  for (const entry of entries) {
+    if (!invoiceLineCountsForTrueUp(entry, invoiceId, parentById)) continue;
 
     const gross = getLedgerInvoicedAmountExcludingPaymentFee(entry);
     const net = netSalesIncome(gross, entry);
     if (!net) continue;
-    const payee = partnerFromEntry(entry, "payee");
-    amounts = addPartnerAmount(amounts, payee, net);
+    const transaction = trueUpTransactionFromEntry(
+      entry,
+      "TBD",
+      net,
+      entry.date_paid || entry.entry_date
+    );
+    transactions.push(transaction);
+    if (!transaction.excluded) {
+      amounts = addPartnerAmount(amounts, "TBD", net);
+    }
   }
-  return amounts;
+  return {
+    amounts,
+    transactions: sortTrueUpTransactions(transactions),
+  };
 }
 
 function cogsAmountsFromBlock(block: TrueUpBlock): PartnerAmounts {
@@ -566,15 +671,25 @@ function cogsAmountsFromBlock(block: TrueUpBlock): PartnerAmounts {
 
 function awaitingClientPaymentBlock(
   block: TrueUpBlock,
-  projectedIncome: PartnerAmounts,
+  projectedIncome: { amounts: PartnerAmounts; transactions: TrueUpTransaction[] },
   reason: TrueUpPendingReason = "awaiting_payment"
 ): TrueUpBlock {
   const cogs = cogsAmountsFromBlock(block);
-  const projectedCategoryRows: TrueUpCategoryRow[] = hasAmount(projectedIncome)
-    ? [{ category: TRUE_UP_PROJECTED_INCOME_LABEL, amounts: projectedIncome }]
-    : [];
-  const projectedSubtotal = salesSubtotal(cogs, projectedIncome);
-  const projectedRequired = requiredProfitTransfers(cogs, projectedIncome);
+  const projectedCategoryRows: TrueUpCategoryRow[] =
+    hasAmount(projectedIncome.amounts) || projectedIncome.transactions.length > 0
+      ? [
+          {
+            category: TRUE_UP_PROJECTED_INCOME_LABEL,
+            amounts: projectedIncome.amounts,
+            transactions: projectedIncome.transactions,
+          },
+        ]
+      : [];
+  const projectedSubtotal = salesSubtotal(cogs, projectedIncome.amounts);
+  const projectedRequired = requiredProfitTransfers(
+    cogs,
+    projectedIncome.amounts
+  );
 
   return {
     ...block,
@@ -585,6 +700,7 @@ function awaitingClientPaymentBlock(
     projectedCategoryRows,
     projectedSubtotal,
     projectedRequired,
+    projectedPayeeUnknown: true,
   };
 }
 
@@ -740,15 +856,12 @@ function buildSalesBlocks(
       );
       if (income) {
         const g = group(invoiceId, entry.po_number);
-        const party = partnerFromEntry(entry, "payee");
-        g.income = addPartnerAmount(g.income, party, income);
-        g.incomeTransactions.push(
-          trueUpTransactionFromEntry(
-            entry,
-            party,
-            income,
-            entry.date_paid || entry.entry_date
-          )
+        addIncomeToGroup(
+          g,
+          entry,
+          partnerFromEntry(entry, "payee"),
+          income,
+          entry.date_paid || entry.entry_date
         );
       }
       continue;
@@ -773,15 +886,12 @@ function buildSalesBlocks(
     ) {
       const income = netSalesIncome(Number(entry.payment_amount ?? 0), entry);
       if (income) {
-        const payee = partnerFromEntry(entry, "payee");
-        g.income = addPartnerAmount(g.income, payee, income);
-        g.incomeTransactions.push(
-          trueUpTransactionFromEntry(
-            entry,
-            payee,
-            income,
-            entry.date_paid || entry.entry_date
-          )
+        addIncomeToGroup(
+          g,
+          entry,
+          partnerFromEntry(entry, "payee"),
+          income,
+          entry.date_paid || entry.entry_date
         );
       }
     }
@@ -789,6 +899,12 @@ function buildSalesBlocks(
 
   const activeBlocks = [...byInvoice.values()]
     .map((group) => {
+      const invoiceSettled = invoiceSettledForTrueUp(
+        entries,
+        group.invoiceId,
+        parentById
+      );
+
       const categoryRows: TrueUpCategoryRow[] = [
         {
           category: TRUE_UP_COGS_LABEL,
@@ -810,8 +926,12 @@ function buildSalesBlocks(
         group.recorded,
         requiredProfitTransfers(group.cogs, group.income)
       );
-      if (!hasClientPayment(group.income) && hasAmount(group.cogs)) {
-        const projectedIncome = projectedInvoicedIncome(
+      if (
+        !hasClientPayment(group.income) &&
+        hasAmount(group.cogs) &&
+        !invoiceSettled
+      ) {
+        const projectedIncome = collectInvoicedIncome(
           entries,
           group.invoiceId,
           parentById
@@ -823,7 +943,7 @@ function buildSalesBlocks(
     .filter(
       (block) =>
         block.status === "pending" ||
-        block.categoryRows.some((row) => hasAmount(row.amounts)) ||
+        block.categoryRows.length > 0 ||
         hasAmount(block.recorded) ||
         hasAmount(block.required)
     );
@@ -848,27 +968,43 @@ type ExpenseCategoryBucket = {
   transactions: TrueUpTransaction[];
 };
 
-function buildExpenseBlocks(
+type ExpenseActivityLine = {
+  month: string;
+  category: string;
+  party: Purchaser;
+  amount: number;
+  transaction: TrueUpTransaction;
+};
+
+function emptyExpenseBucket(): ExpenseCategoryBucket {
+  return { amounts: emptyPartnerAmounts(), transactions: [] };
+}
+
+function addExpenseToBucket(
+  bucket: ExpenseCategoryBucket,
+  party: Purchaser,
+  amount: number,
+  transaction: TrueUpTransaction
+) {
+  bucket.transactions.push(transaction);
+  if (!transaction.excluded) {
+    bucket.amounts = addPartnerAmount(bucket.amounts, party, amount);
+  }
+}
+
+function collectExpenseActivity(
   entries: LedgerEntry[],
   year: number,
   parentById: Map<string, LedgerEntry>
-): TrueUpBlock[] {
-  const byMonth = new Map<
-    string,
-    {
-      categories: Map<string, ExpenseCategoryBucket>;
-      recorded: Map<string, PartnerAmounts>;
-    }
-  >();
+) {
+  const lines: ExpenseActivityLine[] = [];
+  const recordedByMonth = new Map<string, Map<string, PartnerAmounts>>();
 
-  function monthGroup(key: string) {
-    const existing = byMonth.get(key);
+  function recordedForMonth(key: string) {
+    const existing = recordedByMonth.get(key);
     if (existing) return existing;
-    const created = {
-      categories: new Map<string, ExpenseCategoryBucket>(),
-      recorded: new Map<string, PartnerAmounts>(),
-    };
-    byMonth.set(key, created);
+    const created = new Map<string, PartnerAmounts>();
+    recordedByMonth.set(key, created);
     return created;
   }
 
@@ -880,7 +1016,7 @@ function buildExpenseBlocks(
     if (isPersonalUseTrueUpEntry(entry, parentById)) continue;
 
     if (isExpenseTransferRow(entry)) {
-      addRecordedTransfer(monthGroup(key).recorded, entry);
+      addRecordedTransfer(recordedForMonth(key), entry);
       continue;
     }
 
@@ -894,21 +1030,41 @@ function buildExpenseBlocks(
     if (isPendingPurchase(entry)) continue;
     const category = entry.coa_category?.trim() || "Expense";
     const party = partnerFromEntry(entry, "payer");
-    const group = monthGroup(key);
-    const bucket = group.categories.get(category) ?? {
-      amounts: emptyPartnerAmounts(),
-      transactions: [],
-    };
-    bucket.amounts = addPartnerAmount(bucket.amounts, party, amount);
-    bucket.transactions.push(trueUpTransactionFromEntry(entry, party, amount));
-    group.categories.set(category, bucket);
+    lines.push({
+      month: key,
+      category,
+      party,
+      amount,
+      transaction: trueUpTransactionFromEntry(entry, party, amount),
+    });
   }
 
-  return [...byMonth.entries()]
-    .sort(([a], [b]) => b.localeCompare(a))
-    .map(([key, group]) => {
-      const categoryRows = [...group.categories.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
+  return { lines, recordedByMonth };
+}
+
+function expenseBlocksByMonth(
+  lines: ExpenseActivityLine[],
+  recordedByMonth: Map<string, Map<string, PartnerAmounts>>
+): TrueUpBlock[] {
+  const byMonth = new Map<string, Map<string, ExpenseCategoryBucket>>();
+
+  for (const line of lines) {
+    const categories =
+      byMonth.get(line.month) ?? new Map<string, ExpenseCategoryBucket>();
+    const bucket = categories.get(line.category) ?? emptyExpenseBucket();
+    addExpenseToBucket(bucket, line.party, line.amount, line.transaction);
+    categories.set(line.category, bucket);
+    byMonth.set(line.month, categories);
+  }
+
+  const monthKeys = new Set([...byMonth.keys(), ...recordedByMonth.keys()]);
+
+  return [...monthKeys]
+    .sort((a, b) => b.localeCompare(a))
+    .map((key) => {
+      const categories = byMonth.get(key) ?? new Map();
+      const categoryRows = [...categories.entries()]
+        .sort(([a], [b]) => compareCoaLabels(a, b))
         .map(([category, bucket]) => ({
           category,
           amounts: bucket.amounts,
@@ -924,7 +1080,7 @@ function buildExpenseBlocks(
         key,
         categoryRows,
         subtotal,
-        group.recorded
+        recordedByMonth.get(key) ?? new Map()
       );
     })
     .filter(
@@ -935,6 +1091,72 @@ function buildExpenseBlocks(
     );
 }
 
+function expenseBlocksByCoa(lines: ExpenseActivityLine[]): TrueUpBlock[] {
+  const byCategory = new Map<string, Map<string, ExpenseCategoryBucket>>();
+
+  for (const line of lines) {
+    const months =
+      byCategory.get(line.category) ?? new Map<string, ExpenseCategoryBucket>();
+    const bucket = months.get(line.month) ?? emptyExpenseBucket();
+    addExpenseToBucket(bucket, line.party, line.amount, line.transaction);
+    months.set(line.month, bucket);
+    byCategory.set(line.category, months);
+  }
+
+  return [...byCategory.entries()]
+    .sort(([a], [b]) => compareCoaLabels(a, b))
+    .map(([category, months]) => {
+      const monthRows = [...months.entries()]
+        .sort(([a], [b]) => b.localeCompare(a))
+        .map(([key, bucket]) => ({
+          category: monthLabel(key),
+          amounts: bucket.amounts,
+          transactions: sortTrueUpTransactions(bucket.transactions),
+        }));
+      const subtotal = monthRows.reduce(
+        (acc, row) => sumPartnerAmounts(acc, row.amounts),
+        emptyPartnerAmounts()
+      );
+      return finishBlock(
+        `exp-coa:${category}`,
+        category,
+        "",
+        monthRows,
+        subtotal,
+        new Map()
+      );
+    })
+    .filter((block) => block.categoryRows.length > 0);
+}
+
+function buildExpenseBlocks(
+  entries: LedgerEntry[],
+  year: number,
+  parentById: Map<string, LedgerEntry>,
+  groupBy: TrueUpGroupBy = "month"
+): TrueUpBlock[] {
+  const { lines, recordedByMonth } = collectExpenseActivity(
+    entries,
+    year,
+    parentById
+  );
+  if (groupBy === "coa") return expenseBlocksByCoa(lines);
+  return expenseBlocksByMonth(lines, recordedByMonth);
+}
+
+function unassignedFromBlocks(blocks: TrueUpBlock[]): PartnerAmounts {
+  let tbd = 0;
+  for (const block of blocks) {
+    for (const row of block.categoryRows) {
+      tbd = roundMoney(tbd + row.amounts.tbd);
+    }
+    for (const row of block.projectedCategoryRows ?? []) {
+      tbd = roundMoney(tbd + row.amounts.tbd);
+    }
+  }
+  return { jess: 0, molly: 0, tbd };
+}
+
 function ytdTotalsFromBlocks(blocks: TrueUpBlock[]): TrueUpYtdTotals {
   const settled = blocks.filter((block) => block.status !== "pending");
   const required = sumPartnerAmounts(...settled.map((block) => block.required));
@@ -943,6 +1165,7 @@ function ytdTotalsFromBlocks(blocks: TrueUpBlock[]): TrueUpYtdTotals {
     required,
     recorded,
     discrepancy: subtractPartnerAmounts(required, recorded),
+    unassigned: unassignedFromBlocks(blocks),
   };
 }
 
@@ -956,6 +1179,7 @@ function recordedPartnerFlows(entries: LedgerEntry[], year: number) {
     if (entry.source_ledger_id) continue;
     if (!isRecordedTransferCoa(entry.coa_category)) continue;
     if (skipTrueUpShare(entry)) continue;
+    if (isExcludedFromTrueUp(entry)) continue;
     const counterparty = recordedTransferCounterparty(entry);
     if (!counterparty) continue;
     const amount = netCash(entry);
@@ -975,13 +1199,23 @@ function recordedPartnerFlows(entries: LedgerEntry[], year: number) {
 
 export function buildTrueUpReport(
   entries: LedgerEntry[],
-  year: number
+  year: number,
+  groupBy: TrueUpGroupBy = "month"
 ): TrueUpReport {
   const parentById = new Map(entries.map((entry) => [entry.id, entry]));
   const sales = buildSalesBlocks(entries, year, parentById);
-  const expenses = buildExpenseBlocks(entries, year, parentById);
+  const expensesByMonth = buildExpenseBlocks(
+    entries,
+    year,
+    parentById,
+    "month"
+  );
+  const expenses =
+    groupBy === "coa"
+      ? buildExpenseBlocks(entries, year, parentById, "coa")
+      : expensesByMonth;
   const ytdSales = ytdTotalsFromBlocks(sales);
-  const ytdExpenses = ytdTotalsFromBlocks(expenses);
+  const ytdExpenses = ytdTotalsFromBlocks(expensesByMonth);
   const flows = recordedPartnerFlows(entries, year);
 
   return {
@@ -998,8 +1232,41 @@ export function buildTrueUpReport(
         ytdSales.discrepancy,
         ytdExpenses.discrepancy
       ),
+      unassigned: sumPartnerAmounts(ytdSales.unassigned, ytdExpenses.unassigned),
     },
     ytdJessToMolly: flows.jessToMolly,
     ytdMollyToJess: flows.mollyToJess,
   };
+}
+
+export const TRUE_UP_EXCLUDE_SETUP_SQL = `ALTER TABLE public.ledger
+  ADD COLUMN IF NOT EXISTS true_up_eligible BOOLEAN;
+
+ALTER TABLE public.ledger
+  ADD COLUMN IF NOT EXISTS true_up_payment_id UUID REFERENCES public.ledger(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_ledger_true_up_payment_id
+  ON public.ledger (true_up_payment_id)
+  WHERE true_up_payment_id IS NOT NULL;
+
+ALTER TABLE public.ledger
+  ADD COLUMN IF NOT EXISTS true_up_exclude_reason TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE public.ledger
+  DROP CONSTRAINT IF EXISTS ledger_true_up_exclude_reason_length;
+
+ALTER TABLE public.ledger
+  ADD CONSTRAINT ledger_true_up_exclude_reason_length
+  CHECK (char_length(true_up_exclude_reason) <= 250);
+
+NOTIFY pgrst, 'reload schema';`;
+
+export function isTrueUpExcludeSchemaError(message: string) {
+  const lower = message.toLowerCase();
+  return (
+    (lower.includes("true_up_eligible") ||
+      lower.includes("true_up_payment_id") ||
+      lower.includes("true_up_exclude_reason")) &&
+    (lower.includes("column") || lower.includes("schema cache"))
+  );
 }

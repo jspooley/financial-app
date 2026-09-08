@@ -77,7 +77,14 @@ interface ExpenseFormProps {
   onSuccess: () => void;
   onCancel: () => void;
   onDeleted?: () => void;
-  onReassignCardCharges?: () => void;
+  onReassignCardCharges?: (amounts: {
+    debit_amount: number;
+    credit_amount: number;
+  }) => void;
+  onDraftAmountsChange?: (amounts: {
+    debit_amount: number;
+    credit_amount: number;
+  }) => void;
 }
 
 function uniqueInvoiceIds(rows: InvoiceOptionRow[], clientId: string, poNumber: string) {
@@ -99,6 +106,7 @@ export function ExpenseForm({
   onCancel,
   onDeleted,
   onReassignCardCharges,
+  onDraftAmountsChange,
 }: ExpenseFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -138,7 +146,16 @@ export function ExpenseForm({
 
   const invoiceId = useWatch({ control, name: "invoice_id" }) ?? "";
   const coaCategory = useWatch({ control, name: "coa_category" }) ?? "";
+  const debitAmount = useWatch({ control, name: "debit_amount" });
+  const creditAmount = useWatch({ control, name: "credit_amount" });
   const showPaidTo = isRecordedTransferCoa(coaCategory);
+
+  useEffect(() => {
+    onDraftAmountsChange?.({
+      debit_amount: roundMoney(Number(debitAmount) || 0),
+      credit_amount: roundMoney(Number(creditAmount) || 0),
+    });
+  }, [debitAmount, creditAmount, onDraftAmountsChange]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -250,11 +267,12 @@ export function ExpenseForm({
             0
           )
         );
-        const leftover = leftoverReimbursementMessage(
-          roundMoney(Math.abs(debit - credit) - allocated)
-        );
-        if (leftover) {
-          setError(leftover);
+        const remaining = roundMoney(Math.abs(debit - credit) - allocated);
+        if (remaining < -0.005) {
+          setError(
+            leftoverReimbursementMessage(remaining) ??
+              "Assigned charges exceed this 308."
+          );
           return;
         }
       }
@@ -539,15 +557,21 @@ export function ExpenseForm({
             Card purchases on this repayment
           </p>
           <p className="mt-1 text-xs text-amber-900/80">
-            Choose which card purchases this checking 308 paid. Boxes start
-            unchecked. Check the same purchase to keep it, pick another, or
-            cancel the picker to leave the saved match.
+            This 308 will save as $
+            {roundMoney(Math.abs(Number(debitAmount || 0) - Number(creditAmount || 0))).toFixed(2)}
+            . Assigned charges can be less; leftover can be assigned later.
+            Click Reassign Card Charges to match purchases to this amount.
           </p>
           <Button
             type="button"
             variant="secondary"
             className="mt-3 min-h-[33px] px-3 py-1.5"
-            onClick={onReassignCardCharges}
+            onClick={() =>
+              onReassignCardCharges({
+                debit_amount: roundMoney(Number(debitAmount) || 0),
+                credit_amount: roundMoney(Number(creditAmount) || 0),
+              })
+            }
             disabled={isSubmitting || deleting}
           >
             Reassign Card Charges

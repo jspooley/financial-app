@@ -13,7 +13,6 @@ export const DOCUMENTATION_SECTIONS = [
   { key: "debt-tracking", title: "Business Debt" },
   { key: "true-up", title: "True Up Report" },
   { key: "schedule-c", title: "Schedule C" },
-  { key: "bank-cashflow", title: "Checking Reconciliation" },
   { key: "pl-report", title: "P&L Report" },
   { key: "reconciliation", title: "P&L Recon" },
 ] as const;

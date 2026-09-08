@@ -90,9 +90,7 @@ function ReportsBox({ pathname }: { pathname: string }) {
       </div>
       <Link
         href={cashflowHref}
-        className={navLinkClass(
-          pathname === cashflowHref || pathname === "/bank-cashflow"
-        )}
+        className={navLinkClass(pathname === cashflowHref)}
         title="Cashflow"
       >
         <span aria-hidden>💸</span>

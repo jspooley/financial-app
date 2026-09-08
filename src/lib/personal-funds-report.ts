@@ -7,7 +7,7 @@ import {
   cardReimburseNet,
   isUnreimbursedBusinessPersonalCardCharge,
 } from "@/lib/card-reimbursement";
-import { partnerFromEntry } from "@/lib/true-up-report";
+import { knownPartnerFromEntry } from "@/lib/true-up-report";
 import type { LedgerEntry, KnownPurchaser } from "@/lib/types";
 import { roundMoney } from "@/lib/utils";
 
@@ -65,7 +65,7 @@ function lineFromEntry(
   amount: number,
   categoryFallback: string,
   partner = partnerFromOwnerCapitalCoa(entry.coa_category) ??
-    partnerFromEntry(entry)
+    knownPartnerFromEntry(entry)
 ): PersonalFundsLine {
   return {
     id: entry.id,
@@ -113,7 +113,7 @@ export function buildPersonalFundsReport(
           entry,
           cardReimburseNet(entry),
           entry.coa_category ?? "Card charge",
-          partnerFromEntry(entry)
+          knownPartnerFromEntry(entry)
         )
       )
       .filter((line) => matchesPartner(line.partner, partner))

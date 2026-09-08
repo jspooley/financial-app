@@ -111,6 +111,11 @@ export type LedgerInsert = {
   account?: PurchaserAccount | null;
   moved_from_account?: CashflowAccount | null;
   reimbursed_by_ledger_id?: string | null;
+  /** Null = included in true-up; false = Exclude from true up. */
+  true_up_eligible?: boolean | null;
+  true_up_payment_id?: string | null;
+  /** Required when Exclude from true up is Yes. */
+  true_up_exclude_reason?: string | null;
   personal_card_role?: "charge" | "reimbursement" | null;
   coa_category?: string | null;
   source_ledger_id?: string | null;
@@ -376,6 +381,9 @@ export interface LedgerEntry {
   moved_from_account: CashflowAccount | null;
   /** Checking 308 that reimbursed this personal-card charge (one 308 can cover several charges). */
   reimbursed_by_ledger_id: string | null;
+  true_up_eligible: boolean | null;
+  true_up_payment_id: string | null;
+  true_up_exclude_reason: string;
   /** charge = real CC purchase; reimbursement = checking 308 that was wrongly moved to CC. */
   personal_card_role: "charge" | "reimbursement" | null;
   coa_category: string | null;

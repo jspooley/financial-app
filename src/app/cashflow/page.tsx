@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { ExpenseForm } from "@/components/forms/ExpenseForm";
 import { LedgerAccountForm } from "@/components/forms/LedgerAccountForm";
@@ -120,6 +119,29 @@ function formatSignedCash(value: number) {
   );
 }
 
+function paymentWithDraftAmount(
+  payment: LedgerEntry,
+  draft?: { debit_amount: number; credit_amount: number }
+): LedgerEntry {
+  if (!draft) return payment;
+  return {
+    ...payment,
+    debit_amount: roundMoney(draft.debit_amount),
+    credit_amount: roundMoney(draft.credit_amount),
+  };
+}
+
+function draftAmountsForPayment(
+  payment: LedgerEntry,
+  amount: number
+): { debit_amount: number; credit_amount: number } {
+  const abs = roundMoney(Math.max(0, Number.isFinite(amount) ? amount : 0));
+  if (cardReimburseNet(payment) < 0) {
+    return { debit_amount: 0, credit_amount: abs };
+  }
+  return { debit_amount: abs, credit_amount: 0 };
+}
+
 function csvCell(value: string | number | null | undefined) {
   const text = String(value ?? "");
   if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
@@ -144,7 +166,7 @@ function paidChargesTitle(charges: LedgerEntry[], remaining: number) {
   );
   const leftover =
     remaining >= 0.005
-      ? ` · ${formatCurrency(remaining)} extra — must match 308`
+      ? ` · ${formatCurrency(remaining)} left to assign`
       : remaining < -0.005
         ? " · over allocated"
         : "";
@@ -1074,6 +1096,7 @@ export default function CashflowPage() {
         entryId: string;
         selectedIds: string[];
         savedChargeIds: string[];
+        draftAmounts?: { debit_amount: number; credit_amount: number };
       }
     | null
   >(null);
@@ -1222,8 +1245,12 @@ export default function CashflowPage() {
 
   const linkingPanel = useMemo(() => {
     if (!linking) return null;
-    const source =
+    const sourceRow =
       registerEntries.find((entry) => entry.id === linking.entryId) ?? null;
+    const source =
+      sourceRow && linking.kind === "payment"
+        ? paymentWithDraftAmount(sourceRow, linking.draftAmounts)
+        : sourceRow;
     if (linking.kind === "charge") {
       const candidates = source
         ? reimbursementCandidatesForCharge(registerEntries, source)
@@ -1817,7 +1844,10 @@ export default function CashflowPage() {
     });
   }
 
-  function startLinkPayment(entry: LedgerEntry) {
+  function startLinkPayment(
+    entry: LedgerEntry,
+    draftAmounts?: { debit_amount: number; credit_amount: number }
+  ) {
     const linked =
       chargesByPaymentId(registerEntries).get(entry.id)?.map((row) => row.id) ??
       [];
@@ -1827,8 +1857,28 @@ export default function CashflowPage() {
       entryId: entry.id,
       selectedIds: linked,
       savedChargeIds: linked,
+      draftAmounts,
     });
   }
+
+  const syncEditingPaymentAmount = useCallback(
+    (amounts: { debit_amount: number; credit_amount: number }) => {
+      setLinking((current) => {
+        if (current?.kind !== "payment") return current;
+        if (current.entryId !== editing?.id) return current;
+        const prev = current.draftAmounts;
+        if (
+          prev &&
+          prev.debit_amount === amounts.debit_amount &&
+          prev.credit_amount === amounts.credit_amount
+        ) {
+          return current;
+        }
+        return { ...current, draftAmounts: amounts };
+      });
+    },
+    [editing?.id]
+  );
 
   function toggleChargeToPay(chargeId: string) {
     setSelectedChargeIds((current) =>
@@ -1977,12 +2027,13 @@ export default function CashflowPage() {
     }
 
     if (linking?.kind !== "payment") return;
-    const payment = reimbursementMaps.byId.get(linking.entryId);
-    if (!payment) {
+    const savedPayment = reimbursementMaps.byId.get(linking.entryId);
+    if (!savedPayment) {
       setMoveError("That row is no longer in the register. Refresh and try again.");
       setLinking(null);
       return;
     }
+    const payment = paymentWithDraftAmount(savedPayment, linking.draftAmounts);
     setMovingId(payment.id);
     setMoveError(null);
     const linkedIds =
@@ -1998,6 +2049,27 @@ export default function CashflowPage() {
       return;
     }
     const supabase = createClient();
+    if (
+      Math.abs(cardReimburseNet(payment) - cardReimburseNet(savedPayment)) >=
+      0.005
+    ) {
+      const { error: amountError } = await supabase
+        .from("ledger")
+        .update({
+          debit_amount: payment.debit_amount,
+          credit_amount: payment.credit_amount,
+          credit_debit:
+            Number(payment.debit_amount ?? 0) >= Number(payment.credit_amount ?? 0)
+              ? "debit"
+              : "credit",
+        })
+        .eq("id", payment.id);
+      if (amountError) {
+        setMovingId(null);
+        setMoveError(accountMoveColumnError(amountError.message));
+        return;
+      }
+    }
     const error = await applyPaymentChargeAllocations(
       supabase,
       payment,
@@ -2226,13 +2298,37 @@ export default function CashflowPage() {
           <p className="font-medium">
             {linkingPanel.kind === "charge"
               ? "Which checking repayment paid this card purchase?"
-              : "Which card purchases did this checking repayment pay?"}
+              : "Assign card purchases to this 308"}
           </p>
           <p className="mt-1 text-xs text-amber-900/80">
             {linkingPanel.kind === "charge"
               ? "Pick the checking 308 that paid this card purchase, not a 302 owner's draw."
-              : "Check each card purchase this transfer paid. The total must equal this 308."}
+              : "If the bank transfer was larger than the saved row, type the new 308 amount first. Save is allowed when assigned charges are less than or equal to the 308."}
           </p>
+          {linking.kind === "payment" && linkingPanel.source ? (
+            <label className="mt-3 block rounded-lg border-2 border-brand-400 bg-white px-3 py-2 text-sm font-medium text-amber-950">
+              308 amount (edit this)
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-base text-slate-900"
+                value={String(Math.abs(cardReimburseNet(linkingPanel.source)))}
+                onChange={(event) => {
+                  const amount = Number(event.target.value);
+                  setLinking((current) => {
+                    if (current?.kind !== "payment") return current;
+                    const saved = reimbursementMaps.byId.get(current.entryId);
+                    if (!saved) return current;
+                    return {
+                      ...current,
+                      draftAmounts: draftAmountsForPayment(saved, amount),
+                    };
+                  });
+                }}
+              />
+            </label>
+          ) : null}
           {linkingPanel.source ? (
             <p className="mt-2 rounded border border-amber-200 bg-white px-2 py-1.5 text-xs text-amber-950">
               <span className="font-semibold">This checking repayment: </span>
@@ -2319,15 +2415,14 @@ export default function CashflowPage() {
                   <>
               <p className="text-xs text-amber-900/80">
                 {Math.abs(leftover) < 0.005
-                  ? `This 308 is ${formatCurrency(paymentAmount)}. Assigned charges total that amount.`
+                  ? `Assigned charges total ${formatCurrency(paymentAmount)}.`
                   : leftover > 0
-                    ? `This 308 is ${formatCurrency(paymentAmount)}. ${formatCurrency(leftover)} extra — assign more charges or change the 308 amount so it matches exactly.`
-                    : `This 308 is ${formatCurrency(paymentAmount)}. Assigned charges are ${formatCurrency(-leftover)} too high. Uncheck some purchases.`}
+                    ? `${formatCurrency(leftover)} extra — check more purchases, or Save and assign the rest later.`
+                    : `Assigned charges are ${formatCurrency(-leftover)} too high. Uncheck purchases or increase the 308 amount.`}
               </p>
               <p className="text-xs text-amber-900/80">
-                Check every purchase this repayment paid. Save is available only
-                when the total matches the 308. Cancel leaves the saved match
-                as-is.
+                Save is blocked only if assigned charges exceed the 308. Cancel
+                leaves the saved match as-is.
               </p>
               {(["saved", "available"] as const).map((section) => {
                 const savedIds = new Set(linking.savedChargeIds);
@@ -2362,7 +2457,6 @@ export default function CashflowPage() {
                           !checked &&
                           !tooLargeForPayment &&
                           leftover + 0.005 < chargeAmount;
-                        const disabled = tooLargeForPayment || needsRoom;
                         const details = chargeAssignmentDetails(row.charge);
                         return (
                           <label
@@ -2370,16 +2464,13 @@ export default function CashflowPage() {
                             className={`flex cursor-pointer items-start gap-2 rounded border px-2 py-1.5 text-xs ${
                               checked
                                 ? "border-brand-200 bg-white"
-                                : disabled
-                                  ? "border-transparent opacity-60"
-                                  : "border-transparent hover:bg-amber-100"
+                                : "border-transparent hover:bg-amber-100"
                             }`}
                           >
                             <input
                               type="checkbox"
                               className="mt-0.5 size-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500"
                               checked={checked}
-                              disabled={disabled}
                               onChange={() => {
                                 setLinking((current) => {
                                   if (current?.kind !== "payment") {
@@ -2431,11 +2522,11 @@ export default function CashflowPage() {
                               ) : null}
                               {tooLargeForPayment ? (
                                 <span className="block text-amber-800">
-                                  Too large for this {formatCurrency(paymentAmount)} repayment
+                                  Larger than this {formatCurrency(paymentAmount)} 308 — increase the amount or uncheck other purchases
                                 </span>
                               ) : needsRoom ? (
                                 <span className="block text-amber-800">
-                                  Uncheck a checked purchase first ({formatCurrency(leftover)} left)
+                                  Needs {formatCurrency(roundMoney(chargeAmount - leftover))} more room — uncheck other purchases or increase the 308
                                 </span>
                               ) : null}
                             </span>
@@ -2520,13 +2611,11 @@ export default function CashflowPage() {
                 (linking.kind === "payment" &&
                   (!linkingPanel.source ||
                     linking.selectedIds.length === 0 ||
-                    Math.abs(
-                      remainingReimbursementAmount(
-                        linkingPanel.source,
-                        registerEntries,
-                        { selectedChargeIds: linking.selectedIds }
-                      )
-                    ) >= 0.005)) ||
+                    remainingReimbursementAmount(
+                      linkingPanel.source,
+                      registerEntries,
+                      { selectedChargeIds: linking.selectedIds }
+                    ) < -0.005)) ||
                 linkingPanel.candidates.length === 0 ||
                 Boolean(movingId)
               }
@@ -2711,9 +2800,14 @@ export default function CashflowPage() {
               closeForms();
               loadEntries();
             }}
+            onDraftAmountsChange={
+              editing && isCheckingCardReimbursement(editing)
+                ? syncEditingPaymentAmount
+                : undefined
+            }
             onReassignCardCharges={
               editing && isCheckingCardReimbursement(editing)
-                ? () => startLinkPayment(editing)
+                ? (amounts) => startLinkPayment(editing, amounts)
                 : undefined
             }
           />
@@ -2736,10 +2830,7 @@ export default function CashflowPage() {
       ) : (
         <>
           <section className="mb-6 grid gap-3 sm:grid-cols-2 lg:max-w-4xl">
-            <Link
-              href="/bank-cashflow"
-              className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-brand-200 hover:shadow-md"
-            >
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <p className="text-xs uppercase tracking-wide text-slate-500">
                 Cash Balance (Bank Statement)
               </p>
@@ -2752,10 +2843,7 @@ export default function CashflowPage() {
                 Credits − debits
                 {balanceUsesAccountOrMonth ? " (selected accounts/months)" : ""}
               </p>
-              <p className="mt-2 text-xs font-medium text-brand-700">
-                Checking Reconciliation →
-              </p>
-            </Link>
+            </div>
             <div
               className={`rounded-xl border shadow-sm ${
                 reimbursementFilter === "unpaid-card"
