@@ -144,6 +144,13 @@ export default function InvoicingPage() {
     [filteredUninvoiced]
   );
 
+  const historyUninvoicedSummary = useMemo(() => {
+    const rows = historyClientId
+      ? uninvoicedEntries.filter((entry) => entry.client_id === historyClientId)
+      : uninvoicedEntries;
+    return summarizeToBeInvoiced(rows);
+  }, [uninvoicedEntries, historyClientId]);
+
   const invoiceTotals = useMemo(() => {
     const amounts: Record<string, number> = {};
     const selectedItems: Record<
@@ -311,6 +318,7 @@ export default function InvoicingPage() {
           { key: "tax", label: "Tax", className: "text-right" },
           { key: "shipping", label: "Shipping", className: "text-right" },
           { key: "receiving", label: "Receiving", className: "text-right" },
+          { key: "delivery", label: "Delivery", className: "text-right" },
           { key: "fees", label: "Fees", className: "text-right" },
           { key: "invoiceAmount", label: "Invoice Amount", className: "text-right" },
           { key: "viewInvoice", label: "View", className: "text-right" },
@@ -323,6 +331,7 @@ export default function InvoicingPage() {
             tax: 0,
             shipping: 0,
             receiving: 0,
+            delivery: 0,
             fees: 0,
           };
           return {
@@ -354,6 +363,7 @@ export default function InvoicingPage() {
             tax: formatCurrency(selectedItems.tax),
             shipping: formatCurrency(selectedItems.shipping),
             receiving: formatCurrency(selectedItems.receiving),
+            delivery: formatCurrency(selectedItems.delivery),
             fees: formatCurrency(selectedItems.fees),
             invoiceAmount: formatCurrency(invoiceTotals.amounts[invoiceId] ?? 0),
             viewInvoice: (
@@ -556,6 +566,27 @@ export default function InvoicingPage() {
                   ))}
                 </SelectField>
               </div>
+
+              {historyUninvoicedSummary.amount >= 0.005 ? (
+                <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+                  <span className="font-medium">
+                    {formatCurrency(historyUninvoicedSummary.amount)}
+                  </span>{" "}
+                  {historyClientId ? "for this client is" : "is"} not on these
+                  paid invoices.{" "}
+                  <button
+                    type="button"
+                    className="font-medium text-brand-800 hover:underline"
+                    onClick={() => {
+                      setSelectedClientId(historyClientId);
+                      setView("outstanding");
+                    }}
+                  >
+                    View Outstanding
+                  </button>{" "}
+                  to create the next invoice.
+                </div>
+              ) : null}
 
               {loading ? (
                 <p className="text-sm text-slate-500">Loading invoice history...</p>

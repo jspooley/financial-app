@@ -156,7 +156,7 @@ export const TRUE_UP_EXCLUSIONS: { label: string; detail: string }[] = [
   {
     label: "Sales & use tax collected on invoices",
     detail:
-      "Stripped from 100 Sales Income as pass-through to the state. Shipping, receiving, and payment fees are reimbursed to whoever paid them.",
+      "Stripped from 100 Sales Income as pass-through to the state. Shipping, receiving, delivery, and payment fees are reimbursed to whoever paid them.",
   },
 ];
 

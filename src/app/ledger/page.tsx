@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { LedgerForm } from "@/components/forms/LedgerForm";
+import { SubsequentChargesForm } from "@/components/forms/SubsequentChargesForm";
 import { useRecordLocks } from "@/components/RecordLockProvider";
 import { Button } from "@/components/ui/Button";
 import { DataTable } from "@/components/ui/DataTable";
@@ -38,6 +39,7 @@ import {
   formatCurrency,
   getLedgerCustomerPrice,
 } from "@/lib/utils";
+import { canAddSubsequentCharges } from "@/lib/subsequent-charges";
 import { SelectField } from "@/components/ui/FormFields";
 
 const GOODS_AND_SERVICES_LABEL = "Goods and Services";
@@ -122,6 +124,7 @@ function LedgerPageContent() {
   const [filterClientId, setFilterClientId] = useState("");
   const [filterPo, setFilterPo] = useState("");
   const [filterInvoiceId, setFilterInvoiceId] = useState("");
+  const [chargingEntry, setChargingEntry] = useState<LedgerEntry | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -207,6 +210,12 @@ function LedgerPageContent() {
       alert("This ledger entry is paid and cannot be deleted.");
       return;
     }
+    if (entries.some((row) => row.origin_ledger_id === entry.id)) {
+      alert(
+        "Delete subsequent charge lines for this item first, then delete the original line."
+      );
+      return;
+    }
     if (!confirm("Delete this ledger entry?")) return;
     const targets = await loadLedgerLockTargets(entry.id);
     const ok = await acquireLocks(targets);
@@ -222,10 +231,6 @@ function LedgerPageContent() {
   }
 
   async function startEdit(entry: LedgerEntry) {
-    if (isPaidLedgerRecord(entry)) {
-      alert("This ledger entry is paid and cannot be edited.");
-      return;
-    }
     const ok = await acquireLocks(await loadLedgerLockTargets(entry.id));
     if (!ok) return;
     setEditing(entry);
@@ -238,12 +243,29 @@ function LedgerPageContent() {
     setEditing(null);
   }
 
+  async function startAddCharges(entry: LedgerEntry) {
+    const ok = await acquireLocks(await loadLedgerLockTargets(entry.id));
+    if (!ok) return;
+    setChargingEntry(entry);
+  }
+
+  function closeAddCharges() {
+    setChargingEntry(null);
+    void releaseLocks();
+  }
+
   function entryActions(entry: LedgerEntry) {
     const paidLocked = isPaidLedgerRecord(entry);
     return (
       <RowActions
         onEdit={() => startEdit(entry)}
         onDelete={() => handleDelete(entry)}
+        onDuplicate={
+          canAddSubsequentCharges(entry)
+            ? () => void startAddCharges(entry)
+            : undefined
+        }
+        duplicateLabel="Add charges"
         editDisabled={paidLocked}
         deleteDisabled={paidLocked}
       />
@@ -484,6 +506,7 @@ function LedgerPageContent() {
             ledgerEntries={entries}
             initial={editing}
             onCancel={closeForm}
+            onRefresh={loadData}
             onSuccess={() => {
               closeForm();
               loadData();
@@ -570,6 +593,16 @@ function LedgerPageContent() {
               </SelectField>
             </div>
           </div>
+
+          {chargingEntry && !showForm ? (
+            <div className="mb-4">
+              <SubsequentChargesForm
+                origin={chargingEntry}
+                onCreated={loadData}
+                onClose={closeAddCharges}
+              />
+            </div>
+          ) : null}
 
           {visibleEntries.length === 0 ? (
             <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">

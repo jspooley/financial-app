@@ -82,6 +82,8 @@ export const COMPANION_KINDS = [
   "payment",
   "tax",
   "shipping",
+  "receiving",
+  "delivery",
   "fee",
   "transfer",
   "card_reimburse",
@@ -101,6 +103,7 @@ export type LedgerInsert = {
   discount_percent: number;
   shipping_receiving_amount: number;
   receiving_amount: number;
+  delivery_amount: number;
   retail_price: number;
   tax_amount: number;
   client_id: string | null;
@@ -119,6 +122,8 @@ export type LedgerInsert = {
   personal_card_role?: "charge" | "reimbursement" | null;
   coa_category?: string | null;
   source_ledger_id?: string | null;
+  /** Paid merchandise line this subsequent shipping/receiving/delivery/fee charge belongs to. */
+  origin_ledger_id?: string | null;
   companion_kind?: CompanionKind | null;
   debit_amount?: number | null;
   credit_amount?: number | null;
@@ -365,6 +370,7 @@ export interface LedgerEntry {
   discount_percent: number;
   shipping_receiving_amount: number;
   receiving_amount: number;
+  delivery_amount: number;
   retail_price: number;
   tax_amount: number;
   customer_price?: number;
@@ -388,6 +394,7 @@ export interface LedgerEntry {
   personal_card_role: "charge" | "reimbursement" | null;
   coa_category: string | null;
   source_ledger_id: string | null;
+  origin_ledger_id: string | null;
   companion_kind: CompanionKind | null;
   /** Present when Payments UI merged a Sales Income companion onto this invoice line. */
   payment_companion_id?: string | null;

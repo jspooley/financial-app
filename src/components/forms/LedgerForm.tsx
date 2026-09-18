@@ -10,6 +10,11 @@ import { ledgerFormToDb, normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledg
 import { accountMoveFields, isCashflowAccount } from "@/lib/account-move";
 import { syncCostCompanions } from "@/lib/cost-companions";
 import { syncPaymentCompanionFromParent } from "@/lib/payment-companions";
+import { SubsequentChargesForm } from "@/components/forms/SubsequentChargesForm";
+import {
+  LEDGER_DELIVERY_AND_ORIGIN_SETUP_SQL,
+  isMissingDeliveryOrOriginColumn,
+} from "@/lib/subsequent-charges";
 import { deriveLedgerPaidFlag } from "@/lib/invoice-utils";
 import {
   CASHFLOW_DEPARTMENTS,
@@ -61,8 +66,7 @@ import {
   TextareaField,
 } from "@/components/ui/FormFields";
 
-const schema = z
-  .object({
+const baseSchema = z.object({
     entry_date: z.string().min(1, "Date is required"),
     designer_cost: z.coerce
       .number({ invalid_type_error: "Designer cost is required" })
@@ -81,9 +85,10 @@ const schema = z
       .min(0, "Cannot be negative"),
     shipping_receiving_amount: z.coerce.number().min(0).transform(roundMoney),
     receiving_amount: z.coerce.number().min(0).transform(roundMoney),
+    delivery_amount: z.coerce.number().min(0).transform(roundMoney),
     retail_price: z.coerce
       .number({ invalid_type_error: "Retail price is required" })
-      .positive("Retail price must be greater than 0")
+      .min(0, "Retail price cannot be negative")
       .transform(roundMoney),
     tax_amount: z.coerce.number().min(0).transform(roundMoney),
     client_id: z.string().uuid("Select a client"),
@@ -100,8 +105,10 @@ const schema = z
       required_error: "Department is required",
     }),
     income_statement: z.boolean(),
-  })
-  .superRefine((values, ctx) => {
+  });
+
+function ledgerSchema(allowZeroRetail: boolean) {
+  return baseSchema.superRefine((values, ctx) => {
     const usesMarkup =
       values.wholesale_retail === "service" ||
       (values.wholesale_retail === "retail" &&
@@ -113,15 +120,24 @@ const schema = z
         path: ["discount_percent"],
       });
     }
+    if (!allowZeroRetail && values.retail_price <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Retail price must be greater than 0",
+        path: ["retail_price"],
+      });
+    }
   });
+}
 
-type FormValues = z.infer<typeof schema>;
+type FormValues = z.infer<typeof baseSchema>;
 
 type MoneyFieldName =
   | "retail_price"
   | "designer_cost"
   | "shipping_receiving_amount"
   | "receiving_amount"
+  | "delivery_amount"
   | "tax_amount";
 
 const currencyInputClass = `${fieldClass} py-2 pl-7 pr-3`;
@@ -240,6 +256,7 @@ interface LedgerFormProps {
   initial?: LedgerEntry | null;
   onSuccess: () => void;
   onCancel: () => void;
+  onRefresh?: () => void;
 }
 
 export function LedgerForm({
@@ -250,14 +267,21 @@ export function LedgerForm({
   initial,
   onSuccess,
   onCancel,
+  onRefresh,
 }: LedgerFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [needsQuantityColumn, setNeedsQuantityColumn] = useState(false);
+  const [needsDeliveryColumn, setNeedsDeliveryColumn] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pendingZeroDiscountValues, setPendingZeroDiscountValues] =
     useState<FormValues | null>(null);
   const [showPaymentDetails, setShowPaymentDetails] = useState(false);
   const isEditing = Boolean(initial);
+  const isSubsequentCharge = Boolean(initial?.origin_ledger_id);
+  const schema = useMemo(
+    () => ledgerSchema(isSubsequentCharge),
+    [isSubsequentCharge]
+  );
   const {
     register,
     handleSubmit,
@@ -282,6 +306,7 @@ export function LedgerForm({
       discount_percent: initial?.discount_percent ?? 0,
       shipping_receiving_amount: roundMoney(initial?.shipping_receiving_amount ?? 0),
       receiving_amount: roundMoney(initial?.receiving_amount ?? 0),
+      delivery_amount: roundMoney(initial?.delivery_amount ?? 0),
       retail_price:
         initial?.retail_price != null && initial.retail_price > 0
           ? roundMoney(initial.retail_price)
@@ -307,6 +332,7 @@ export function LedgerForm({
   const selectedAccount = useWatch({ control, name: "account" });
   const shippingAmount = useWatch({ control, name: "shipping_receiving_amount" });
   const receivingAmount = useWatch({ control, name: "receiving_amount" });
+  const deliveryAmount = useWatch({ control, name: "delivery_amount" });
   const retailPrice = useWatch({ control, name: "retail_price" });
   const designerCost = useWatch({ control, name: "designer_cost" });
   const storedPaymentFee = roundMoney(initial?.payment_fee ?? 0);
@@ -323,6 +349,7 @@ export function LedgerForm({
   const numericDiscount = Number(discountPercent) || 0;
   const numericShipping = Number(shippingAmount) || 0;
   const numericReceiving = Number(receivingAmount) || 0;
+  const numericDelivery = Number(deliveryAmount) || 0;
   const numericRetailPrice = Number(retailPrice) || 0;
   const numericDesignerCost = Number(designerCost) || 0;
   const isWholesale = wholesaleRetail === "wholesale";
@@ -429,6 +456,7 @@ export function LedgerForm({
         tax_amount: effectiveTax,
         shipping_receiving_amount: numericShipping,
         receiving_amount: numericReceiving,
+        delivery_amount: numericDelivery,
         wholesale_retail: wholesaleRetail,
         payment_fee: storedPaymentFee,
         balance_sheet: isPersonalUse,
@@ -442,6 +470,7 @@ export function LedgerForm({
       effectiveTax,
       numericShipping,
       numericReceiving,
+      numericDelivery,
       wholesaleRetail,
       storedPaymentFee,
       isPersonalUse,
@@ -480,6 +509,7 @@ export function LedgerForm({
       tax_amount: effectiveTax,
         shipping_receiving_amount: numericShipping,
         receiving_amount: numericReceiving,
+        delivery_amount: numericDelivery,
         wholesale_retail: wholesaleRetail,
       designer_cost: numericDesignerCost,
       trade_partner_id: selectedTradePartnerId || null,
@@ -501,6 +531,7 @@ export function LedgerForm({
     effectiveTax,
     numericShipping,
     numericReceiving,
+    numericDelivery,
     wholesaleRetail,
     numericDesignerCost,
     selectedTradePartnerId,
@@ -710,6 +741,7 @@ export function LedgerForm({
     }
     setError(null);
     setNeedsQuantityColumn(false);
+    setNeedsDeliveryColumn(false);
     setPendingZeroDiscountValues(null);
     setSaving(true);
     const supabase = createClient();
@@ -762,6 +794,7 @@ export function LedgerForm({
         discount_percent: values.discount_percent,
         shipping_receiving_amount: values.shipping_receiving_amount,
         receiving_amount: values.receiving_amount,
+        delivery_amount: values.delivery_amount,
         retail_price: values.retail_price,
         tax_amount: effectiveTax,
         sand_u_tax: clientSandUTaxRate,
@@ -811,6 +844,8 @@ export function LedgerForm({
         setError("PO number must be registered for the selected client.");
       } else if (dbError.message.includes("row-level security")) {
         setError("Permission denied. Sign out and sign back in, then try again.");
+      } else if (isMissingDeliveryOrOriginColumn(dbError.message)) {
+        setNeedsDeliveryColumn(true);
       } else if (dbError.message.toLowerCase().includes("quantity")) {
         setNeedsQuantityColumn(true);
       } else {
@@ -840,7 +875,11 @@ export function LedgerForm({
     const companionError = await syncCostCompanions(supabase, savedParent);
     if (companionError) {
       setSaving(false);
-      setError(companionError);
+      if (isMissingDeliveryOrOriginColumn(companionError)) {
+        setNeedsDeliveryColumn(true);
+      } else {
+        setError(companionError);
+      }
       return;
     }
 
@@ -868,6 +907,7 @@ export function LedgerForm({
   }
 
   return (
+    <div className="space-y-4">
     <form
       onSubmit={handleSubmit(onSubmit, onInvalid)}
       className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
@@ -877,8 +917,9 @@ export function LedgerForm({
       </h2>
       {paidLocked ? (
         <p className="text-sm text-amber-800">
-          This ledger entry is paid and cannot be edited. Change payments on the
-          Payments page.
+          This ledger entry is paid and cannot be edited. Add subsequent
+          shipping, receiving, delivery, or card fees below to bill them on a
+          later invoice. Change payments on the Payments page.
         </p>
       ) : null}
 
@@ -1161,6 +1202,7 @@ export function LedgerForm({
               name="shipping_receiving_amount"
               label="Shipping"
               allowZero
+              disabled={paidLocked}
               error={errors.shipping_receiving_amount?.message}
             />
             <CurrencyField
@@ -1168,7 +1210,16 @@ export function LedgerForm({
               name="receiving_amount"
               label="Receiving"
               allowZero
+              disabled={paidLocked}
               error={errors.receiving_amount?.message}
+            />
+            <CurrencyField
+              control={control}
+              name="delivery_amount"
+              label="Delivery"
+              allowZero
+              disabled={paidLocked}
+              error={errors.delivery_amount?.message}
             />
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-4">
@@ -1188,7 +1239,7 @@ export function LedgerForm({
               hint={
                 isPersonalUse
                   ? "Personal use: tax amount only"
-                  : "Customer price × qty + shipping + receiving + payment fee + tax amount"
+                  : "Customer price × qty + shipping + receiving + delivery + payment fee + tax amount"
               }
             />
           </div>
@@ -1397,6 +1448,18 @@ export function LedgerForm({
 NOTIFY pgrst, 'reload schema';`}
           </pre>
         </div>
+      ) : needsDeliveryColumn ? (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+          <p className="font-semibold">
+            One-time setup: add delivery and subsequent-charge columns in Supabase
+          </p>
+          <p className="mt-2">
+            Run this SQL once, then refresh and save again.
+          </p>
+          <pre className="mt-3 overflow-x-auto rounded-md border border-amber-200 bg-white p-3 text-xs text-slate-800">
+            {LEDGER_DELIVERY_AND_ORIGIN_SETUP_SQL}
+          </pre>
+        </div>
       ) : (
         error && <p className="text-sm text-red-600">{error}</p>
       )}
@@ -1457,5 +1520,12 @@ NOTIFY pgrst, 'reload schema';`}
         </div>
       )}
     </form>
+    {initial ? (
+      <SubsequentChargesForm
+        origin={initial}
+        onCreated={onRefresh ?? onSuccess}
+      />
+    ) : null}
+    </div>
   );
 }

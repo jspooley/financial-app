@@ -82,6 +82,7 @@ export type LedgerAmountEntry = {
   tax_amount?: number;
   shipping_receiving_amount?: number;
   receiving_amount?: number;
+  delivery_amount?: number;
   wholesale_retail?: "wholesale" | "retail" | "service";
   designer_cost?: number;
   trade_partner_id?: string | null;
@@ -98,7 +99,7 @@ export type LedgerAmountEntry = {
   balance_sheet?: boolean | null;
 };
 
-/** Line amount: customer price × qty + tax + shipping + receiving + fee (invoice and payment totals).
+/** Line amount: customer price × qty + tax + shipping + receiving + delivery + fee (invoice and payment totals).
  * Personal use (balance sheet) lines are tax amount only. */
 export function ledgerLineAmount(entry: LedgerAmountEntry) {
   return getLedgerInvoicedAmount({
@@ -109,6 +110,7 @@ export function ledgerLineAmount(entry: LedgerAmountEntry) {
     tax_amount: entry.tax_amount ?? 0,
     shipping_receiving_amount: entry.shipping_receiving_amount ?? 0,
     receiving_amount: entry.receiving_amount ?? 0,
+    delivery_amount: entry.delivery_amount ?? 0,
     wholesale_retail: entry.wholesale_retail ?? "retail",
     payment_fee: entry.payment_fee ?? 0,
     balance_sheet: entry.balance_sheet,
@@ -226,6 +228,7 @@ export function deriveLedgerPaidFlag(entry: {
   tax_amount?: number | null;
   shipping_receiving_amount?: number | null;
   receiving_amount?: number | null;
+  delivery_amount?: number | null;
   wholesale_retail?: string | null;
   designer_cost?: number | null;
   payment_fee?: number | null;
@@ -250,6 +253,7 @@ export function deriveLedgerPaidFlag(entry: {
     tax_amount: Number(entry.tax_amount ?? 0),
     shipping_receiving_amount: Number(entry.shipping_receiving_amount ?? 0),
     receiving_amount: Number(entry.receiving_amount ?? 0),
+    delivery_amount: Number(entry.delivery_amount ?? 0),
     wholesale_retail: wholesaleRetail,
     designer_cost: Number(entry.designer_cost ?? 0),
     payment_fee: Number(entry.payment_fee ?? 0),
@@ -610,6 +614,7 @@ export interface InvoiceLineBreakdown {
   tax: number;
   shipping: number;
   receiving: number;
+  delivery: number;
   paymentFee: number;
   total: number;
   taxLabel: string;
@@ -625,6 +630,7 @@ export function getInvoiceLineBreakdown(entry: InvoiceLineItem): InvoiceLineBrea
       tax,
       shipping: 0,
       receiving: 0,
+      delivery: 0,
       paymentFee: 0,
       total: roundMoney(tax),
       taxLabel: entry.wholesale_retail === "wholesale" ? formatCurrency(tax) : "N/A",
@@ -633,6 +639,7 @@ export function getInvoiceLineBreakdown(entry: InvoiceLineItem): InvoiceLineBrea
 
   const shipping = Number(entry.shipping_receiving_amount) || 0;
   const receiving = Number(entry.receiving_amount) || 0;
+  const delivery = Number(entry.delivery_amount) || 0;
   const merchandise = getLedgerCustomerPrice({
     retail_price: entry.retail_price,
     quantity: entry.quantity,
@@ -648,13 +655,14 @@ export function getInvoiceLineBreakdown(entry: InvoiceLineItem): InvoiceLineBrea
     tax,
     shipping,
     receiving,
+    delivery,
     paymentFee: 0,
-    total: roundMoney(merchandise + tax + shipping + receiving),
+    total: roundMoney(merchandise + tax + shipping + receiving + delivery),
     taxLabel: entry.wholesale_retail === "wholesale" ? formatCurrency(tax) : "N/A",
   };
 }
 
-/** Merchandise billed on the line (excludes tax, shipping, receiving, and payment fees). */
+/** Merchandise billed on the line (excludes tax, shipping, receiving, delivery, and payment fees). */
 export function invoiceLineMerchandiseAmount(entry: LedgerAmountEntry): number {
   if (entry.balance_sheet) return 0;
   return getLedgerMerchandiseAmount({
@@ -667,12 +675,13 @@ export function invoiceLineMerchandiseAmount(entry: LedgerAmountEntry): number {
   });
 }
 
-/** 203 pass-through costs on the line (shipping, receiving, payment fee). */
+/** 203 pass-through costs on the line (shipping, receiving, delivery, payment fee). */
 export function invoiceLinePassThroughExpenses(entry: LedgerAmountEntry): number {
   if (entry.balance_sheet) return 0;
   return roundMoney(
     Number(entry.shipping_receiving_amount ?? 0) +
       Number(entry.receiving_amount ?? 0) +
+      Number(entry.delivery_amount ?? 0) +
       Number(entry.payment_fee ?? 0)
   );
 }
@@ -691,7 +700,7 @@ export function invoiceLineProfit(entry: LedgerAmountEntry): number {
   );
 }
 
-/** Sum invoice line profit after 203 pass-through expenses (shipping, receiving, fees). */
+/** Sum invoice line profit after 203 pass-through expenses (shipping, receiving, delivery, fees). */
 export function sumInvoiceLineProfit(entries: LedgerAmountEntry[]): number {
   return roundMoney(
     entries
@@ -705,10 +714,11 @@ export type InvoiceSelectedItemTotals = {
   tax: number;
   shipping: number;
   receiving: number;
+  delivery: number;
   fees: number;
 };
 
-/** Totals for the invoice selected-items panel (profit, tax, shipping, receiving, fees). */
+/** Totals for the invoice selected-items panel (profit, tax, shipping, receiving, delivery, fees). */
 export function sumInvoiceSelectedItemTotals(
   entries: LedgerAmountEntry[]
 ): InvoiceSelectedItemTotals {
@@ -716,11 +726,13 @@ export function sumInvoiceSelectedItemTotals(
   let tax = 0;
   let shipping = 0;
   let receiving = 0;
+  let delivery = 0;
   let fees = 0;
   for (const line of lines) {
     tax += Number(line.tax_amount ?? 0);
     shipping += Number(line.shipping_receiving_amount ?? 0);
     receiving += Number(line.receiving_amount ?? 0);
+    delivery += Number(line.delivery_amount ?? 0);
     fees += Number(line.payment_fee ?? 0);
   }
   return {
@@ -728,6 +740,7 @@ export function sumInvoiceSelectedItemTotals(
     tax: roundMoney(tax),
     shipping: roundMoney(shipping),
     receiving: roundMoney(receiving),
+    delivery: roundMoney(delivery),
     fees: roundMoney(fees),
   };
 }
@@ -741,12 +754,22 @@ export function sumInvoiceLineBreakdowns(entries: InvoiceLineItem[]): InvoiceLin
         tax: roundMoney(acc.tax + line.tax),
         shipping: roundMoney(acc.shipping + line.shipping),
         receiving: roundMoney(acc.receiving + line.receiving),
+        delivery: roundMoney(acc.delivery + line.delivery),
         paymentFee: roundMoney(acc.paymentFee + line.paymentFee),
         total: roundMoney(acc.total + line.total),
         taxLabel: "",
       };
     },
-    { merchandise: 0, tax: 0, shipping: 0, receiving: 0, paymentFee: 0, total: 0, taxLabel: "" }
+    {
+      merchandise: 0,
+      tax: 0,
+      shipping: 0,
+      receiving: 0,
+      delivery: 0,
+      paymentFee: 0,
+      total: 0,
+      taxLabel: "",
+    }
   );
 }
 

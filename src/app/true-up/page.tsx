@@ -915,7 +915,7 @@ export default function TrueUpReportPage() {
     <AppShell>
       <PageHeader
         title="True Up Report"
-        description="Cash-basis accounting between partners. Purchases (goods, shipping, receiving, and fees) stay with whoever paid and are reimbursed in full from client payments — never split 50/50. Client payments go to whoever received them. Required transfer reimburses the purchaser and splits profit only 50/50: send is negative, receive is positive."
+        description="Cash-basis accounting between partners. Purchases (goods, shipping, receiving, delivery, and fees) stay with whoever paid and are reimbursed in full from client payments — never split 50/50. Client payments go to whoever received them. Required transfer reimburses the purchaser and splits profit only 50/50: send is negative, receive is positive."
         action={
           <div className="flex flex-wrap gap-2">
             <SelectField
@@ -963,7 +963,7 @@ export default function TrueUpReportPage() {
         <div className="space-y-8">
           <CollapsibleSection
             title="Sales and Revenue"
-            description="Cash in and out by invoice. COGS includes goods, shipping, receiving, and payment fees (negative = money out, attributed to whoever paid). Sales income is net of sales & use tax only. Required transfer reimburses the purchaser from client payments and splits remaining profit 50/50. Jobs with purchases but no client payment yet show as Pending."
+            description="Cash in and out by invoice. COGS includes goods, shipping, receiving, delivery, and payment fees (negative = money out, attributed to whoever paid). Sales income is net of sales & use tax only. Required transfer reimburses the purchaser from client payments and splits remaining profit 50/50. Jobs with purchases but no client payment yet show as Pending."
           >
             <BlockTable
               sectionLabel="Sales&Revenue"

@@ -34,6 +34,7 @@ type LedgerPlEntry = Pick<
   | "tax_amount"
   | "shipping_receiving_amount"
   | "receiving_amount"
+  | "delivery_amount"
   | "wholesale_retail"
   | "payment_fee"
   | "variance_accepted"
@@ -167,12 +168,12 @@ export function filterPlVarianceEntries<T extends LedgerPlEntry>(entries: T[]): 
 
 /**
  * Expenses come from three places:
- *  - cost companion rows (shipping / receiving / payment fees → 203), which carry the
+ *  - cost companion rows (shipping / receiving / delivery / payment fees → 203), which carry the
  *    amount in debit_amount;
  *  - operating rows entered on Cashflow with a 200-series CoA (including the
  *    monthly S&U tax remittance under 214), net of any credit/refund;
  *  - the write-off expense amount on an invoice line.
- * The parent's shipping_receiving_amount / receiving_amount / payment_fee are never added here —
+ * The parent's shipping_receiving_amount / receiving_amount / delivery_amount / payment_fee are never added here —
  * those dollars already live on the companions (migration 061).
  */
 export function sumPlExpenseAmount(entry: LedgerPlEntry): number {
@@ -207,6 +208,7 @@ export function sumPlAcceptedVariance(entry: LedgerPlEntry): number {
     tax_amount: entry.tax_amount,
     shipping_receiving_amount: entry.shipping_receiving_amount,
     receiving_amount: entry.receiving_amount,
+    delivery_amount: entry.delivery_amount,
     wholesale_retail: entry.wholesale_retail,
     designer_cost: entry.designer_cost,
     payment_fee: entry.payment_fee,

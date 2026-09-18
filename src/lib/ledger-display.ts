@@ -1,5 +1,6 @@
 import { getLedgerOutstandingBalance } from "@/lib/invoice-utils";
 import { computePlTotals, isPlBalanceSheetEntry, ledgerLineGrossProfit, ledgerLineNetProfit } from "@/lib/pl-report";
+import { isSubsequentChargeLine } from "@/lib/subsequent-charges";
 import type { LedgerEntry } from "@/lib/types";
 import {
   formatCurrency,
@@ -13,6 +14,14 @@ import {
   ledgerUsesCostMarkup,
   roundMoney,
 } from "@/lib/utils";
+
+function ledgerDescription(entry: LedgerEntry) {
+  const base = entry.description?.trim() || "—";
+  if (isSubsequentChargeLine(entry) && !entry.invoiced && !entry.invoice_id) {
+    return `${base} · Unpaid`;
+  }
+  return base;
+}
 
 function ledgerCreditDebitLabel(entry: LedgerEntry) {
   return entry.credit_debit === "debit" ? "Client Debit" : "Credit (receivable)";
@@ -29,7 +38,7 @@ export function ledgerGoodsServicesCardFields(entry: LedgerEntry) {
   const discountLabel = ledgerUsesCostMarkup(entry) ? "Markup %" : "Discount %";
   return [
     { label: "Client", value: entry.clients?.name ?? "—" },
-    { label: "Description", value: entry.description?.trim() || "—" },
+    { label: "Description", value: ledgerDescription(entry) },
     { label: "Date", value: formatDate(entry.entry_date) },
     { label: "Department", value: entry.department ?? "—" },
     { label: "Credit / Debit", value: ledgerCreditDebitLabel(entry) },
@@ -67,6 +76,10 @@ export function ledgerGoodsServicesCardFields(entry: LedgerEntry) {
     {
       label: "Receiving",
       value: formatCurrency(Number(entry.receiving_amount ?? 0)),
+    },
+    {
+      label: "Delivery",
+      value: formatCurrency(Number(entry.delivery_amount ?? 0)),
     },
     { label: "Payment Fee", value: formatCurrency(Number(entry.payment_fee ?? 0)) },
     {
@@ -109,6 +122,10 @@ export function ledgerDetailFields(
     {
       label: "Receiving",
       value: formatCurrency(Number(entry.receiving_amount ?? 0)),
+    },
+    {
+      label: "Delivery",
+      value: formatCurrency(Number(entry.delivery_amount ?? 0)),
     },
     { label: "Payment Fee", value: formatCurrency(Number(entry.payment_fee ?? 0)) },
     { label: "Invoiced Amount", value: formatCurrency(getLedgerInvoicedAmount(entry)) },
@@ -215,7 +232,7 @@ export function mapLedgerTableRow(
   return {
     client: entry.clients?.name ?? "—",
     date: formatDate(entry.entry_date),
-    description: entry.description?.trim() || "—",
+    description: ledgerDescription(entry),
     department: entry.department ?? "—",
     creditDebit: ledgerCreditDebitLabel(entry),
     po: entry.po_number ?? "—",
@@ -231,6 +248,7 @@ export function mapLedgerTableRow(
     designerCost: formatCurrency(Number(entry.designer_cost)),
     shipping: formatCurrency(Number(entry.shipping_receiving_amount ?? 0)),
     receiving: formatCurrency(Number(entry.receiving_amount ?? 0)),
+    delivery: formatCurrency(Number(entry.delivery_amount ?? 0)),
     paymentFee: formatCurrency(Number(entry.payment_fee ?? 0)),
     invoicedAmount: formatCurrency(getLedgerInvoicedAmount(entry)),
     tax: ledgerTaxDisplay(entry),
@@ -312,6 +330,7 @@ export function ledgerDebitColumnTotals(
   let tax = 0;
   let shipping = 0;
   let receiving = 0;
+  let delivery = 0;
   let paymentFee = 0;
   let invoicedAmount = 0;
   let outstandingBalance = 0;
@@ -331,6 +350,7 @@ export function ledgerDebitColumnTotals(
     }
     shipping += Number(entry.shipping_receiving_amount ?? 0);
     receiving += Number(entry.receiving_amount ?? 0);
+    delivery += Number(entry.delivery_amount ?? 0);
     paymentFee += Number(entry.payment_fee ?? 0);
     invoicedAmount += getLedgerInvoicedAmount(entry);
     outstandingBalance += getLedgerOutstandingBalance(entry);
@@ -354,6 +374,7 @@ export function ledgerDebitColumnTotals(
     tax: formatCurrency(roundMoney(tax)),
     shipping: formatCurrency(roundMoney(shipping)),
     receiving: formatCurrency(roundMoney(receiving)),
+    delivery: formatCurrency(roundMoney(delivery)),
     paymentFee: formatCurrency(roundMoney(paymentFee)),
     invoicedAmount: formatCurrency(roundMoney(invoicedAmount)),
     outstandingBalance: formatCurrency(roundMoney(outstandingBalance)),
@@ -388,6 +409,7 @@ export const ledgerGoodsServicesColumns = [
   { key: "discount", label: "Discount / Markup %" },
   { key: "shipping", label: "Shipping" },
   { key: "receiving", label: "Receiving" },
+  { key: "delivery", label: "Delivery" },
   { key: "paymentFee", label: "Payment Fee", className: "w-24 max-w-24 whitespace-nowrap px-2" },
   { key: "invoicedAmount", label: "Invoiced Amount" },
 ] as const;
@@ -404,6 +426,7 @@ export function ledgerGoodsServicesColumnTotals(
   let customerPrice = 0;
   let shipping = 0;
   let receiving = 0;
+  let delivery = 0;
   let paymentFee = 0;
   let invoicedAmount = 0;
   let designerCost = 0;
@@ -416,6 +439,7 @@ export function ledgerGoodsServicesColumnTotals(
     customerPrice += getLedgerCustomerPrice(entry);
     shipping += Number(entry.shipping_receiving_amount ?? 0);
     receiving += Number(entry.receiving_amount ?? 0);
+    delivery += Number(entry.delivery_amount ?? 0);
     paymentFee += Number(entry.payment_fee ?? 0);
     invoicedAmount += getLedgerInvoicedAmount(entry);
     designerCost += Number(entry.designer_cost);
@@ -431,6 +455,7 @@ export function ledgerGoodsServicesColumnTotals(
     customerPrice: formatCurrency(roundMoney(customerPrice)),
     shipping: formatCurrency(roundMoney(shipping)),
     receiving: formatCurrency(roundMoney(receiving)),
+    delivery: formatCurrency(roundMoney(delivery)),
     paymentFee: formatCurrency(roundMoney(paymentFee)),
     invoicedAmount: formatCurrency(roundMoney(invoicedAmount)),
     designerCost: formatCurrency(roundMoney(designerCost)),
@@ -449,6 +474,7 @@ export const ledgerDebitColumns = [
   { key: "tax", label: "Tax" },
   { key: "shipping", label: "Shipping" },
   { key: "receiving", label: "Receiving" },
+  { key: "delivery", label: "Delivery" },
   { key: "paymentFee", label: "Pmt Fee", className: "w-24 max-w-24 whitespace-nowrap px-2" },
   { key: "invoicedAmount", label: "Invoiced Amount" },
   { key: "coaCategory", label: "CoA Category" },
@@ -546,6 +572,7 @@ export const ledgerDetailColumns = [
   { key: "tax", label: "Tax" },
   { key: "shipping", label: "Shipping" },
   { key: "receiving", label: "Receiving" },
+  { key: "delivery", label: "Delivery" },
   { key: "paymentFee", label: "Pmt Fee", className: "w-24 max-w-24 whitespace-nowrap px-2" },
   { key: "invoicedAmount", label: "Invoiced Amount" },
   { key: "coaCategory", label: "CoA Category" },

@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { useRecordLocks } from "@/components/RecordLockProvider";
 import { VarianceAcceptModal } from "@/components/payments/VarianceAcceptModal";
 import { Button } from "@/components/ui/Button";
-import { SelectField, editableControlClass, fieldClass, selectChevron, selectFieldClass } from "@/components/ui/FormFields";
+import { InputField, SelectField, editableControlClass, fieldClass, selectChevron, selectFieldClass } from "@/components/ui/FormFields";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -50,6 +51,11 @@ import {
   COA_COGS_CATEGORY,
 } from "@/lib/payment-companions";
 import { syncCostCompanions } from "@/lib/cost-companions";
+import { SubsequentChargesForm } from "@/components/forms/SubsequentChargesForm";
+import {
+  groupSubsequentChargesByOrigin,
+  uninvoicedSubsequentChargeTotal,
+} from "@/lib/subsequent-charges";
 
 type PaymentView = "outstanding" | "history";
 
@@ -111,7 +117,7 @@ function paymentLineForDisplay(entry: LedgerEntry, draft: PaymentRowDraft) {
 }
 
 function lineOutstandingBalance(entry: LedgerEntry, draft: PaymentRowDraft) {
-  return getLedgerUnderpaymentAmount(entryFromDraft(entry, draft));
+  return getLedgerUnderpaymentAmount(paymentLineForDisplay(entry, draft));
 }
 
 function paymentReceivedForDraft(entry: LedgerEntry, draft: PaymentRowDraft) {
@@ -199,6 +205,18 @@ function defaultPaymentAmount(entry: LedgerEntry) {
   return ledgerLineAmount(entry);
 }
 
+function unpaidItemsTotal(entries: LedgerEntry[]) {
+  return roundMoney(
+    entries.reduce((sum, entry) => sum + getLedgerUnderpaymentAmount(entry), 0)
+  );
+}
+
+function payInFullPaymentAmount(entry: LedgerEntry) {
+  return roundMoney(
+    getLedgerSettlementPaymentAmount(entry) + getLedgerUnderpaymentAmount(entry)
+  );
+}
+
 function draftDatePaidFromEntry(entry: LedgerEntry): string {
   const saved = toDateInputValue(entry.date_paid);
   if (saved) return saved;
@@ -249,6 +267,15 @@ function paymentFeeHint(paymentType: PaymentType) {
   return undefined;
 }
 
+function UninvoicedChargesStatus({ amount }: { amount: number }) {
+  if (amount < 0.005) return null;
+  return (
+    <span className="mt-1 block text-sm font-medium text-amber-800">
+      Uninvoiced charges {formatCurrency(amount)} — bill from Invoicing
+    </span>
+  );
+}
+
 function parsePaymentsDbSetupError(message: string) {
   const lower = message.toLowerCase();
   if (!lower.includes("column") && !lower.includes("schema cache")) {
@@ -291,6 +318,13 @@ export default function PaymentsPage() {
   const [emptyHint, setEmptyHint] = useState<string | null>(null);
   const [clientNames, setClientNames] = useState<Map<string, string>>(new Map());
   const [pendingSave, setPendingSave] = useState<PendingPaymentSave | null>(null);
+  const [chargingEntry, setChargingEntry] = useState<LedgerEntry | null>(null);
+  const [subsequentByOrigin, setSubsequentByOrigin] = useState<
+    Map<string, LedgerEntry[]>
+  >(new Map());
+  const [bulkPaymentAmount, setBulkPaymentAmount] = useState("");
+  const [bulkPaidTo, setBulkPaidTo] = useState<KnownPurchaser>(defaultPaidTo);
+  const [bulkPayError, setBulkPayError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -326,6 +360,7 @@ export default function PaymentsPage() {
       setEntries([]);
       setPaidEntries([]);
       setInvoicedDebits([]);
+      setSubsequentByOrigin(new Map());
       setEmptyHint(null);
       setLoading(false);
       return;
@@ -345,10 +380,20 @@ export default function PaymentsPage() {
     const invoiceLineIds = invoiceLines.map((entry) => entry.id);
     let companions: LedgerEntry[] = [];
     if (invoiceLineIds.length > 0) {
-      const { data: companionData, error: companionError } = await supabase
-        .from("ledger")
-        .select("*, clients(name)")
-        .in("source_ledger_id", invoiceLineIds);
+      const [
+        { data: companionData, error: companionError },
+        { data: subsequentData, error: subsequentError },
+      ] = await Promise.all([
+        supabase
+          .from("ledger")
+          .select("*, clients(name)")
+          .in("source_ledger_id", invoiceLineIds),
+        supabase
+          .from("ledger")
+          .select("*, clients(name)")
+          .in("origin_ledger_id", invoiceLineIds)
+          .is("source_ledger_id", null),
+      ]);
       if (companionError) {
         const setup = parsePaymentsDbSetupError(companionError.message);
         if (setup.needsDbSetup) setNeedsDbSetup(true);
@@ -363,6 +408,24 @@ export default function PaymentsPage() {
       companions = (companionData ?? []).map((row) =>
         normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
       );
+      if (subsequentError) {
+        if (
+          !subsequentError.message.toLowerCase().includes("origin_ledger_id")
+        ) {
+          setError(subsequentError.message);
+        }
+        setSubsequentByOrigin(new Map());
+      } else {
+        setSubsequentByOrigin(
+          groupSubsequentChargesByOrigin(
+            (subsequentData ?? []).map((row) =>
+              normalizeLedgerRow(row as LedgerDbRow & Record<string, unknown>)
+            )
+          )
+        );
+      }
+    } else {
+      setSubsequentByOrigin(new Map());
     }
 
     const allInvoiced = mergePaymentCompanionsOntoEntries(
@@ -487,6 +550,14 @@ export default function PaymentsPage() {
       ),
     [filteredInvoicedDebits]
   );
+
+  const uninvoicedSubsequentTotal = useMemo(() => {
+    let total = 0;
+    for (const rows of subsequentByOrigin.values()) {
+      total += uninvoicedSubsequentChargeTotal(rows);
+    }
+    return roundMoney(total);
+  }, [subsequentByOrigin]);
 
   const clientsWithUnpaid = useMemo(() => {
     const byId = new Map<string, string>();
@@ -625,6 +696,15 @@ export default function PaymentsPage() {
     return [...rows].sort((a, b) => b.entry_date.localeCompare(a.entry_date));
   }, [entries, selectedClientId, filterPo, filterInvoiceId]);
 
+  const listedUnpaidTotal = useMemo(
+    () => unpaidItemsTotal(filteredEntries),
+    [filteredEntries]
+  );
+
+  const canBulkPayInFull = Boolean(
+    selectedClientId && filteredEntries.length > 0
+  );
+
   const allClientInvoicedDebits = useMemo(() => {
     const source = selectedClientId
       ? invoicedDebits.filter((entry) => entry.client_id === selectedClientId)
@@ -664,6 +744,12 @@ export default function PaymentsPage() {
     }),
     [clientInvoiceSummaries]
   );
+
+  useEffect(() => {
+    setBulkPaymentAmount("");
+    setBulkPaidTo(defaultPaidTo);
+    setBulkPayError(null);
+  }, [selectedClientId, filterPo, filterInvoiceId]);
 
   useEffect(() => {
     if (loading || view !== "outstanding" || !soleOutstandingInvoiceClientId) return;
@@ -860,6 +946,28 @@ export default function PaymentsPage() {
     });
     if (!ok) return;
     updateDraft(entry.id, beginEditingPayment(entry));
+  }
+
+  async function beginAddCharges(entry: LedgerEntry) {
+    setError(null);
+    setSuccess(null);
+    if (chargingEntry?.id === entry.id) {
+      setChargingEntry(null);
+      return;
+    }
+    const ok = await acquireLocks(await loadLedgerLockTargets(entry.id), {
+      mode: "add",
+    });
+    if (!ok) return;
+    setChargingEntry(entry);
+  }
+
+  function closeAddCharges() {
+    const entryId = chargingEntry?.id;
+    setChargingEntry(null);
+    if (entryId) {
+      void loadLedgerLockTargets(entryId).then((targets) => releaseLocks(targets));
+    }
   }
 
   function cancelRowEdit(entry: LedgerEntry) {
@@ -1188,11 +1296,64 @@ export default function PaymentsPage() {
     );
   }
 
+  async function confirmBulkPayInFull() {
+    setSuccess(null);
+    setError(null);
+    setBulkPayError(null);
+
+    if (!canBulkPayInFull) {
+      setBulkPayError("Select a client with unpaid items listed first.");
+      return;
+    }
+
+    const entered = roundMoney(Number(bulkPaymentAmount));
+    if (
+      !Number.isFinite(entered) ||
+      Math.abs(entered - listedUnpaidTotal) >= 0.005
+    ) {
+      setBulkPayError(
+        `The payment amount does not match the unpaid total of ${formatCurrency(listedUnpaidTotal)}. Enter payment line by line.`
+      );
+      return;
+    }
+
+    const datePaid = todayDateInputValue();
+    const rows = filteredEntries.map((entry) => ({
+      entry,
+      draft: {
+        ...(drafts[entry.id] ?? paymentDraftFromEntry(entry)),
+        editing: true,
+        date_paid: datePaid,
+        paid_to: bulkPaidTo,
+        payment_type: defaultPaymentType,
+        payment_amount: payInFullPaymentAmount(entry),
+        payment_fee: 0,
+        payment_fee_manually_edited: false,
+        expense: false,
+        expense_amount: 0,
+        variance_accepted: false,
+        variance_amount: 0,
+        variance_notes: "",
+      } satisfies PaymentRowDraft,
+    }));
+
+    const targets = (
+      await Promise.all(rows.map((row) => loadLedgerLockTargets(row.entry.id)))
+    ).flat();
+    const ok = await acquireLocks(targets);
+    if (!ok) return;
+
+    await beginPaymentSave(
+      rows,
+      `Marked ${rows.length} unpaid item${rows.length === 1 ? "" : "s"} paid in full.`
+    );
+  }
+
   return (
     <AppShell>
       <PageHeader
         title="Payments"
-        description="Record payments against invoiced amounts. Items stay open until payment equals invoiced amount."
+        description="Record payments against invoiced amounts. After you select a client, use Pay all in full to mark the listed unpaid items paid at once."
       />
 
       {(needsExpenseSetup || needsDbSetup || needsVarianceSetup) && (
@@ -1258,6 +1419,20 @@ export default function PaymentsPage() {
           Payment History
         </Button>
       </div>
+
+      {uninvoicedSubsequentTotal >= 0.005 ? (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+          <span className="font-medium">
+            {formatCurrency(uninvoicedSubsequentTotal)}
+          </span>{" "}
+          in unpaid shipping, receiving, delivery, or card fees is not on an
+          invoice yet.{" "}
+          <Link href="/invoicing" className="font-medium text-brand-800 hover:underline">
+            Create a new invoice from Invoicing → Outstanding
+          </Link>
+          .
+        </div>
+      ) : null}
 
       {view === "outstanding" ? (
         <>
@@ -1328,10 +1503,89 @@ export default function PaymentsPage() {
           >
             Add Payment
           </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            className="min-h-11 shrink-0 whitespace-nowrap"
+            disabled={!canBulkPayInFull || saving}
+            onClick={() => {
+              document
+                .getElementById("pay-all-in-full")
+                ?.scrollIntoView({ behavior: "smooth", block: "center" });
+            }}
+          >
+            Pay all in full
+          </Button>
           <span className="text-xs text-slate-500">
             Leave client blank to view all outstanding payments. Choose a client to add or edit
             payments.
           </span>
+        </div>
+        <div
+          id="pay-all-in-full"
+          className="mt-4 rounded-lg border border-brand-200 bg-brand-50 p-4"
+        >
+          <p className="text-sm font-semibold text-slate-900">
+            Mark all unpaid items paid in full
+          </p>
+          {!selectedClientId ? (
+            <p className="mt-1 text-sm text-slate-700">
+              Select a client to pay all listed unpaid items at once.
+            </p>
+          ) : filteredEntries.length === 0 ? (
+            <p className="mt-1 text-sm text-slate-700">
+              No unpaid items are listed for the current filters.
+            </p>
+          ) : (
+            <>
+              <p className="mt-1 text-sm text-slate-700">
+                {filteredEntries.length} unpaid{" "}
+                {filteredEntries.length === 1 ? "item" : "items"} total{" "}
+                <span className="font-medium text-slate-900">
+                  {formatCurrency(listedUnpaidTotal)}
+                </span>
+                . Enter that amount and who was paid, then confirm.
+              </p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <InputField
+                  label="Payment amount"
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  min="0"
+                  value={bulkPaymentAmount}
+                  onChange={(event) => {
+                    setBulkPaymentAmount(event.target.value);
+                    setBulkPayError(null);
+                  }}
+                />
+                <SelectField
+                  label="Paid to"
+                  value={bulkPaidTo}
+                  onChange={(event) => {
+                    setBulkPaidTo(event.target.value as KnownPurchaser);
+                    setBulkPayError(null);
+                  }}
+                >
+                  <option value="Jess">Jess</option>
+                  <option value="Molly">Molly</option>
+                </SelectField>
+              </div>
+              {bulkPayError ? (
+                <p className="mt-3 text-sm text-red-600">{bulkPayError}</p>
+              ) : null}
+              <div className="mt-3">
+                <Button
+                  type="button"
+                  loading={saving}
+                  disabled={saving}
+                  onClick={() => void confirmBulkPayInFull()}
+                >
+                  Confirm payment
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -1885,6 +2139,16 @@ export default function PaymentsPage() {
             </div>
           )}
 
+          {chargingEntry ? (
+            <div className="mb-4">
+              <SubsequentChargesForm
+                origin={chargingEntry}
+                onCreated={loadData}
+                onClose={closeAddCharges}
+              />
+            </div>
+          ) : null}
+
           {loading ? (
             <p className="text-sm text-slate-500">Loading payment history...</p>
           ) : filteredPaidEntries.length === 0 ? (
@@ -1894,7 +2158,9 @@ export default function PaymentsPage() {
           ) : (
             <>
             <p className="mb-3 text-xs text-slate-500">
-              Click Edit on a payment, make changes, then Save. Cancel discards that row.
+              Click Edit on a payment, make changes, then Save. Cancel discards
+              that row. Click Add charges on a paid line to bill shipping,
+              receiving, delivery, or a card fee on a later invoice.
             </p>
             <div className="space-y-3 md:hidden">
               {filteredPaidEntries.map((entry) => {
@@ -1907,7 +2173,15 @@ export default function PaymentsPage() {
                     className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm text-sm"
                   >
                     <div className="flex items-start gap-3">
-                      <div className="flex w-21 shrink-0 flex-col gap-1.5">
+                      <div className="flex w-28 shrink-0 flex-col gap-1.5">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="w-full min-h-[33px] px-3 py-1.5"
+                          onClick={() => void beginAddCharges(entry)}
+                        >
+                          {chargingEntry?.id === entry.id ? "Close" : "Add charges"}
+                        </Button>
                         <Button
                           type="button"
                           variant="secondary"
@@ -1952,6 +2226,11 @@ export default function PaymentsPage() {
                             ? "Paid in full"
                             : "Partial payment"}
                         </p>
+                        <UninvoicedChargesStatus
+                          amount={uninvoicedSubsequentChargeTotal(
+                            subsequentByOrigin.get(entry.id) ?? []
+                          )}
+                        />
                       </div>
                     </div>
 
@@ -2081,7 +2360,15 @@ export default function PaymentsPage() {
                     return (
                       <tr key={entry.id}>
                         <td className="px-3 py-3">
-                          <div className="flex w-21 flex-col gap-1.5">
+                          <div className="flex w-28 flex-col gap-1.5">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="w-full min-h-[33px] px-3 py-1.5"
+                              onClick={() => void beginAddCharges(entry)}
+                            >
+                              {chargingEntry?.id === entry.id ? "Close" : "Add charges"}
+                            </Button>
                             <Button
                               type="button"
                               variant="secondary"
@@ -2168,6 +2455,11 @@ export default function PaymentsPage() {
                           {isLedgerLineFullyPaid(entryFromDraft(entry, draft))
                             ? "Paid in full"
                             : "Partial"}
+                          <UninvoicedChargesStatus
+                            amount={uninvoicedSubsequentChargeTotal(
+                              subsequentByOrigin.get(entry.id) ?? []
+                            )}
+                          />
                         </td>
                         <td className="px-3 py-3">
                           {draft.editing ? (

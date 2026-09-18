@@ -98,6 +98,7 @@ export function InvoiceDetailView({
                     <th className="px-3 py-2 text-right">Tax</th>
                     <th className="px-3 py-2 text-right">Shipping</th>
                     <th className="px-3 py-2 text-right">Receiving</th>
+                    <th className="px-3 py-2 text-right">Delivery</th>
                     <th className="px-3 py-2 text-right">Line Total</th>
                   </tr>
                 </thead>
@@ -123,6 +124,9 @@ export function InvoiceDetailView({
                         <td className="px-3 py-2 text-right">
                           {formatCurrency(breakdown.receiving)}
                         </td>
+                        <td className="px-3 py-2 text-right">
+                          {formatCurrency(breakdown.delivery)}
+                        </td>
                         <td className="px-3 py-2 text-right font-medium">
                           {formatCurrency(breakdown.total)}
                         </td>
@@ -144,6 +148,9 @@ export function InvoiceDetailView({
                     </td>
                     <td className="px-3 py-3 text-right">
                       {formatCurrency(totals.receiving)}
+                    </td>
+                    <td className="px-3 py-3 text-right">
+                      {formatCurrency(totals.delivery)}
                     </td>
                     <td className="px-3 py-3 text-right text-brand-800">
                       {formatCurrency(totals.total)}
