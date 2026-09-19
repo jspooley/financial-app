@@ -27,10 +27,15 @@ import { normalizeLedgerRow, PAYMENTS_DB_SETUP_SQL, EXPENSE_DB_SETUP_SQL, LEDGER
 import { loadLedgerLockTargets } from "@/lib/record-lock";
 import {
   PAYMENT_TYPE_OPTIONS,
+  PURCHASER_ACCOUNT_OPTIONS,
+  isKnownPurchaser,
+  isKnownPurchaseAssignment,
   type Client,
   type LedgerEntry,
   type PaymentType,
   type KnownPurchaser,
+  type Purchaser,
+  type PurchaserAccount,
 } from "@/lib/types";
 import {
   calculateAutoPaymentFee,
@@ -38,6 +43,7 @@ import {
   formatDate,
   getLedgerInvoicedAmountExcludingPaymentFee,
   paymentTypeHasAutoFee,
+  purchaserAccountForPurchaser,
   roundMoney,
   toDateInputValue,
   todayDateInputValue,
@@ -63,6 +69,8 @@ type PaymentRowDraft = {
   editing: boolean;
   date_paid: string;
   paid_to: KnownPurchaser;
+  purchaser: Purchaser;
+  account: PurchaserAccount;
   payment_type: PaymentType;
   payment_amount: number;
   payment_fee: number;
@@ -237,6 +245,8 @@ function paymentDraftFromEntry(entry: LedgerEntry): PaymentRowDraft {
     editing: false,
     date_paid: draftDatePaidFromEntry(entry),
     paid_to: entry.paid_to ?? defaultPaidTo,
+    purchaser: entry.purchaser,
+    account: entry.account ?? "TBD",
     payment_type: paymentType,
     payment_amount: paymentAmount,
     payment_fee: savedFee,
@@ -265,6 +275,118 @@ function paymentFeeHint(paymentType: PaymentType) {
     return "2.6% of payment amount. Edit to override.";
   }
   return undefined;
+}
+
+const compactSelectClass = `min-h-10 min-w-28 cursor-pointer appearance-none bg-white bg-[length:1rem] bg-[right_0.5rem_center] bg-no-repeat px-2 py-2 pr-8 text-sm ${selectChevron} ${editableControlClass} disabled:cursor-not-allowed`;
+
+function assignmentDisplay(value: string | null | undefined) {
+  if (!value || value === "TBD") {
+    return <span className="font-medium text-amber-800">TBD</span>;
+  }
+  return value;
+}
+
+function paidRowsMissingPurchase(
+  rows: { entry: LedgerEntry; draft: PaymentRowDraft }[]
+) {
+  return rows.filter(({ entry, draft }) => {
+    const projected = entryFromDraft(entry, draft);
+    if (!deriveLedgerPaidFlag(projected)) return false;
+    return !isKnownPurchaseAssignment({
+      purchaser: draft.purchaser,
+      account: draft.account,
+    });
+  });
+}
+
+function missingPurchaseMessage(
+  rows: { entry: LedgerEntry; draft: PaymentRowDraft }[]
+) {
+  const missing = paidRowsMissingPurchase(rows);
+  if (missing.length === 0) return null;
+  const labels = missing
+    .map(({ entry }) => entry.description?.trim() || "Untitled line")
+    .join("; ");
+  return `Purchaser and purchase account are required (Jess or Molly, not TBD) before a line can be marked paid: ${labels}.`;
+}
+
+function applyPurchaserPatch(
+  current: PaymentRowDraft,
+  patch: Partial<PaymentRowDraft>
+): Partial<PaymentRowDraft> {
+  if (patch.purchaser === undefined || patch.purchaser === current.purchaser) {
+    return patch;
+  }
+  if (patch.purchaser === "TBD") {
+    return { ...patch, account: "TBD" };
+  }
+  if (
+    isKnownPurchaser(patch.purchaser) &&
+    (current.account === "TBD" || !current.account) &&
+    patch.account === undefined
+  ) {
+    return {
+      ...patch,
+      account: purchaserAccountForPurchaser(patch.purchaser),
+    };
+  }
+  return patch;
+}
+
+function PurchaserSelect({
+  draft,
+  disabled,
+  compact,
+  onChange,
+}: {
+  draft: PaymentRowDraft;
+  disabled?: boolean;
+  compact?: boolean;
+  onChange: (patch: Partial<PaymentRowDraft>) => void;
+}) {
+  return (
+    <select
+      className={compact ? compactSelectClass : selectFieldClass}
+      value={draft.purchaser || "TBD"}
+      disabled={disabled}
+      onChange={(event) =>
+        onChange({ purchaser: event.target.value as Purchaser })
+      }
+    >
+      <option value="TBD">TBD</option>
+      <option value="Jess">Jess</option>
+      <option value="Molly">Molly</option>
+    </select>
+  );
+}
+
+function AccountSelect({
+  draft,
+  disabled,
+  compact,
+  onChange,
+}: {
+  draft: PaymentRowDraft;
+  disabled?: boolean;
+  compact?: boolean;
+  onChange: (patch: Partial<PaymentRowDraft>) => void;
+}) {
+  return (
+    <select
+      className={compact ? compactSelectClass : selectFieldClass}
+      value={draft.account || "TBD"}
+      disabled={disabled}
+      onChange={(event) =>
+        onChange({ account: event.target.value as PurchaserAccount })
+      }
+    >
+      {PURCHASER_ACCOUNT_OPTIONS.map((account) => (
+        <option key={account} value={account}>
+          {account}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 function UninvoicedChargesStatus({ amount }: { amount: number }) {
@@ -817,7 +939,10 @@ export default function PaymentsPage() {
       const existing = current[entryId];
       if (!existing) return current;
 
-      const next: PaymentRowDraft = { ...existing, ...patch };
+      const next: PaymentRowDraft = {
+        ...existing,
+        ...applyPurchaserPatch(existing, patch),
+      };
 
       const paymentFieldsChanged =
         (patch.payment_amount !== undefined &&
@@ -888,20 +1013,7 @@ export default function PaymentsPage() {
       const next = { ...current };
       for (const entry of filteredEntries) {
         next[entry.id] = {
-          ...(next[entry.id] ?? {
-            editing: false,
-            date_paid: draftDatePaidFromEntry(entry),
-            paid_to: defaultPaidTo,
-            payment_type: defaultPaymentType,
-            payment_amount: 0,
-            payment_fee: 0,
-            payment_fee_manually_edited: false,
-            expense: false,
-            expense_amount: 0,
-            variance_accepted: false,
-            variance_amount: 0,
-            variance_notes: "",
-          }),
+          ...(next[entry.id] ?? paymentDraftFromEntry(entry)),
           editing: entry.id === target.id,
         };
       }
@@ -1070,10 +1182,17 @@ export default function PaymentsPage() {
       const paymentAmount = projected.payment_amount;
 
       const fullyPaid = deriveLedgerPaidFlag(projected);
+      const parentForCompanions: LedgerEntry = {
+        ...entry,
+        purchaser: draft.purchaser,
+        account: draft.account,
+      };
       const { error: updateError } = await supabase
         .from("ledger")
         .update({
           paid: fullyPaid,
+          purchaser: draft.purchaser,
+          account: draft.account,
           // Payment cash lives on the Sales Income companion row.
           date_paid: null,
           paid_to: null,
@@ -1103,13 +1222,16 @@ export default function PaymentsPage() {
       // Personal-use: do not create or update Sales Income payment companions.
       if (!entry.balance_sheet) {
         if (paymentAmount > 0) {
-          const companionPayload = buildPaymentCompanionPayload(entry, {
-            date_paid: draft.date_paid || null,
-            paid_to: draft.paid_to,
-            payment_type: draft.payment_type,
-            payment_amount: paymentAmount,
-            payment_fee: projected.payment_fee,
-          });
+          const companionPayload = buildPaymentCompanionPayload(
+            parentForCompanions,
+            {
+              date_paid: draft.date_paid || null,
+              paid_to: draft.paid_to,
+              payment_type: draft.payment_type,
+              payment_amount: paymentAmount,
+              payment_fee: projected.payment_fee,
+            }
+          );
 
           if (entry.payment_companion_id) {
             const { coa_category: _coa, ...companionUpdate } = companionPayload;
@@ -1167,11 +1289,17 @@ export default function PaymentsPage() {
         }
       }
 
-      const feeSyncError = await syncCostCompanions(supabase, entry, {
-        paymentFee:
-          entry.balance_sheet || paymentAmount <= 0 ? 0 : projected.payment_fee,
-        entryDateByKind: { fee: draft.date_paid || null },
-      });
+      const feeSyncError = await syncCostCompanions(
+        supabase,
+        parentForCompanions,
+        {
+          paymentFee:
+            entry.balance_sheet || paymentAmount <= 0
+              ? 0
+              : projected.payment_fee,
+          entryDateByKind: { fee: draft.date_paid || null },
+        }
+      );
       if (feeSyncError) {
         setSaving(false);
         setError(feeSyncError);
@@ -1222,6 +1350,11 @@ export default function PaymentsPage() {
     rows: { entry: LedgerEntry; draft: PaymentRowDraft }[],
     successMessage: string
   ) {
+    const assignmentError = missingPurchaseMessage(rows);
+    if (assignmentError) {
+      setError(assignmentError);
+      return;
+    }
     const prompts: VariancePromptItem[] = [];
     for (const { entry, draft } of rows) {
       const projected = entryFromDraft(entry, {
@@ -1336,6 +1469,12 @@ export default function PaymentsPage() {
         variance_notes: "",
       } satisfies PaymentRowDraft,
     }));
+
+    const assignmentError = missingPurchaseMessage(rows);
+    if (assignmentError) {
+      setBulkPayError(assignmentError);
+      return;
+    }
 
     const targets = (
       await Promise.all(rows.map((row) => loadLedgerLockTargets(row.entry.id)))
@@ -1544,7 +1683,9 @@ export default function PaymentsPage() {
                 <span className="font-medium text-slate-900">
                   {formatCurrency(listedUnpaidTotal)}
                 </span>
-                . Enter that amount and who was paid, then confirm.
+                . Enter that amount and who was paid, then confirm. Purchaser
+                and purchase account must already be Jess or Molly (not TBD) on
+                each line.
               </p>
               <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <InputField
@@ -1721,6 +1862,22 @@ export default function PaymentsPage() {
                     </select>
                   </label>
                   <label className="block text-sm">
+                    <span className="mb-1 block text-slate-600">Purchaser</span>
+                    <PurchaserSelect
+                      draft={draft}
+                      disabled={!draft.editing}
+                      onChange={(patch) => updateDraft(entry.id, patch)}
+                    />
+                  </label>
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-slate-600">Account</span>
+                    <AccountSelect
+                      draft={draft}
+                      disabled={!draft.editing}
+                      onChange={(patch) => updateDraft(entry.id, patch)}
+                    />
+                  </label>
+                  <label className="block text-sm">
                     <span className="mb-1 block text-slate-600">Payment amount</span>
                     <input
                       type="number"
@@ -1792,6 +1949,8 @@ export default function PaymentsPage() {
                 <th className={paymentsStickyHeaderClass}>Date</th>
                 <th className={paymentsStickyHeaderClass}>Invoice ID</th>
                 <th className={paymentsStickyHeaderClass}>Description</th>
+                <th className={paymentsStickyHeaderClass}>Purchaser</th>
+                <th className={paymentsStickyHeaderClass}>Account</th>
                 <th className={paymentsStickyHeaderClass}>Invoiced Amount</th>
                 <th className={paymentsStickyHeaderClass}>Outstanding</th>
                 <th className={paymentsStickyHeaderClass}>Variance Amount</th>
@@ -1838,6 +1997,22 @@ export default function PaymentsPage() {
                     <td className="px-3 py-3">{formatDate(entry.entry_date)}</td>
                     <td className="px-3 py-3">{entry.invoice_id ?? "—"}</td>
                     <td className="px-3 py-3">{entry.description || "—"}</td>
+                    <td className="px-3 py-3">
+                      <PurchaserSelect
+                        draft={draft}
+                        compact
+                        disabled={!draft.editing}
+                        onChange={(patch) => updateDraft(entry.id, patch)}
+                      />
+                    </td>
+                    <td className="px-3 py-3">
+                      <AccountSelect
+                        draft={draft}
+                        compact
+                        disabled={!draft.editing}
+                        onChange={(patch) => updateDraft(entry.id, patch)}
+                      />
+                    </td>
                     <td className="px-3 py-3 font-medium">
                       {formatCurrency(getLedgerInvoicedAmountExcludingPaymentFee(entry))}
                     </td>
@@ -2160,7 +2335,8 @@ export default function PaymentsPage() {
             <p className="mb-3 text-xs text-slate-500">
               Click Edit on a payment, make changes, then Save. Cancel discards
               that row. Click Add charges on a paid line to bill shipping,
-              receiving, delivery, or a card fee on a later invoice.
+              receiving, delivery, or a card fee on a later invoice. Purchaser
+              and account can be set here even after a line is paid.
             </p>
             <div className="space-y-3 md:hidden">
               {filteredPaidEntries.map((entry) => {
@@ -2222,6 +2398,10 @@ export default function PaymentsPage() {
                           Variance: {formatCurrency(varianceAmountForDisplay(entry, draft))}
                         </p>
                         <p className="text-sm text-slate-600">
+                          Purchaser: {assignmentDisplay(entry.purchaser)} · Account:{" "}
+                          {assignmentDisplay(entry.account)}
+                        </p>
+                        <p className="text-sm text-slate-600">
                           {isLedgerLineFullyPaid(entryFromDraft(entry, draft))
                             ? "Paid in full"
                             : "Partial payment"}
@@ -2261,6 +2441,20 @@ export default function PaymentsPage() {
                             <option value="Jess">Jess</option>
                             <option value="Molly">Molly</option>
                           </select>
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block text-slate-600">Purchaser</span>
+                          <PurchaserSelect
+                            draft={draft}
+                            onChange={(patch) => updateDraft(entry.id, patch)}
+                          />
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block text-slate-600">Account</span>
+                          <AccountSelect
+                            draft={draft}
+                            onChange={(patch) => updateDraft(entry.id, patch)}
+                          />
                         </label>
                         <div className="block text-sm">
                           <span className="mb-1 block text-slate-600">Invoiced amount</span>
@@ -2343,6 +2537,8 @@ export default function PaymentsPage() {
                     <th className={paymentsStickyHeaderClass}>Date Paid</th>
                     <th className={paymentsStickyHeaderClass}>Invoice ID</th>
                     <th className={paymentsStickyHeaderClass}>Description</th>
+                    <th className={paymentsStickyHeaderClass}>Purchaser</th>
+                    <th className={paymentsStickyHeaderClass}>Account</th>
                     <th className={paymentsStickyHeaderClass}>Invoiced Amount</th>
                     <th className={paymentsStickyHeaderClass}>Payment Amount</th>
                     <th className={paymentsStickyHeaderClass}>Payment Fee</th>
@@ -2408,6 +2604,28 @@ export default function PaymentsPage() {
                         </td>
                         <td className="px-3 py-3">{entry.invoice_id ?? "—"}</td>
                         <td className="px-3 py-3">{entry.description || "—"}</td>
+                        <td className="px-3 py-3">
+                          {draft.editing ? (
+                            <PurchaserSelect
+                              draft={draft}
+                              compact
+                              onChange={(patch) => updateDraft(entry.id, patch)}
+                            />
+                          ) : (
+                            assignmentDisplay(entry.purchaser)
+                          )}
+                        </td>
+                        <td className="px-3 py-3">
+                          {draft.editing ? (
+                            <AccountSelect
+                              draft={draft}
+                              compact
+                              onChange={(patch) => updateDraft(entry.id, patch)}
+                            />
+                          ) : (
+                            assignmentDisplay(entry.account)
+                          )}
+                        </td>
                         <td className="px-3 py-3 font-medium">
                           {formatCurrency(getLedgerInvoicedAmountExcludingPaymentFee(entry))}
                         </td>

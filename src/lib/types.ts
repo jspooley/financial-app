@@ -77,6 +77,17 @@ export function isPendingPurchase(
   return entry.purchaser === "TBD" || entry.account === "TBD";
 }
 
+/** True when purchaser and purchase account are assigned to Jess or Molly. */
+export function isKnownPurchaseAssignment(
+  entry: Pick<{ purchaser: Purchaser; account: string | null }, "purchaser" | "account">
+) {
+  return (
+    isKnownPurchaser(entry.purchaser) &&
+    Boolean(entry.account) &&
+    entry.account !== "TBD"
+  );
+}
+
 /** Companion rows split off a parent ledger line so each cost carries its own CoA. */
 export const COMPANION_KINDS = [
   "payment",
