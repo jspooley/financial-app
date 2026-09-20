@@ -51,6 +51,7 @@ export type TrueUpCategoryRow = {
   category: string;
   amounts: PartnerAmounts;
   transactions?: TrueUpTransaction[];
+  note?: string;
 };
 
 export type TrueUpPendingReason = "no_activity" | "awaiting_payment";
@@ -67,12 +68,22 @@ export type TrueUpBlock = {
   recordedRows: TrueUpCategoryRow[];
   recorded: PartnerAmounts;
   discrepancy: PartnerAmounts;
+  /** Sales invoice id this block is keyed by (not set on expense/pending rows). */
+  invoiceId?: string;
+  /** Remaining discrepancy accepted as a non-cash offset on this invoice. */
+  offsetAccepted?: boolean;
+  offsetReason?: string;
   /** Invoiced sales income before client payment (awaiting_payment blocks only). */
   projectedCategoryRows?: TrueUpCategoryRow[];
   projectedSubtotal?: PartnerAmounts;
   projectedRequired?: PartnerAmounts;
   /** Invoiced income is unassigned; required partner split is not knowable yet. */
   projectedPayeeUnknown?: boolean;
+};
+
+export type TrueUpInvoiceOffset = {
+  accepted: boolean;
+  reason: string;
 };
 
 export type TrueUpYtdTotals = {
@@ -115,6 +126,7 @@ export const TRUE_UP_INCOME_LABEL = "100 Sales Income";
 export const TRUE_UP_PROJECTED_INCOME_LABEL = "100 Sales Income (invoiced)";
 export const TRUE_UP_FEES_LABEL = "203 Commissions and Fees";
 export const TRUE_UP_TRANSFERS_LABEL = "302 Transfers between accounts";
+export const TRUE_UP_OFFSET_LABEL = "Non-cash offset";
 
 /**
  * Categories and row types left out of the 50/50 true-up. Keep this in sync
@@ -376,18 +388,99 @@ function recordedRowsFromMap(
     }));
 }
 
+function applyTrueUpInvoiceOffset(
+  block: TrueUpBlock,
+  offset: TrueUpInvoiceOffset | undefined
+): TrueUpBlock {
+  const accepted = Boolean(offset?.accepted);
+  const reason = (offset?.reason ?? "").trim();
+  const withMeta: TrueUpBlock = {
+    ...block,
+    offsetAccepted: accepted,
+    offsetReason: reason,
+  };
+  if (!accepted || block.status === "pending") return withMeta;
+  const remaining = subtractPartnerAmounts(block.required, block.recorded);
+  if (!hasAmount(remaining)) return withMeta;
+  return {
+    ...withMeta,
+    recordedRows: [
+      ...block.recordedRows,
+      {
+        category: TRUE_UP_OFFSET_LABEL,
+        amounts: remaining,
+        note: reason || undefined,
+      },
+    ],
+    recorded: sumPartnerAmounts(block.recorded, remaining),
+    discrepancy: emptyPartnerAmounts(),
+  };
+}
+
+function amountsFromTransactions(
+  transactions: TrueUpTransaction[] | undefined,
+  includeExcluded: boolean
+): PartnerAmounts {
+  let amounts = emptyPartnerAmounts();
+  for (const txn of transactions ?? []) {
+    if (!includeExcluded && txn.excluded) continue;
+    amounts = addPartnerAmount(amounts, txn.party, txn.amount);
+  }
+  return amounts;
+}
+
+function displayAmountsFromRow(
+  row: Pick<TrueUpCategoryRow, "amounts" | "transactions">
+): PartnerAmounts {
+  const transactions = row.transactions ?? [];
+  if (transactions.length === 0) return row.amounts;
+  return amountsFromTransactions(transactions, true);
+}
+
+function eligibleAmountsFromTransactions(
+  transactions: TrueUpTransaction[] | undefined,
+  fallback: PartnerAmounts = emptyPartnerAmounts()
+): PartnerAmounts {
+  if (!transactions || transactions.length === 0) return fallback;
+  return amountsFromTransactions(transactions, false);
+}
+
+function eligibleSubtotalFromRows(rows: TrueUpCategoryRow[]): PartnerAmounts {
+  return rows.reduce(
+    (acc, row) =>
+      sumPartnerAmounts(
+        acc,
+        eligibleAmountsFromTransactions(row.transactions, row.amounts)
+      ),
+    emptyPartnerAmounts()
+  );
+}
+
 function finishBlock(
   id: string,
   groupLabel: string,
   secondaryLabel: string,
   categoryRows: TrueUpCategoryRow[],
-  subtotal: PartnerAmounts,
+  _subtotal: PartnerAmounts,
   recordedByCategory: Map<string, PartnerAmounts>,
   requiredOverride?: PartnerAmounts
 ): TrueUpBlock {
-  const required = requiredOverride ?? requiredTransfers(subtotal);
+  const required =
+    requiredOverride ?? requiredTransfers(eligibleSubtotalFromRows(categoryRows));
   const recordedRows = recordedRowsFromMap(recordedByCategory);
   const recorded = recordedRows.reduce(
+    (acc, row) => sumPartnerAmounts(acc, row.amounts),
+    emptyPartnerAmounts()
+  );
+  const visibleRows = categoryRows
+    .map((row) => ({
+      ...row,
+      amounts: displayAmountsFromRow(row),
+    }))
+    .filter(
+      (row) => hasAmount(row.amounts) || (row.transactions?.length ?? 0) > 0
+    );
+  const subtotal = visibleRows.reduce(
     (acc, row) => sumPartnerAmounts(acc, row.amounts),
     emptyPartnerAmounts()
   );
@@ -395,9 +488,7 @@ function finishBlock(
     id,
     groupLabel,
     secondaryLabel,
-    categoryRows: categoryRows.filter(
-      (row) => hasAmount(row.amounts) || (row.transactions?.length ?? 0) > 0
-    ),
+    categoryRows: visibleRows,
     subtotal,
     required,
     recordedRows,
@@ -569,9 +660,7 @@ function addCostToGroup(
     : partnerFromEntry(entry, "payer");
   const transaction = trueUpTransactionFromEntry(entry, party, amount);
   group.cogsTransactions.push(transaction);
-  if (!transaction.excluded) {
-    group.cogs = addPartnerAmount(group.cogs, party, amount);
-  }
+  group.cogs = addPartnerAmount(group.cogs, party, amount);
 }
 
 function addIncomeToGroup(
@@ -587,9 +676,7 @@ function addIncomeToGroup(
   if (Math.abs(income) < 0.005) return;
   const transaction = trueUpTransactionFromEntry(entry, party, income, date);
   group.incomeTransactions.push(transaction);
-  if (!transaction.excluded) {
-    group.income = addPartnerAmount(group.income, party, income);
-  }
+  group.income = addPartnerAmount(group.income, party, income);
 }
 
 /** Wholesale use tax paid on purchase — reimbursed to purchaser like other COGS. */
@@ -652,9 +739,7 @@ function collectInvoicedIncome(
       entry.date_paid || entry.entry_date
     );
     transactions.push(transaction);
-    if (!transaction.excluded) {
-      amounts = addPartnerAmount(amounts, "TBD", net);
-    }
+    amounts = addPartnerAmount(amounts, "TBD", net);
   }
   return {
     amounts,
@@ -662,33 +747,37 @@ function collectInvoicedIncome(
   };
 }
 
-function cogsAmountsFromBlock(block: TrueUpBlock): PartnerAmounts {
-  return (
-    block.categoryRows.find((row) => row.category === TRUE_UP_COGS_LABEL)
-      ?.amounts ?? emptyPartnerAmounts()
-  );
-}
-
 function awaitingClientPaymentBlock(
   block: TrueUpBlock,
   projectedIncome: { amounts: PartnerAmounts; transactions: TrueUpTransaction[] },
   reason: TrueUpPendingReason = "awaiting_payment"
 ): TrueUpBlock {
-  const cogs = cogsAmountsFromBlock(block);
+  const cogsRow = block.categoryRows.find(
+    (row) => row.category === TRUE_UP_COGS_LABEL
+  );
+  const cogs = displayAmountsFromRow(
+    cogsRow ?? { amounts: emptyPartnerAmounts(), transactions: [] }
+  );
   const projectedCategoryRows: TrueUpCategoryRow[] =
     hasAmount(projectedIncome.amounts) || projectedIncome.transactions.length > 0
       ? [
           {
             category: TRUE_UP_PROJECTED_INCOME_LABEL,
-            amounts: projectedIncome.amounts,
+            amounts: amountsFromTransactions(
+              projectedIncome.transactions,
+              true
+            ),
             transactions: projectedIncome.transactions,
           },
         ]
       : [];
   const projectedSubtotal = salesSubtotal(cogs, projectedIncome.amounts);
   const projectedRequired = requiredProfitTransfers(
-    cogs,
-    projectedIncome.amounts
+    eligibleAmountsFromTransactions(cogsRow?.transactions, cogs),
+    eligibleAmountsFromTransactions(
+      projectedIncome.transactions,
+      projectedIncome.amounts
+    )
   );
 
   return {
@@ -777,7 +866,8 @@ function buildPendingSalesBlocks(
 function buildSalesBlocks(
   entries: LedgerEntry[],
   year: number,
-  parentById: Map<string, LedgerEntry>
+  parentById: Map<string, LedgerEntry>,
+  invoiceOffsets?: ReadonlyMap<string, TrueUpInvoiceOffset>
 ): TrueUpBlock[] {
   const paymentCompanionParentIds = new Set(
     entries
@@ -917,15 +1007,24 @@ function buildSalesBlocks(
           transactions: sortTrueUpTransactions(group.incomeTransactions),
         },
       ];
-      const block = finishBlock(
-        `inv:${group.invoiceId}`,
-        group.projectLabel,
-        group.invoiceId,
-        categoryRows,
-        salesSubtotal(group.cogs, group.income),
-        group.recorded,
-        requiredProfitTransfers(group.cogs, group.income)
-      );
+      const block: TrueUpBlock = {
+        ...finishBlock(
+          `inv:${group.invoiceId}`,
+          group.projectLabel,
+          group.invoiceId,
+          categoryRows,
+          salesSubtotal(group.cogs, group.income),
+          group.recorded,
+          requiredProfitTransfers(
+            eligibleAmountsFromTransactions(group.cogsTransactions, group.cogs),
+            eligibleAmountsFromTransactions(
+              group.incomeTransactions,
+              group.income
+            )
+          )
+        ),
+        invoiceId: group.invoiceId,
+      };
       if (
         !hasClientPayment(group.income) &&
         hasAmount(group.cogs) &&
@@ -938,7 +1037,10 @@ function buildSalesBlocks(
         );
         return awaitingClientPaymentBlock(block, projectedIncome);
       }
-      return block;
+      return applyTrueUpInvoiceOffset(
+        block,
+        invoiceOffsets?.get(group.invoiceId)
+      );
     })
     .filter(
       (block) =>
@@ -987,9 +1089,7 @@ function addExpenseToBucket(
   transaction: TrueUpTransaction
 ) {
   bucket.transactions.push(transaction);
-  if (!transaction.excluded) {
-    bucket.amounts = addPartnerAmount(bucket.amounts, party, amount);
-  }
+  bucket.amounts = addPartnerAmount(bucket.amounts, party, amount);
 }
 
 function collectExpenseActivity(
@@ -1148,10 +1248,16 @@ function unassignedFromBlocks(blocks: TrueUpBlock[]): PartnerAmounts {
   let tbd = 0;
   for (const block of blocks) {
     for (const row of block.categoryRows) {
-      tbd = roundMoney(tbd + row.amounts.tbd);
+      tbd = roundMoney(
+        tbd +
+          eligibleAmountsFromTransactions(row.transactions, row.amounts).tbd
+      );
     }
     for (const row of block.projectedCategoryRows ?? []) {
-      tbd = roundMoney(tbd + row.amounts.tbd);
+      tbd = roundMoney(
+        tbd +
+          eligibleAmountsFromTransactions(row.transactions, row.amounts).tbd
+      );
     }
   }
   return { jess: 0, molly: 0, tbd };
@@ -1200,10 +1306,11 @@ function recordedPartnerFlows(entries: LedgerEntry[], year: number) {
 export function buildTrueUpReport(
   entries: LedgerEntry[],
   year: number,
-  groupBy: TrueUpGroupBy = "month"
+  groupBy: TrueUpGroupBy = "month",
+  invoiceOffsets?: ReadonlyMap<string, TrueUpInvoiceOffset>
 ): TrueUpReport {
   const parentById = new Map(entries.map((entry) => [entry.id, entry]));
-  const sales = buildSalesBlocks(entries, year, parentById);
+  const sales = buildSalesBlocks(entries, year, parentById, invoiceOffsets);
   const expensesByMonth = buildExpenseBlocks(
     entries,
     year,
@@ -1267,6 +1374,30 @@ export function isTrueUpExcludeSchemaError(message: string) {
     (lower.includes("true_up_eligible") ||
       lower.includes("true_up_payment_id") ||
       lower.includes("true_up_exclude_reason")) &&
+    (lower.includes("column") || lower.includes("schema cache"))
+  );
+}
+
+export const TRUE_UP_OFFSET_SETUP_SQL = `ALTER TABLE public.invoicing
+  ADD COLUMN IF NOT EXISTS true_up_offset_accepted BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE public.invoicing
+  ADD COLUMN IF NOT EXISTS true_up_offset_reason TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE public.invoicing
+  DROP CONSTRAINT IF EXISTS invoicing_true_up_offset_reason_length;
+
+ALTER TABLE public.invoicing
+  ADD CONSTRAINT invoicing_true_up_offset_reason_length
+  CHECK (char_length(true_up_offset_reason) <= 250);
+
+NOTIFY pgrst, 'reload schema';`;
+
+export function isTrueUpOffsetSchemaError(message: string) {
+  const lower = message.toLowerCase();
+  return (
+    (lower.includes("true_up_offset_accepted") ||
+      lower.includes("true_up_offset_reason")) &&
     (lower.includes("column") || lower.includes("schema cache"))
   );
 }

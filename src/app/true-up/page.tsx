@@ -4,26 +4,41 @@ import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } f
 import { AppShell } from "@/components/AppShell";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SelectField, selectFieldClass } from "@/components/ui/FormFields";
-import { TrueUpExcludeReasonModal } from "@/components/true-up/TrueUpExcludeReasonModal";
+import {
+  TrueUpExcludeReasonModal,
+  TrueUpReasonModal,
+} from "@/components/true-up/TrueUpExcludeReasonModal";
 import { createClient } from "@/lib/supabase/client";
+import { normalizeInvoiceId } from "@/lib/invoice-utils";
 import { fetchAllLedgerRows, normalizeLedgerRow } from "@/lib/ledger-db";
 import {
   addPartnerAmount,
   buildTrueUpReport,
   emptyPartnerAmounts,
   isTrueUpExcludeSchemaError,
+  isTrueUpOffsetSchemaError,
   partnerTotal,
   TRUE_UP_EXCLUDE_SETUP_SQL,
   TRUE_UP_EXCLUSIONS,
+  TRUE_UP_OFFSET_LABEL,
+  TRUE_UP_OFFSET_SETUP_SQL,
   type PartnerAmounts,
   type TrueUpBlock,
   type TrueUpGroupBy,
+  type TrueUpInvoiceOffset,
   type TrueUpTransaction,
   type TrueUpUntaggedTransfer,
   type TrueUpYtdTotals,
 } from "@/lib/true-up-report";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { LedgerEntry } from "@/lib/types";
+
+type InvoiceOffsetRow = {
+  id: string;
+  invoice_id: string | null;
+  true_up_offset_accepted: boolean;
+  true_up_offset_reason: string;
+};
 
 const BLOCK_COL_SPAN = 8;
 const PENDING_NOTE_COL_SPAN = 6;
@@ -111,6 +126,20 @@ function ExcludeCell({
   );
 }
 
+function RequiredTransferLabel({ note }: { note?: string }) {
+  return (
+    <>
+      Required Transfer
+      <span className="ml-1 font-normal text-slate-500">
+        (does not include Excluded items)
+      </span>
+      {note ? (
+        <span className="ml-1 font-normal text-slate-500">{note}</span>
+      ) : null}
+    </>
+  );
+}
+
 function isSettled(amounts: PartnerAmounts) {
   return (
     Math.abs(amounts.jess) < 0.005 &&
@@ -181,10 +210,20 @@ function DiscrepancyRow({
   amounts,
   leadingCells,
   showExclude,
+  settleValue,
+  settleReason,
+  settleDisabled,
+  onSettle,
+  onEditReason,
 }: {
   amounts: PartnerAmounts;
   leadingCells: number;
   showExclude?: boolean;
+  settleValue?: ExcludeValue;
+  settleReason?: string;
+  settleDisabled?: boolean;
+  onSettle?: (settled: boolean) => void;
+  onEditReason?: () => void;
 }) {
   const settled = isSettled(amounts);
   const labelClass = settled
@@ -196,7 +235,44 @@ function DiscrepancyRow({
         <td key={index} />
       ))}
       <td className={labelClass}>Discrepancy</td>
-      {showExclude ? <td /> : null}
+      {onSettle ? (
+        <td className="px-3 py-1.5">
+          <p className="mb-0.5 text-[11px] leading-tight text-slate-500">
+            Settle remaining
+          </p>
+          <select
+            aria-label="Settle remaining discrepancy as a non-cash offset"
+            className={excludeSelectClass}
+            disabled={settleDisabled}
+            title={settleReason || undefined}
+            value={settleValue === "yes" ? "yes" : "no"}
+            onChange={(event) => onSettle(event.target.value === "yes")}
+          >
+            <option value="no">No</option>
+            <option value="yes">Yes</option>
+          </select>
+          {settleReason ? (
+            <p
+              className="mt-0.5 max-w-[9rem] truncate text-[11px] text-slate-500"
+              title={settleReason}
+            >
+              {settleReason}
+            </p>
+          ) : null}
+          {onEditReason && settleValue === "yes" ? (
+            <button
+              type="button"
+              className="mt-0.5 text-[11px] font-medium text-brand-700 hover:underline disabled:cursor-not-allowed disabled:text-slate-400"
+              disabled={settleDisabled}
+              onClick={onEditReason}
+            >
+              Edit note
+            </button>
+          ) : null}
+        </td>
+      ) : showExclude ? (
+        <td />
+      ) : null}
       <AmountCells
         amounts={amounts}
         emphasize
@@ -230,7 +306,7 @@ function TransferYtdRows({
           <td key={index} />
         ))}
         <td className="px-3 py-1.5 font-bold text-slate-900">
-          Required Transfer
+          <RequiredTransferLabel />
         </td>
         {showExclude ? <td /> : null}
         <AmountCells amounts={totals.required} emphasize />
@@ -278,6 +354,9 @@ function BlockTable({
   stickyHeader = false,
   onExclude,
   excluding,
+  onSettle,
+  onEditSettle,
+  settling,
 }: {
   sectionLabel: string;
   groupHeader?: string;
@@ -294,6 +373,13 @@ function BlockTable({
     context?: { label: string }
   ) => void;
   excluding?: boolean;
+  onSettle?: (
+    invoiceId: string,
+    settled: boolean,
+    context?: { label: string }
+  ) => void;
+  onEditSettle?: (invoiceId: string, context?: { label: string }) => void;
+  settling?: boolean;
 }) {
   if (blocks.length === 0) {
     return (
@@ -339,6 +425,9 @@ function BlockTable({
               showRecordedRows={showRecordedRows}
               onExclude={onExclude}
               excluding={excluding}
+              onSettle={onSettle}
+              onEditSettle={onEditSettle}
+              settling={settling}
             />
           ))}
           {ytdTotals ? (
@@ -431,6 +520,9 @@ function BlockRows({
   showRecordedRows = true,
   onExclude,
   excluding,
+  onSettle,
+  onEditSettle,
+  settling,
 }: {
   block: TrueUpBlock;
   showDivider: boolean;
@@ -442,6 +534,13 @@ function BlockRows({
     context?: { label: string }
   ) => void;
   excluding?: boolean;
+  onSettle?: (
+    invoiceId: string,
+    settled: boolean,
+    context?: { label: string }
+  ) => void;
+  onEditSettle?: (invoiceId: string, context?: { label: string }) => void;
+  settling?: boolean;
 }) {
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     () => new Set()
@@ -673,7 +772,9 @@ function BlockRows({
       <tr className="border-b border-slate-100">
         <td />
         <td />
-        <td className="px-3 py-1.5 font-bold text-slate-900">Required Transfer</td>
+        <td className="px-3 py-1.5 font-bold text-slate-900">
+          <RequiredTransferLabel />
+        </td>
         <ExcludeCell empty />
         <AmountCells amounts={block.required} emphasize />
       </tr>
@@ -682,15 +783,44 @@ function BlockRows({
       <tr>
         <td colSpan={BLOCK_COL_SPAN} className="h-2 bg-white p-0" />
       </tr>
-      {block.recordedRows.map((row) => (
+      {block.recordedRows.map((row) => {
+        const canEditOffsetNote =
+          row.category === TRUE_UP_OFFSET_LABEL &&
+          Boolean(onEditSettle && block.invoiceId);
+        return (
         <tr key={`${block.id}-rec-${row.category}`} className="border-b border-slate-100">
           <td />
           <td />
-          <td className="px-3 py-1.5 text-slate-800">{row.category}</td>
+          <td className="px-3 py-1.5 text-slate-800">
+            {row.category}
+            {row.note ? (
+              <p
+                className="mt-0.5 max-w-xs text-[11px] font-normal text-slate-500"
+                title={row.note}
+              >
+                {row.note}
+              </p>
+            ) : null}
+            {canEditOffsetNote ? (
+              <button
+                type="button"
+                className="mt-0.5 text-[11px] font-medium text-brand-700 hover:underline disabled:cursor-not-allowed disabled:text-slate-400"
+                disabled={settling}
+                onClick={() =>
+                  onEditSettle?.(block.invoiceId!, {
+                    label: block.invoiceId!,
+                  })
+                }
+              >
+                Edit note
+              </button>
+            ) : null}
+          </td>
           <ExcludeCell empty />
           <AmountCells amounts={row.amounts} />
         </tr>
-      ))}
+        );
+      })}
       <tr className="border-b border-slate-100">
         <td />
         <td />
@@ -702,6 +832,27 @@ function BlockRows({
         amounts={block.discrepancy}
         leadingCells={2}
         showExclude
+        settleValue={block.offsetAccepted ? "yes" : "no"}
+        settleReason={block.offsetReason}
+        settleDisabled={settling || !onSettle || !block.invoiceId}
+        onSettle={
+          onSettle &&
+          block.invoiceId &&
+          (block.offsetAccepted || !isSettled(block.discrepancy))
+            ? (settled) =>
+                onSettle(block.invoiceId!, settled, {
+                  label: block.invoiceId!,
+                })
+            : undefined
+        }
+        onEditReason={
+          onEditSettle && block.invoiceId && block.offsetAccepted
+            ? () =>
+                onEditSettle(block.invoiceId!, {
+                  label: block.invoiceId!,
+                })
+            : undefined
+        }
       />
         </>
       ) : null}
@@ -721,9 +872,11 @@ function BlockRows({
         <td />
         <td />
         <td className="px-3 py-1.5 font-bold text-slate-900">
-          {hasProjectedBreakdown
-            ? "Required Transfer (projected)"
-            : "Required Transfer (after payment)"}
+          <RequiredTransferLabel
+            note={
+              hasProjectedBreakdown ? "(projected)" : "(after payment)"
+            }
+          />
         </td>
         <ExcludeCell empty />
         <AmountCells
@@ -807,11 +960,20 @@ export default function TrueUpReportPage() {
   const [entries, setEntries] = useState<ReturnType<typeof normalizeLedgerRow>[]>(
     []
   );
+  const [invoiceRows, setInvoiceRows] = useState<InvoiceOffsetRow[]>([]);
   const [excluding, setExcluding] = useState(false);
+  const [settling, setSettling] = useState(false);
   const [excludeError, setExcludeError] = useState<string | null>(null);
+  const [offsetError, setOffsetError] = useState<string | null>(null);
   const [excludePrompt, setExcludePrompt] = useState<{
     ids: string[];
     label: string;
+  } | null>(null);
+  const [settlePrompt, setSettlePrompt] = useState<{
+    invoiceId: string;
+    label: string;
+    reason: string;
+    editing: boolean;
   } | null>(null);
 
   const patchEntry = useCallback((id: string, patch: Partial<LedgerEntry>) => {
@@ -877,19 +1039,131 @@ export default function TrueUpReportPage() {
     [saveExclude]
   );
 
+  const patchInvoiceOffset = useCallback(
+    (id: string, patch: Partial<InvoiceOffsetRow>) => {
+      setInvoiceRows((current) =>
+        current.map((row) => (row.id === id ? { ...row, ...patch } : row))
+      );
+    },
+    []
+  );
+
+  const saveOffset = useCallback(
+    async (invoiceId: string, accepted: boolean, reason = "") => {
+      const key = normalizeInvoiceId(invoiceId);
+      if (!key) return;
+      if (accepted && !reason.trim()) return;
+      const row = invoiceRows.find(
+        (item) => normalizeInvoiceId(item.invoice_id) === key
+      );
+      if (!row) {
+        setOffsetError(
+          `No invoicing record found for ${key}, so this remaining amount cannot be settled from True Up.`
+        );
+        return;
+      }
+      const previous = {
+        true_up_offset_accepted: row.true_up_offset_accepted,
+        true_up_offset_reason: row.true_up_offset_reason,
+      };
+      const patch = {
+        true_up_offset_accepted: accepted,
+        true_up_offset_reason: accepted ? reason.trim() : "",
+      };
+      setOffsetError(null);
+      setSettling(true);
+      patchInvoiceOffset(row.id, patch);
+      const supabase = createClient();
+      const { error } = await supabase.from("invoicing").update(patch).eq("id", row.id);
+      setSettling(false);
+      if (!error) return;
+      patchInvoiceOffset(row.id, previous);
+      setOffsetError(
+        isTrueUpOffsetSchemaError(error.message)
+          ? `Run migration 086 in Supabase so non-cash offsets can save.\n\n${TRUE_UP_OFFSET_SETUP_SQL}`
+          : error.message
+      );
+    },
+    [invoiceRows, patchInvoiceOffset]
+  );
+
+  const requestSettle = useCallback(
+    (invoiceId: string, settled: boolean, context?: { label: string }) => {
+      if (settled) {
+        setSettlePrompt({
+          invoiceId,
+          label: context?.label ?? invoiceId,
+          reason: "",
+          editing: false,
+        });
+        return;
+      }
+      void saveOffset(invoiceId, false, "");
+    },
+    [saveOffset]
+  );
+
+  const requestEditSettle = useCallback(
+    (invoiceId: string, context?: { label: string }) => {
+      const key = normalizeInvoiceId(invoiceId);
+      const row = invoiceRows.find(
+        (item) => normalizeInvoiceId(item.invoice_id) === key
+      );
+      setSettlePrompt({
+        invoiceId,
+        label: context?.label ?? invoiceId,
+        reason: (row?.true_up_offset_reason ?? "").trim(),
+        editing: true,
+      });
+    },
+    [invoiceRows]
+  );
+
   const loadData = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
     const supabase = createClient();
-    const { data, error } = await fetchAllLedgerRows(
-      supabase,
-      "*, clients(name)"
-    );
-    if (error) {
-      setLoadError(error);
+    const [ledgerResult, invoiceResult] = await Promise.all([
+      fetchAllLedgerRows(supabase, "*, clients(name)"),
+      supabase
+        .from("invoicing")
+        .select("id, invoice_id, true_up_offset_accepted, true_up_offset_reason"),
+    ]);
+    if (ledgerResult.error) {
+      setLoadError(ledgerResult.error);
       setEntries([]);
     } else {
-      setEntries(data.map((row) => normalizeLedgerRow(row)));
+      setEntries(ledgerResult.data.map((row) => normalizeLedgerRow(row)));
+    }
+
+    if (invoiceResult.error) {
+      if (isTrueUpOffsetSchemaError(invoiceResult.error.message)) {
+        setOffsetError(
+          `Run migration 086 in Supabase so remaining discrepancy can be settled without a bank transfer.\n\n${TRUE_UP_OFFSET_SETUP_SQL}`
+        );
+        const fallback = await supabase.from("invoicing").select("id, invoice_id");
+        setInvoiceRows(
+          (fallback.data ?? []).map((row) => ({
+            id: String(row.id),
+            invoice_id: (row.invoice_id as string | null) ?? null,
+            true_up_offset_accepted: false,
+            true_up_offset_reason: "",
+          }))
+        );
+      } else {
+        setOffsetError(invoiceResult.error.message);
+        setInvoiceRows([]);
+      }
+    } else {
+      setOffsetError(null);
+      setInvoiceRows(
+        (invoiceResult.data ?? []).map((row) => ({
+          id: String(row.id),
+          invoice_id: (row.invoice_id as string | null) ?? null,
+          true_up_offset_accepted: Boolean(row.true_up_offset_accepted),
+          true_up_offset_reason: String(row.true_up_offset_reason ?? ""),
+        }))
+      );
     }
     setLoading(false);
   }, []);
@@ -898,9 +1172,22 @@ export default function TrueUpReportPage() {
     void loadData();
   }, [loadData]);
 
+  const invoiceOffsets = useMemo(() => {
+    const map = new Map<string, TrueUpInvoiceOffset>();
+    for (const row of invoiceRows) {
+      const invoiceId = normalizeInvoiceId(row.invoice_id);
+      if (!invoiceId) continue;
+      map.set(invoiceId, {
+        accepted: row.true_up_offset_accepted,
+        reason: row.true_up_offset_reason.trim(),
+      });
+    }
+    return map;
+  }, [invoiceRows]);
+
   const report = useMemo(
-    () => buildTrueUpReport(entries, year, groupBy),
-    [entries, year, groupBy]
+    () => buildTrueUpReport(entries, year, groupBy, invoiceOffsets),
+    [entries, year, groupBy, invoiceOffsets]
   );
   const yearOptions = useMemo(() => {
     const years = new Set<number>([currentYear, currentYear - 1, currentYear - 2]);
@@ -957,13 +1244,19 @@ export default function TrueUpReportPage() {
         </div>
       ) : null}
 
+      {offsetError ? (
+        <div className="mb-4 whitespace-pre-wrap rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {offsetError}
+        </div>
+      ) : null}
+
       {loading ? (
         <p className="text-sm text-slate-500">Loading true-up report...</p>
       ) : (
         <div className="space-y-8">
           <CollapsibleSection
             title="Sales and Revenue"
-            description="Cash in and out by invoice. COGS includes goods, shipping, receiving, delivery, and payment fees (negative = money out, attributed to whoever paid). Sales income is net of sales & use tax only. Required transfer reimburses the purchaser from client payments and splits remaining profit 50/50. Jobs with purchases but no client payment yet show as Pending."
+            description="Cash in and out by invoice. COGS includes goods, shipping, receiving, delivery, and payment fees (negative = money out, attributed to whoever paid). Sales income is net of sales & use tax only. Required transfer reimburses the purchaser from client payments and splits remaining profit 50/50. Exclude from true up keeps the Jess/Molly amounts on the line and only drops those values from Required Transfer. If you netted unrelated expenses instead of sending the full required transfer, set Settle remaining to Yes on the discrepancy — that zeros the invoice without posting a 304 to checking. Jobs with purchases but no client payment yet show as Pending."
           >
             <BlockTable
               sectionLabel="Sales&Revenue"
@@ -974,6 +1267,9 @@ export default function TrueUpReportPage() {
               stickyHeader
               onExclude={requestExclude}
               excluding={excluding}
+              onSettle={requestSettle}
+              onEditSettle={requestEditSettle}
+              settling={settling}
             />
           </CollapsibleSection>
 
@@ -981,8 +1277,8 @@ export default function TrueUpReportPage() {
             title="Expenses"
             description={
               groupBy === "coa"
-                ? "Operating cash by COA category, with months inside each category. Expand a month to see its transactions. Expenses (debits) are negative. Required transfer splits that category's cash 50/50: send is negative, receive is positive. Recorded transfers stay on the YTD row because they are not tagged to an expense category."
-                : "Operating cash by month and COA category. Expand a category to see its transactions. Expenses (debits) are negative. Required transfer splits that month's cash 50/50: send is negative, receive is positive."
+                ? "Operating cash by COA category, with months inside each category. Expand a month to see its transactions. Expenses (debits) are negative. Required transfer splits that category's cash 50/50: send is negative, receive is positive. Exclude from true up keeps the Jess/Molly amounts on the line and only drops those values from Required Transfer. Recorded transfers stay on the YTD row because they are not tagged to an expense category."
+                : "Operating cash by month and COA category. Expand a category to see its transactions. Expenses (debits) are negative. Required transfer splits that month's cash 50/50: send is negative, receive is positive. Exclude from true up keeps the Jess/Molly amounts on the line and only drops those values from Required Transfer."
             }
           >
             <BlockTable
@@ -1084,6 +1380,31 @@ export default function TrueUpReportPage() {
             const ids = excludePrompt.ids;
             setExcludePrompt(null);
             void saveExclude(ids, true, reason);
+          }}
+        />
+      ) : null}
+      {settlePrompt ? (
+        <TrueUpReasonModal
+          title={
+            settlePrompt.editing
+              ? "Edit settle remaining note?"
+              : "Settle remaining discrepancy?"
+          }
+          itemLabel={settlePrompt.label}
+          description={
+            settlePrompt.editing
+              ? "Update why this remaining true-up was settled without posting a 304 to checking."
+              : "This zeros the remaining true-up without posting a 304 to checking. Use it when you deducted unrelated expenses instead of sending the full required transfer."
+          }
+          confirmLabel={settlePrompt.editing ? "Save note" : "Settle"}
+          requiredError="A description is required to settle the remaining discrepancy."
+          placeholder="Why was the remaining amount not transferred?"
+          initialValue={settlePrompt.reason}
+          onCancel={() => setSettlePrompt(null)}
+          onConfirm={(reason) => {
+            const invoiceId = settlePrompt.invoiceId;
+            setSettlePrompt(null);
+            void saveOffset(invoiceId, true, reason);
           }}
         />
       ) : null}

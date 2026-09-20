@@ -364,6 +364,9 @@ export interface Invoice {
   invoice_sequence?: number;
   invoice_date: string | null;
   notes: string | null;
+  /** Remaining true-up settled without a checking 303/304. */
+  true_up_offset_accepted?: boolean;
+  true_up_offset_reason?: string;
   created_at: string;
   updated_at: string;
   clients?: Pick<Client, "name" | "address"> | null;
