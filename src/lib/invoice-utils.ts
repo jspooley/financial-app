@@ -677,9 +677,9 @@ export function invoiceLinePassThroughCollected(entry: {
   );
 }
 
-/** Sales income used for profit: retail × qty only.
- * Tax, shipping, receiving, delivery, and fees stay with whoever collected
- * them and are not part of retail − designer profit. */
+/** Sales income used for true-up / Schedule C profit: retail × qty (client
+ * merchandise payment). Tax is not included. Shipping and other pass-through
+ * costs reduce profit on the COGS side when they are paid. */
 export function salesProfitIncome(entry: {
   retail_price?: number | null;
   quantity?: number | null;

@@ -163,9 +163,9 @@ export const TRUE_UP_EXCLUSIONS: { label: string; detail: string }[] = [
       "Invoice lines marked personal use, plus their payment and cost companions.",
   },
   {
-    label: "Tax, shipping, receiving, delivery, and payment fees",
+    label: "Sales & use tax collected on invoices",
     detail:
-      "Stay with whoever collected or paid them. Not part of Required Transfer. Profit and the partner transfer are retail price minus designer cost only, split 50/50.",
+      "Stripped from sales income (owed to the state). Profit is client payment minus designer cost minus shipping, receiving, delivery, and fees — then split 50/50.",
   },
 ];
 
@@ -231,11 +231,12 @@ export function requiredTransfers(amounts: PartnerAmounts): PartnerAmounts {
 }
 
 /**
- * After attributing designer cost to the purchaser and retail income to the
- * payee, equalize so each partner ends with half of (retail − designer cost).
- * Tax, shipping, receiving, delivery, and fees are omitted from this math.
- * When there is no profit yet (costs exceed income), reimburse each
- * partner's designer purchases in full instead of splitting the shortfall 50/50.
+ * After attributing costs to the purchaser and client payment (retail) to the
+ * payee, equalize so each partner ends with half of
+ * (client payment − designer cost − shipping/receiving/delivery/fees).
+ * Sales tax is omitted from income. When there is no profit yet (costs exceed
+ * income), reimburse each partner's purchases in full instead of splitting
+ * the shortfall 50/50.
  */
 export function requiredProfitTransfers(
   costs: PartnerAmounts,
@@ -919,9 +920,12 @@ function buildSalesBlocks(
       continue;
     }
 
-    // Shipping / receiving / delivery / payment-fee companions stay with the
-    // cash that paid or collected them — not in retail − designer transfer.
     if (isCostCompanionRow(entry)) {
+      addCostToGroup(
+        group(invoiceId, entry.po_number),
+        entry,
+        -Number(entry.debit_amount ?? 0)
+      );
       continue;
     }
 
