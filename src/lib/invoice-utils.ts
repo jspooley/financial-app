@@ -5,7 +5,7 @@ import {
   getLedgerCustomerPrice,
   getLedgerInvoicedAmount,
   getLedgerInvoicedAmountExcludingPaymentFee,
-  getLedgerMerchandiseAmount,
+  getLedgerRetailSubtotal,
   getLedgerTotalDesignerCost,
   parseDateOnlyParts,
   roundMoney,
@@ -662,22 +662,13 @@ export function getInvoiceLineBreakdown(entry: InvoiceLineItem): InvoiceLineBrea
   };
 }
 
-/** Merchandise billed on the line (excludes tax, shipping, receiving, delivery, and payment fees). */
-export function invoiceLineMerchandiseAmount(entry: LedgerAmountEntry): number {
-  if (entry.balance_sheet) return 0;
-  return getLedgerMerchandiseAmount({
-    retail_price: entry.retail_price,
-    quantity: entry.quantity,
-    discount_percent: entry.discount_percent ?? 0,
-    designer_cost: entry.designer_cost,
-    wholesale_retail: entry.wholesale_retail,
-    trade_partner_id: entry.trade_partner_id,
-  });
-}
-
-/** 203 pass-through costs on the line (shipping, receiving, delivery, payment fee). */
-export function invoiceLinePassThroughExpenses(entry: LedgerAmountEntry): number {
-  if (entry.balance_sheet) return 0;
+/** Shipping, receiving, delivery, and payment fees billed through to the customer. */
+export function invoiceLinePassThroughCollected(entry: {
+  shipping_receiving_amount?: number | null;
+  receiving_amount?: number | null;
+  delivery_amount?: number | null;
+  payment_fee?: number | null;
+}): number {
   return roundMoney(
     Number(entry.shipping_receiving_amount ?? 0) +
       Number(entry.receiving_amount ?? 0) +
@@ -686,21 +677,39 @@ export function invoiceLinePassThroughExpenses(entry: LedgerAmountEntry): number
   );
 }
 
-/** Invoice line profit: merchandise margin minus designer cost and 203 pass-through expenses. */
+/** Sales income that keeps profit at retail minus designer cost.
+ * Pass-through charges are included so they offset the cost lines. Tax is not. */
+export function salesProfitIncome(entry: {
+  retail_price?: number | null;
+  quantity?: number | null;
+  shipping_receiving_amount?: number | null;
+  receiving_amount?: number | null;
+  delivery_amount?: number | null;
+  payment_fee?: number | null;
+}): number {
+  const retail = getLedgerRetailSubtotal({
+    retail_price: Number(entry.retail_price ?? 0),
+    quantity: Number(entry.quantity ?? 1),
+  });
+  return roundMoney(retail + invoiceLinePassThroughCollected(entry));
+}
+
+/** Invoice line profit: retail × qty minus designer cost × qty.
+ * Shipping, tax, receiving, delivery, and fees are billed to the customer and do not change profit. */
 export function invoiceLineProfit(entry: LedgerAmountEntry): number {
   if (entry.balance_sheet) return 0;
+  const retail = getLedgerRetailSubtotal({
+    retail_price: Number(entry.retail_price ?? 0),
+    quantity: Number(entry.quantity ?? 1),
+  });
   const designerCost = getLedgerTotalDesignerCost({
     designer_cost: Number(entry.designer_cost ?? 0),
     quantity: Number(entry.quantity ?? 1),
   });
-  return roundMoney(
-    invoiceLineMerchandiseAmount(entry) -
-      designerCost -
-      invoiceLinePassThroughExpenses(entry)
-  );
+  return roundMoney(retail - designerCost);
 }
 
-/** Sum invoice line profit after 203 pass-through expenses (shipping, receiving, delivery, fees). */
+/** Sum invoice line profit (retail minus designer cost). */
 export function sumInvoiceLineProfit(entries: LedgerAmountEntry[]): number {
   return roundMoney(
     entries

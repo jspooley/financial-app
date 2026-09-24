@@ -17,11 +17,6 @@ function money(value: number) {
   return formatCurrency(value);
 }
 
-function moneyOrDash(value: number, hidden?: boolean) {
-  if (hidden) return "—";
-  return money(value);
-}
-
 function signedClass(value: number) {
   if (value < 0) return "text-red-700";
   if (value > 0) return "text-emerald-700";
@@ -37,37 +32,33 @@ function combineDesignerShare(split: ScheduleCSplit): ScheduleCSplit {
   };
 }
 
-function SplitCells({
-  split,
-  negate,
-  showBreakout,
+function signedAmount(value: number, negate?: boolean) {
+  return negate ? -value : value;
+}
+
+function MoneyCells({
+  jess,
+  molly,
+  tbd,
+  business,
+  emphasize,
 }: {
-  split: ScheduleCSplit;
-  negate?: boolean;
-  showBreakout: boolean;
+  jess: number;
+  molly: number;
+  tbd: number;
+  business: number;
+  emphasize?: boolean;
 }) {
-  const display = showBreakout ? split : combineDesignerShare(split);
-  const jess = negate ? -display.jess : display.jess;
-  const molly = negate ? -display.molly : display.molly;
-  const perDesigner = negate ? -split.perDesigner : split.perDesigner;
-  const tbd = negate ? -display.tbd : display.tbd;
-  const business = negate ? -display.business : display.business;
+  const weight = emphasize ? "font-bold" : "font-normal";
   return (
     <>
-      <td className={`px-3 py-1.5 text-right tabular-nums ${signedClass(jess)}`}>
+      <td className={`px-3 py-1.5 text-right tabular-nums ${weight} ${signedClass(jess)}`}>
         {money(jess)}
       </td>
-      <td className={`px-3 py-1.5 text-right tabular-nums ${signedClass(molly)}`}>
+      <td className={`px-3 py-1.5 text-right tabular-nums ${weight} ${signedClass(molly)}`}>
         {money(molly)}
       </td>
-      {showBreakout ? (
-        <td
-          className={`px-3 py-1.5 text-right tabular-nums ${signedClass(perDesigner)}`}
-        >
-          {money(perDesigner)}
-        </td>
-      ) : null}
-      <td className={`px-3 py-1.5 text-right tabular-nums ${signedClass(tbd)}`}>
+      <td className={`px-3 py-1.5 text-right tabular-nums ${weight} ${signedClass(tbd)}`}>
         {money(tbd)}
       </td>
       <td
@@ -76,6 +67,60 @@ function SplitCells({
         {money(business)}
       </td>
     </>
+  );
+}
+
+function SplitCells({
+  split,
+  negate,
+}: {
+  split: ScheduleCSplit;
+  negate?: boolean;
+}) {
+  const display = combineDesignerShare(split);
+  return (
+    <MoneyCells
+      jess={signedAmount(display.jess, negate)}
+      molly={signedAmount(display.molly, negate)}
+      tbd={signedAmount(display.tbd, negate)}
+      business={signedAmount(display.business, negate)}
+    />
+  );
+}
+
+function sharedHalfCells(split: ScheduleCSplit, negate?: boolean) {
+  return (
+    <MoneyCells
+      jess={signedAmount(split.perDesigner, negate)}
+      molly={signedAmount(split.perDesigner, negate)}
+      tbd={0}
+      business={signedAmount(split.sharedTotal, negate)}
+    />
+  );
+}
+
+function separateCells(split: ScheduleCSplit, negate?: boolean) {
+  const business = roundMoney(split.jess + split.molly + split.tbd);
+  return (
+    <MoneyCells
+      jess={signedAmount(split.jess, negate)}
+      molly={signedAmount(split.molly, negate)}
+      tbd={signedAmount(split.tbd, negate)}
+      business={signedAmount(business, negate)}
+    />
+  );
+}
+
+function GroupHeaderRow({ label }: { label: string }) {
+  return (
+    <tr className="border-b border-slate-200 bg-slate-50">
+      <td
+        colSpan={5}
+        className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600"
+      >
+        {label}
+      </td>
+    </tr>
   );
 }
 
@@ -141,7 +186,7 @@ export default function ScheduleCPage() {
     <AppShell>
       <PageHeader
         title="Schedule C Report"
-        description="Chart of accounts breakout for business income and expenses. Sales, COGS, and most operating expenses split 50/50 unless a line is excluded from true-up. 203 commissions and fees and 214 taxes stay with whoever paid them."
+        description="Chart of accounts breakout for business income and expenses. Profit is retail price minus designer cost. Shipping, tax, receiving, delivery, and fees are passed through to the customer and are not part of profit. Sales Income, COGS, and most operating expenses split 50/50 unless a line is excluded from true-up. 203 commissions and fees stay with whoever paid them."
       />
 
       <section className="mb-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -184,7 +229,7 @@ export default function ScheduleCPage() {
         <>
           <section className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {[
-              ["Gross Receipts", report.grossReceipts.business],
+              ["Sales Income", report.grossReceipts.business],
               ["Cost of Goods Sold", -report.cogs.business],
               ["Other Expenses", -report.otherExpenses.business],
               ["Net Profit", report.netProfit.business],
@@ -207,11 +252,11 @@ export default function ScheduleCPage() {
 
           <section className="mb-5 overflow-x-auto rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <h2 className="text-sm font-semibold text-slate-900">
-              {showBreakout ? "Jess, Molly, and Per Designer" : "Jess and Molly"}
+              Jess and Molly
             </h2>
             <p className="mb-3 mt-1 text-sm text-slate-600">
               {showBreakout
-                ? "Jess and Molly are lines excluded from true-up. Per Designer is each person’s half of everything still shared. Each designer’s Schedule C net is their column plus Per Designer."
+                ? "Shared 50/50 is each designer’s half of amounts still in the true-up. Separate is lines excluded from true-up, plus 203 fees with the payer. Sales tax is excluded. Schedule C net is shared plus separate, added down each column."
                 : "Jess and Molly include each person’s half of shared amounts plus any lines excluded from true-up. Check “Show excluded vs 50/50 breakout” to separate those."}
             </p>
             <table className="min-w-full text-sm">
@@ -220,11 +265,6 @@ export default function ScheduleCPage() {
                   <th className="px-3 py-2 font-semibold"> </th>
                   <th className="px-3 py-2 text-right font-semibold">Jess</th>
                   <th className="px-3 py-2 text-right font-semibold">Molly</th>
-                  {showBreakout ? (
-                    <th className="px-3 py-2 text-right font-semibold">
-                      Per Designer
-                    </th>
-                  ) : null}
                   <th className="px-3 py-2 text-right font-semibold">TBD</th>
                   <th className="px-3 py-2 text-right font-semibold">
                     Business
@@ -232,125 +272,132 @@ export default function ScheduleCPage() {
                 </tr>
               </thead>
               <tbody>
-                <tr className="border-b border-slate-100">
-                  <td className="px-3 py-1.5 font-medium text-slate-900">
-                    Gross Receipts
-                  </td>
-                  <SplitCells
-                    split={report.grossReceipts}
-                    showBreakout={showBreakout}
-                  />
-                </tr>
-                <tr className="border-b border-slate-100">
-                  <td className="px-3 py-1.5 font-medium text-slate-900">
-                    Cost of Goods Sold
-                  </td>
-                  <SplitCells
-                    split={report.cogs}
-                    negate
-                    showBreakout={showBreakout}
-                  />
-                </tr>
-                <tr className="border-b border-slate-100">
-                  <td className="px-3 py-1.5 font-medium text-slate-900">
-                    Other Expenses
-                  </td>
-                  <SplitCells
-                    split={report.otherExpenses}
-                    negate
-                    showBreakout={showBreakout}
-                  />
-                </tr>
-                <tr className="border-b border-slate-200 bg-slate-50">
-                  <td className="px-3 py-1.5 font-bold text-slate-900">
-                    Net Profit
-                  </td>
-                  <SplitCells
-                    split={report.netProfit}
-                    showBreakout={showBreakout}
-                  />
-                </tr>
                 {showBreakout ? (
-                  <tr className="border-b border-slate-100">
-                    <td className="px-3 py-1.5 font-bold text-slate-900">
-                      Schedule C net (column + Per Designer)
-                    </td>
-                    <td
-                      className={`px-3 py-1.5 text-right tabular-nums font-bold ${signedClass(jessTotalNet)}`}
-                    >
-                      {money(jessTotalNet)}
-                    </td>
-                    <td
-                      className={`px-3 py-1.5 text-right tabular-nums font-bold ${signedClass(mollyTotalNet)}`}
-                    >
-                      {money(mollyTotalNet)}
-                    </td>
-                    <td className="px-3 py-1.5 text-right text-slate-400">—</td>
-                    <td
-                      className={`px-3 py-1.5 text-right tabular-nums font-bold ${signedClass(report.netProfit.tbd)}`}
-                    >
-                      {money(report.netProfit.tbd)}
-                    </td>
-                    <td
-                      className={`px-3 py-1.5 text-right tabular-nums font-bold ${signedClass(report.netProfit.business)}`}
-                    >
-                      {money(report.netProfit.business)}
-                    </td>
-                  </tr>
-                ) : null}
+                  <>
+                    <GroupHeaderRow label="Shared 50/50" />
+                    <tr className="border-b border-slate-100">
+                      <td className="px-3 py-1.5 font-medium text-slate-900">
+                        50% of Total Sales Income
+                      </td>
+                      {sharedHalfCells(report.grossReceipts)}
+                    </tr>
+                    <tr className="border-b border-slate-100">
+                      <td className="px-3 py-1.5 font-medium text-slate-900">
+                        50% of Total COGS
+                      </td>
+                      {sharedHalfCells(report.cogs, true)}
+                    </tr>
+                    <tr className="border-b border-slate-100">
+                      <td className="px-3 py-1.5 font-medium text-slate-900">
+                        50% of Total Other Expenses
+                      </td>
+                      {sharedHalfCells(report.otherExpenses, true)}
+                    </tr>
+                    <GroupHeaderRow label="Separate (excluded from true-up)" />
+                    <tr className="border-b border-slate-100">
+                      <td className="px-3 py-1.5 font-medium text-slate-900">
+                        Sales Income
+                      </td>
+                      {separateCells(report.grossReceipts)}
+                    </tr>
+                    <tr className="border-b border-slate-100">
+                      <td className="px-3 py-1.5 font-medium text-slate-900">
+                        COGS
+                      </td>
+                      {separateCells(report.cogs, true)}
+                    </tr>
+                    <tr className="border-b border-slate-100">
+                      <td className="px-3 py-1.5 font-medium text-slate-900">
+                        Other Expenses
+                      </td>
+                      {separateCells(report.otherExpenses, true)}
+                    </tr>
+                    <tr className="border-b border-slate-200 bg-slate-50">
+                      <td className="px-3 py-1.5 font-bold text-slate-900">
+                        Schedule C net
+                      </td>
+                      <MoneyCells
+                        jess={jessTotalNet}
+                        molly={mollyTotalNet}
+                        tbd={report.netProfit.tbd}
+                        business={report.netProfit.business}
+                        emphasize
+                      />
+                    </tr>
+                  </>
+                ) : (
+                  <>
+                    <tr className="border-b border-slate-100">
+                      <td className="px-3 py-1.5 font-medium text-slate-900">
+                        Sales Income
+                      </td>
+                      <SplitCells split={report.grossReceipts} />
+                    </tr>
+                    <tr className="border-b border-slate-100">
+                      <td className="px-3 py-1.5 font-medium text-slate-900">
+                        Cost of Goods Sold
+                      </td>
+                      <SplitCells split={report.cogs} negate />
+                    </tr>
+                    <tr className="border-b border-slate-100">
+                      <td className="px-3 py-1.5 font-medium text-slate-900">
+                        Other Expenses
+                      </td>
+                      <SplitCells split={report.otherExpenses} negate />
+                    </tr>
+                    <tr className="border-b border-slate-200 bg-slate-50">
+                      <td className="px-3 py-1.5 font-bold text-slate-900">
+                        Net Profit
+                      </td>
+                      <SplitCells split={report.netProfit} />
+                    </tr>
+                  </>
+                )}
               </tbody>
             </table>
           </section>
 
           <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <p className="mb-4 text-sm text-slate-600">
-              Uses posted debit and credit amounts by entry date. Balance-sheet,
-              equity (300-series), and liability (400-series) activity is shown for
-              review but excluded from Schedule C net profit.
-              {showBreakout
-                ? " Jess and Molly are excluded-from-true-up lines, plus 203 fees and 214 taxes with the payer. Per Designer is half of shared 100, 101, and other 200-series amounts."
-                : " Jess and Molly include each person’s 50/50 share, plus excluded lines, 203 fees, and 214 taxes with the payer."}
+              Sales income on invoice lines is retail price plus shipping, receiving,
+              delivery, and fees. Designer cost stays in COGS. Those pass-through
+              charges and sales tax are not part of profit. Balance-sheet, equity
+              (300-series), and liability (400-series) activity is left off this
+              table. 50/50 share is each designer’s half of shared 100, 101, and
+              other 200-series amounts. Jess and Molly are lines excluded from
+              true-up, plus 203 fees with the payer. Jess total and Molly total
+              are 50/50 share plus that designer’s separate amount.
             </p>
             <DataTable
               stickyHeader
               stickyFirstColumn
+              maxBodyHeight="70vh"
               mobileTitleKey="category"
               columns={[
                 { key: "category", label: "CoA Category" },
-                { key: "treatment", label: "Schedule C Treatment" },
-                { key: "lines", label: "Lines" },
-                { key: "debits", label: "Debits" },
-                { key: "credits", label: "Credits" },
+                { key: "perDesigner", label: "50/50 share" },
                 { key: "jess", label: "Jess" },
                 { key: "molly", label: "Molly" },
-                ...(showBreakout
-                  ? [{ key: "perDesigner", label: "Per Designer" }]
-                  : []),
                 { key: "tbd", label: "TBD" },
+                { key: "jessTotal", label: "Jess total" },
+                { key: "mollyTotal", label: "Molly total" },
               ]}
-              rows={report.rows.map((row) => {
-                const excluded = row.treatment === "Excluded from Schedule C";
-                const jess = showBreakout
-                  ? row.jess
-                  : roundMoney(row.jess + row.perDesigner);
-                const molly = showBreakout
-                  ? row.molly
-                  : roundMoney(row.molly + row.perDesigner);
-                return {
-                  category: row.category,
-                  treatment: row.treatment,
-                  lines: row.lineCount,
-                  debits: money(row.debits),
-                  credits: money(row.credits),
-                  jess: moneyOrDash(jess, excluded),
-                  molly: moneyOrDash(molly, excluded),
-                  ...(showBreakout
-                    ? { perDesigner: moneyOrDash(row.perDesigner, excluded) }
-                    : {}),
-                  tbd: moneyOrDash(row.tbd, excluded),
-                };
-              })}
-              emptyMessage="No chart of accounts categories found."
+              rows={report.rows
+                .filter((row) => row.treatment !== "Excluded from Schedule C")
+                .map((row) => {
+                  const jessTotal = roundMoney(row.jess + row.perDesigner);
+                  const mollyTotal = roundMoney(row.molly + row.perDesigner);
+                  return {
+                    category: row.category,
+                    perDesigner: money(row.perDesigner),
+                    jess: money(row.jess),
+                    molly: money(row.molly),
+                    tbd: money(row.tbd),
+                    jessTotal: money(jessTotal),
+                    mollyTotal: money(mollyTotal),
+                  };
+                })}
+              emptyMessage="No Schedule C categories found."
             />
           </section>
         </>

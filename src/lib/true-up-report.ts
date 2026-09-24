@@ -16,6 +16,7 @@ import { isCostCompanionRow } from "@/lib/cost-companions";
 import {
   isInvoicedDebitLine,
   isLedgerLineFullyPaid,
+  salesProfitIncome,
   jobKeysByStatus,
   ledgerJobKey,
   normalizeInvoiceId,
@@ -23,11 +24,7 @@ import {
 import { isPaymentCompanionRow } from "@/lib/payment-companions";
 import type { LedgerEntry, KnownPurchaser, Purchaser } from "@/lib/types";
 import { isKnownPurchaser, isPendingPurchase } from "@/lib/types";
-import {
-  getLedgerInvoicedAmountExcludingPaymentFee,
-  getLedgerTotalDesignerCost,
-  roundMoney,
-} from "@/lib/utils";
+import { getLedgerTotalDesignerCost, roundMoney } from "@/lib/utils";
 
 export type PartnerAmounts = {
   jess: number;
@@ -168,7 +165,7 @@ export const TRUE_UP_EXCLUSIONS: { label: string; detail: string }[] = [
   {
     label: "Sales & use tax collected on invoices",
     detail:
-      "Stripped from 100 Sales Income as pass-through to the state. Shipping, receiving, delivery, and payment fees are reimbursed to whoever paid them.",
+      "Stripped from profit. Shipping, receiving, delivery, and payment fees are reimbursed to whoever paid them and do not reduce profit. Profit is retail price minus designer cost.",
   },
 ];
 
@@ -641,8 +638,19 @@ function salesIncomePassThrough(
 
 function netSalesIncome(
   gross: number,
-  source: Pick<LedgerEntry, "tax_amount">
+  source: Pick<
+    LedgerEntry,
+    | "tax_amount"
+    | "retail_price"
+    | "quantity"
+    | "shipping_receiving_amount"
+    | "receiving_amount"
+    | "delivery_amount"
+    | "payment_fee"
+  >
 ) {
+  const profitIncome = salesProfitIncome(source);
+  if (profitIncome > 0) return profitIncome;
   return roundMoney(gross - salesIncomePassThrough(source));
 }
 
@@ -677,14 +685,6 @@ function addIncomeToGroup(
   const transaction = trueUpTransactionFromEntry(entry, party, income, date);
   group.incomeTransactions.push(transaction);
   group.income = addPartnerAmount(group.income, party, income);
-}
-
-/** Wholesale use tax paid on purchase — reimbursed to purchaser like other COGS. */
-function wholesalePurchaseTax(
-  entry: Pick<LedgerEntry, "wholesale_retail" | "tax_amount">
-) {
-  if (entry.wholesale_retail !== "wholesale") return 0;
-  return roundMoney(Number(entry.tax_amount ?? 0));
 }
 
 function hasClientPayment(income: PartnerAmounts) {
@@ -729,8 +729,7 @@ function collectInvoicedIncome(
   for (const entry of entries) {
     if (!invoiceLineCountsForTrueUp(entry, invoiceId, parentById)) continue;
 
-    const gross = getLedgerInvoicedAmountExcludingPaymentFee(entry);
-    const net = netSalesIncome(gross, entry);
+    const net = netSalesIncome(0, entry);
     if (!net) continue;
     const transaction = trueUpTransactionFromEntry(
       entry,
@@ -963,11 +962,6 @@ function buildSalesBlocks(
     const cogs = -getLedgerTotalDesignerCost(entry);
     if (cogs) {
       addCostToGroup(g, entry, cogs);
-    }
-
-    const wholesaleTax = -wholesalePurchaseTax(entry);
-    if (wholesaleTax) {
-      addCostToGroup(g, entry, wholesaleTax);
     }
 
     if (

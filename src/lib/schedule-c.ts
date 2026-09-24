@@ -1,4 +1,5 @@
 import { coaAccountNumber, isTaxesAndLicensesCoa } from "@/lib/coa";
+import { salesProfitIncome } from "@/lib/invoice-utils";
 import {
   isExcludedFromTrueUp,
   partnerFromEntry,
@@ -8,7 +9,7 @@ import { isPendingPurchase } from "@/lib/types";
 import { roundMoney } from "@/lib/utils";
 
 export type ScheduleCTreatment =
-  | "Gross receipts"
+  | "Sales Income"
   | "Cost of goods sold"
   | "Other expense"
   | "Excluded from Schedule C";
@@ -79,12 +80,27 @@ function subtractSplit(left: ScheduleCSplit, right: ScheduleCSplit): ScheduleCSp
 
 export function scheduleCTreatment(category: string): ScheduleCTreatment {
   const accountNumber = coaAccountNumber(category);
-  if (accountNumber === 100) return "Gross receipts";
+  if (accountNumber === 100) return "Sales Income";
   if (accountNumber === 101) return "Cost of goods sold";
+  if (accountNumber === 214) return "Excluded from Schedule C";
   if (accountNumber != null && accountNumber >= 200 && accountNumber < 300) {
     return "Other expense";
   }
   return "Excluded from Schedule C";
+}
+
+function scheduleCSalesAmount(
+  entry: LedgerEntry,
+  byId: Map<string, LedgerEntry>
+) {
+  const parent = entry.source_ledger_id
+    ? byId.get(entry.source_ledger_id)
+    : undefined;
+  const recognized = salesProfitIncome(parent ?? entry);
+  if (recognized > 0) return recognized;
+  return roundMoney(
+    Number(entry.credit_amount ?? 0) - Number(entry.debit_amount ?? 0)
+  );
 }
 
 function scheduleCLineAmount(
@@ -92,7 +108,7 @@ function scheduleCLineAmount(
   debits: number,
   credits: number
 ) {
-  if (treatment === "Gross receipts") return roundMoney(credits - debits);
+  if (treatment === "Sales Income") return roundMoney(credits - debits);
   if (treatment === "Cost of goods sold" || treatment === "Other expense") {
     return roundMoney(debits - credits);
   }
@@ -114,7 +130,7 @@ function excludedParty(
   entry: LedgerEntry,
   treatment: ScheduleCTreatment
 ): Purchaser {
-  if (treatment === "Gross receipts") {
+  if (treatment === "Sales Income") {
     return partnerFromEntry(entry, "payee");
   }
   if (treatment === "Cost of goods sold" && isPendingPurchase(entry)) {
@@ -179,6 +195,7 @@ export function buildScheduleCReport(
     categories.add(entry.coa_category?.trim() || "Uncategorized");
   }
 
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
   const rows: ScheduleCCategoryRow[] = [...categories]
     .map((category) => {
       const treatment = scheduleCTreatment(category);
@@ -201,11 +218,14 @@ export function buildScheduleCReport(
       if (treatment !== "Excluded from Schedule C") {
         for (const entry of categoryEntries) {
           if (entry.balance_sheet) continue;
-          const amount = scheduleCLineAmount(
-            treatment,
-            Number(entry.debit_amount ?? 0),
-            Number(entry.credit_amount ?? 0)
-          );
+          const amount =
+            treatment === "Sales Income"
+              ? scheduleCSalesAmount(entry, byId)
+              : scheduleCLineAmount(
+                  treatment,
+                  Number(entry.debit_amount ?? 0),
+                  Number(entry.credit_amount ?? 0)
+                );
           allocateLine(split, entry, treatment, amount);
         }
       }
@@ -243,7 +263,7 @@ export function buildScheduleCReport(
       ),
       business: row.scheduleCAmount,
     };
-    if (row.treatment === "Gross receipts") {
+    if (row.treatment === "Sales Income") {
       Object.assign(grossReceipts, addSplit(grossReceipts, piece));
     } else if (row.treatment === "Cost of goods sold") {
       Object.assign(cogs, addSplit(cogs, piece));

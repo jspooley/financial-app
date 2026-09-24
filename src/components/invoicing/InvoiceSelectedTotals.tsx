@@ -78,7 +78,7 @@ export function InvoiceSelectedTotals({
       {showHint ? (
         <p className="mt-1.5 text-xs text-slate-500">
           {hint ??
-            "Profit is merchandise margin minus designer cost and 203 pass-through expenses (shipping, receiving, delivery, fees). Tax is excluded."}
+            "Profit is retail price minus designer cost. Shipping, tax, receiving, delivery, and fees are passed through to the customer and are not deducted."}
         </p>
       ) : null}
     </div>
