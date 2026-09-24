@@ -690,8 +690,8 @@ export function salesProfitIncome(entry: {
   });
 }
 
-/** Invoice line profit: retail × qty minus designer cost × qty.
- * Shipping, tax, receiving, delivery, and fees are billed to the customer and do not change profit. */
+/** Invoice line profit: retail × qty minus designer cost × qty minus shipping,
+ * receiving, delivery, and fees. Sales tax is excluded (owed to the state). */
 export function invoiceLineProfit(entry: LedgerAmountEntry): number {
   if (entry.balance_sheet) return 0;
   const retail = getLedgerRetailSubtotal({
@@ -702,10 +702,12 @@ export function invoiceLineProfit(entry: LedgerAmountEntry): number {
     designer_cost: Number(entry.designer_cost ?? 0),
     quantity: Number(entry.quantity ?? 1),
   });
-  return roundMoney(retail - designerCost);
+  return roundMoney(
+    retail - designerCost - invoiceLinePassThroughCollected(entry)
+  );
 }
 
-/** Sum invoice line profit (retail minus designer cost). */
+/** Sum invoice line profit (retail − designer − shipping/receiving/delivery/fees). */
 export function sumInvoiceLineProfit(entries: LedgerAmountEntry[]): number {
   return roundMoney(
     entries
