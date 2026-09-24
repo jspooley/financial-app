@@ -165,7 +165,7 @@ export const TRUE_UP_EXCLUSIONS: { label: string; detail: string }[] = [
   {
     label: "Sales & use tax collected on invoices",
     detail:
-      "Stripped from profit. Shipping, receiving, delivery, and payment fees are reimbursed to whoever paid them and do not reduce profit. Profit is retail price minus designer cost.",
+      "Stripped from sales income (owed to the state). Profit is client payment minus designer cost minus shipping, receiving, delivery, and fees — then split 50/50.",
   },
 ];
 
@@ -231,10 +231,12 @@ export function requiredTransfers(amounts: PartnerAmounts): PartnerAmounts {
 }
 
 /**
- * After attributing purchases to the purchaser and client payments to the
- * payee, equalize profit only. Costs are fully reimbursed; profit is split
- * 50/50. When there is no profit yet (costs exceed income), reimburse each
- * partner's purchases in full instead of splitting the shortfall 50/50.
+ * After attributing costs to the purchaser and client payment (retail) to the
+ * payee, equalize so each partner ends with half of
+ * (client payment − designer cost − shipping/receiving/delivery/fees).
+ * Sales tax is omitted from income. When there is no profit yet (costs exceed
+ * income), reimburse each partner's purchases in full instead of splitting
+ * the shortfall 50/50.
  */
 export function requiredProfitTransfers(
   costs: PartnerAmounts,
@@ -636,18 +638,10 @@ function salesIncomePassThrough(
   return roundMoney(Number(entry.tax_amount ?? 0));
 }
 
+/** Income that enters the true-up transfer: retail × qty when known. */
 function netSalesIncome(
   gross: number,
-  source: Pick<
-    LedgerEntry,
-    | "tax_amount"
-    | "retail_price"
-    | "quantity"
-    | "shipping_receiving_amount"
-    | "receiving_amount"
-    | "delivery_amount"
-    | "payment_fee"
-  >
+  source: Pick<LedgerEntry, "tax_amount" | "retail_price" | "quantity">
 ) {
   const profitIncome = salesProfitIncome(source);
   if (profitIncome > 0) return profitIncome;

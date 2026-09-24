@@ -677,25 +677,21 @@ export function invoiceLinePassThroughCollected(entry: {
   );
 }
 
-/** Sales income that keeps profit at retail minus designer cost.
- * Pass-through charges are included so they offset the cost lines. Tax is not. */
+/** Sales income used for true-up / Schedule C profit: retail × qty (client
+ * merchandise payment). Tax is not included. Shipping and other pass-through
+ * costs reduce profit on the COGS side when they are paid. */
 export function salesProfitIncome(entry: {
   retail_price?: number | null;
   quantity?: number | null;
-  shipping_receiving_amount?: number | null;
-  receiving_amount?: number | null;
-  delivery_amount?: number | null;
-  payment_fee?: number | null;
 }): number {
-  const retail = getLedgerRetailSubtotal({
+  return getLedgerRetailSubtotal({
     retail_price: Number(entry.retail_price ?? 0),
     quantity: Number(entry.quantity ?? 1),
   });
-  return roundMoney(retail + invoiceLinePassThroughCollected(entry));
 }
 
-/** Invoice line profit: retail × qty minus designer cost × qty.
- * Shipping, tax, receiving, delivery, and fees are billed to the customer and do not change profit. */
+/** Invoice line profit: retail × qty minus designer cost × qty minus shipping,
+ * receiving, delivery, and fees. Sales tax is excluded (owed to the state). */
 export function invoiceLineProfit(entry: LedgerAmountEntry): number {
   if (entry.balance_sheet) return 0;
   const retail = getLedgerRetailSubtotal({
@@ -706,10 +702,12 @@ export function invoiceLineProfit(entry: LedgerAmountEntry): number {
     designer_cost: Number(entry.designer_cost ?? 0),
     quantity: Number(entry.quantity ?? 1),
   });
-  return roundMoney(retail - designerCost);
+  return roundMoney(
+    retail - designerCost - invoiceLinePassThroughCollected(entry)
+  );
 }
 
-/** Sum invoice line profit (retail minus designer cost). */
+/** Sum invoice line profit (retail − designer − shipping/receiving/delivery/fees). */
 export function sumInvoiceLineProfit(entries: LedgerAmountEntry[]): number {
   return roundMoney(
     entries
