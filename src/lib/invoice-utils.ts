@@ -677,21 +677,17 @@ export function invoiceLinePassThroughCollected(entry: {
   );
 }
 
-/** Sales income that keeps profit at retail minus designer cost.
- * Pass-through charges are included so they offset the cost lines. Tax is not. */
+/** Sales income used for profit: retail × qty only.
+ * Tax, shipping, receiving, delivery, and fees stay with whoever collected
+ * them and are not part of retail − designer profit. */
 export function salesProfitIncome(entry: {
   retail_price?: number | null;
   quantity?: number | null;
-  shipping_receiving_amount?: number | null;
-  receiving_amount?: number | null;
-  delivery_amount?: number | null;
-  payment_fee?: number | null;
 }): number {
-  const retail = getLedgerRetailSubtotal({
+  return getLedgerRetailSubtotal({
     retail_price: Number(entry.retail_price ?? 0),
     quantity: Number(entry.quantity ?? 1),
   });
-  return roundMoney(retail + invoiceLinePassThroughCollected(entry));
 }
 
 /** Invoice line profit: retail × qty minus designer cost × qty.
