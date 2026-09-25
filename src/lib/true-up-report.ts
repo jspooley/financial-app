@@ -17,11 +17,13 @@ import {
   isInvoicedDebitLine,
   isLedgerLineFullyPaid,
   salesProfitIncome,
+  subsequentChargeBelongsToOtherInvoice,
   jobKeysByStatus,
   ledgerJobKey,
   normalizeInvoiceId,
 } from "@/lib/invoice-utils";
 import { isPaymentCompanionRow } from "@/lib/payment-companions";
+import { subsequentChargeLineTotal } from "@/lib/subsequent-charges";
 import type { LedgerEntry, KnownPurchaser, Purchaser } from "@/lib/types";
 import { isKnownPurchaser, isPendingPurchase } from "@/lib/types";
 import { getLedgerTotalDesignerCost, roundMoney } from "@/lib/utils";
@@ -165,7 +167,7 @@ export const TRUE_UP_EXCLUSIONS: { label: string; detail: string }[] = [
   {
     label: "Sales & use tax collected on invoices",
     detail:
-      "Subtracted from profit because it is collected from the client and paid to the state. The 50/50 split is customer price after discount minus designer cost minus shipping, receiving, delivery, fees, and that tax.",
+      "Subtracted from profit because it is collected from the client and paid to the state. The 50/50 split is customer price after discount minus designer cost minus shipping, receiving, delivery, fees, and that tax. Shipping, receiving, and delivery for goods on another invoice are not profit. After the client pays, that collection is assigned to the partner who received it and the same amount to the partner who paid the carrier.",
   },
 ];
 
@@ -234,6 +236,9 @@ export function requiredTransfers(amounts: PartnerAmounts): PartnerAmounts {
  * After attributing costs to the purchaser and client payment (customer price
  * after discount) to the payee, equalize so each partner ends with half of
  * (customer price − designer cost − shipping/receiving/delivery/fees − sales tax).
+ * A paid subsequent charge for goods on another invoice adds the collection to
+ * the payee and the same amount to the purchaser, so profit is unchanged and
+ * the transfer reimburses whoever paid the carrier.
  * When there is no profit yet (costs exceed
  * income), reimburse each partner's purchases in full instead of splitting
  * the shortfall 50/50.
@@ -867,6 +872,56 @@ function buildPendingSalesBlocks(
   );
 }
 
+function lookupOriginInvoice(
+  parentById: Map<string, LedgerEntry>
+) {
+  return (id: string) => parentById.get(id);
+}
+
+/** Client money recorded on a subsequent charge, preferring the payment companion. */
+function collectedOnSubsequentCharge(
+  parent: LedgerEntry,
+  entries: LedgerEntry[]
+) {
+  let fromCompanions = 0;
+  let sawCompanion = false;
+  for (const row of entries) {
+    if (row.source_ledger_id !== parent.id || !isPaymentCompanionRow(row)) {
+      continue;
+    }
+    sawCompanion = true;
+    fromCompanions +=
+      Number(row.credit_amount ?? 0) || Number(row.payment_amount ?? 0);
+  }
+  if (sawCompanion) return roundMoney(fromCompanions);
+  return roundMoney(Number(parent.payment_amount ?? 0));
+}
+
+/**
+ * Later shipping/receiving/delivery for goods on another invoice enters True Up
+ * only after the client has paid it. Until then it is left out so the carrier
+ * cost does not reduce profit.
+ */
+function paidCrossInvoiceChargeIds(
+  entries: LedgerEntry[],
+  parentById: Map<string, LedgerEntry>
+) {
+  const lookup = lookupOriginInvoice(parentById);
+  const paid = new Set<string>();
+  for (const entry of entries) {
+    if (entry.source_ledger_id) continue;
+    if (!subsequentChargeBelongsToOtherInvoice(entry, lookup)) continue;
+    const billed = subsequentChargeLineTotal(entry);
+    const collected = collectedOnSubsequentCharge(entry, entries);
+    const covered =
+      billed > 0.005 && collected + 0.005 >= billed;
+    if (covered || (entry.paid && collected > 0.005)) {
+      paid.add(entry.id);
+    }
+  }
+  return paid;
+}
+
 function buildSalesBlocks(
   entries: LedgerEntry[],
   year: number,
@@ -879,6 +934,11 @@ function buildSalesBlocks(
       .map((entry) => entry.source_ledger_id)
       .filter((id): id is string => Boolean(id))
   );
+  const paidOtherInvoiceCharges = paidCrossInvoiceChargeIds(
+    entries,
+    parentById
+  );
+  const originInvoice = lookupOriginInvoice(parentById);
 
   const byInvoice = new Map<
     string,
@@ -932,6 +992,16 @@ function buildSalesBlocks(
     }
 
     if (isCostCompanionRow(entry)) {
+      const parent = entry.source_ledger_id
+        ? parentById.get(entry.source_ledger_id)
+        : undefined;
+      if (
+        parent &&
+        subsequentChargeBelongsToOtherInvoice(parent, originInvoice) &&
+        !paidOtherInvoiceCharges.has(parent.id)
+      ) {
+        continue;
+      }
       addCostToGroup(
         group(invoiceId, entry.po_number),
         entry,
@@ -944,6 +1014,12 @@ function buildSalesBlocks(
       const source =
         (entry.source_ledger_id && parentById.get(entry.source_ledger_id)) ||
         entry;
+      if (
+        subsequentChargeBelongsToOtherInvoice(source, originInvoice) &&
+        !paidOtherInvoiceCharges.has(source.id)
+      ) {
+        continue;
+      }
       const income = netSalesIncome(
         Number(entry.credit_amount ?? 0) || Number(entry.payment_amount ?? 0),
         source
@@ -962,6 +1038,29 @@ function buildSalesBlocks(
     }
 
     if (entry.source_ledger_id) continue;
+    if (subsequentChargeBelongsToOtherInvoice(entry, originInvoice)) {
+      if (
+        paidOtherInvoiceCharges.has(entry.id) &&
+        !paymentCompanionParentIds.has(entry.id) &&
+        Number(entry.payment_amount ?? 0) > 0
+      ) {
+        const paidGroup = group(invoiceId, entry.po_number);
+        const income = netSalesIncome(
+          Number(entry.payment_amount ?? 0),
+          entry
+        );
+        if (income) {
+          addIncomeToGroup(
+            paidGroup,
+            entry,
+            partnerFromEntry(entry, "payee"),
+            income,
+            entry.date_paid || entry.entry_date
+          );
+        }
+      }
+      continue;
+    }
 
     const g = group(invoiceId, entry.po_number);
     const cogs = -getLedgerTotalDesignerCost(entry);

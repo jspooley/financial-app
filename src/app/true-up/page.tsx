@@ -1202,7 +1202,7 @@ export default function TrueUpReportPage() {
     <AppShell>
       <PageHeader
         title="True Up Report"
-        description="Cash-basis accounting between partners. Profit split 50/50 is customer price after discount minus designer cost minus shipping, receiving, delivery, fees, and sales tax collected for the state. Required transfer equalizes so each partner gets half of that profit: send is negative, receive is positive."
+        description="Cash-basis accounting between partners. Profit split 50/50 is customer price after discount minus designer cost minus shipping, receiving, delivery, fees, and sales tax collected for the state. Shipping, receiving, and delivery for goods on another invoice are not profit. After the client pays, that collection is assigned to the partner who received it and the same amount to the partner who paid the carrier. Required transfer equalizes so each partner gets half of that profit: send is negative, receive is positive."
         action={
           <div className="flex flex-wrap gap-2">
             <SelectField

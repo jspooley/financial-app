@@ -74,6 +74,7 @@ export function isLedgerLineUnpaid(line: LedgerAmountEntry): boolean {
 }
 
 export type LedgerAmountEntry = {
+  id?: string;
   retail_price: number;
   quantity: number;
   discount_percent?: number;
@@ -96,6 +97,9 @@ export type LedgerAmountEntry = {
   variance_accepted?: boolean | null;
   variance_amount?: number | null;
   balance_sheet?: boolean | null;
+  /** Merchandise line this later shipping/receiving/delivery charge belongs to. */
+  origin_ledger_id?: string | null;
+  source_ledger_id?: string | null;
 };
 
 /** Line amount: customer price × qty + tax + shipping + receiving + delivery + fee (invoice and payment totals).
@@ -703,10 +707,43 @@ export function salesProfitIncome(entry: {
   });
 }
 
+/**
+ * Later shipping, receiving, or delivery billed for merchandise that is on a
+ * different invoice. Those charges are passed through at cost and do not
+ * change profit on the invoice where they are billed.
+ */
+export function subsequentChargeBelongsToOtherInvoice(
+  entry: {
+    origin_ledger_id?: string | null;
+    source_ledger_id?: string | null;
+    invoice_id?: string | null;
+  },
+  lookupOrigin: (id: string) => { invoice_id?: string | null } | undefined
+): boolean {
+  if (!entry.origin_ledger_id || entry.source_ledger_id) return false;
+  const origin = lookupOrigin(entry.origin_ledger_id);
+  if (!origin) return true;
+  const originInvoice = normalizeInvoiceId(origin.invoice_id);
+  const chargeInvoice = normalizeInvoiceId(entry.invoice_id);
+  if (!originInvoice) return false;
+  if (!chargeInvoice) return true;
+  return originInvoice !== chargeInvoice;
+}
+
 /** Invoice line profit: customer price minus designer cost × qty minus shipping,
- * receiving, delivery, fees, and sales tax collected for the state. */
-export function invoiceLineProfit(entry: LedgerAmountEntry): number {
+ * receiving, delivery, fees, and sales tax collected for the state.
+ * A subsequent charge for goods on another invoice contributes 0. */
+export function invoiceLineProfit(
+  entry: LedgerAmountEntry,
+  lookupOrigin?: (id: string) => { invoice_id?: string | null } | undefined
+): number {
   if (entry.balance_sheet) return 0;
+  if (
+    lookupOrigin &&
+    subsequentChargeBelongsToOtherInvoice(entry, lookupOrigin)
+  ) {
+    return 0;
+  }
   const customerPrice = salesProfitIncome(entry);
   const designerCost = getLedgerTotalDesignerCost({
     designer_cost: Number(entry.designer_cost ?? 0),
@@ -720,12 +757,24 @@ export function invoiceLineProfit(entry: LedgerAmountEntry): number {
   );
 }
 
+function originLookupFromLines(lines: LedgerAmountEntry[]) {
+  const byId = new Map<string, LedgerAmountEntry>();
+  for (const line of lines) {
+    if (line.id) byId.set(line.id, line);
+  }
+  return (id: string) => byId.get(id);
+}
+
 /** Sum invoice line profit (customer price − designer − shipping/receiving/delivery/fees − tax). */
-export function sumInvoiceLineProfit(entries: LedgerAmountEntry[]): number {
+export function sumInvoiceLineProfit(
+  entries: LedgerAmountEntry[],
+  originLookupLines: LedgerAmountEntry[] = entries
+): number {
+  const lookupOrigin = originLookupFromLines(originLookupLines);
   return roundMoney(
     entries
       .filter(isInvoicedDebitLine)
-      .reduce((sum, entry) => sum + invoiceLineProfit(entry), 0)
+      .reduce((sum, entry) => sum + invoiceLineProfit(entry, lookupOrigin), 0)
   );
 }
 
@@ -740,7 +789,8 @@ export type InvoiceSelectedItemTotals = {
 
 /** Totals for the invoice selected-items panel (profit, tax, shipping, receiving, delivery, fees). */
 export function sumInvoiceSelectedItemTotals(
-  entries: LedgerAmountEntry[]
+  entries: LedgerAmountEntry[],
+  originLookupLines?: LedgerAmountEntry[]
 ): InvoiceSelectedItemTotals {
   const lines = entries.filter(isInvoicedDebitLine);
   let tax = 0;
@@ -756,7 +806,7 @@ export function sumInvoiceSelectedItemTotals(
     fees += Number(line.payment_fee ?? 0);
   }
   return {
-    profit: sumInvoiceLineProfit(lines),
+    profit: sumInvoiceLineProfit(lines, originLookupLines ?? entries),
     tax: roundMoney(tax),
     shipping: roundMoney(shipping),
     receiving: roundMoney(receiving),

@@ -425,7 +425,7 @@ export function InvoiceForm({
 
   const includedLineTotals = useMemo(() => {
     const lines = selectableLines.filter((line) => includedLineIds.has(line.id));
-    return sumInvoiceSelectedItemTotals(lines);
+    return sumInvoiceSelectedItemTotals(lines, selectableLines);
   }, [selectableLines, includedLineIds]);
 
   const ledgerSummary = useMemo(() => {
@@ -751,7 +751,7 @@ export function InvoiceForm({
           />
           <InvoiceSelectedTotals
             totals={includedLineTotals}
-            hint="From checked lines. Profit is customer price after discount minus designer cost minus shipping, receiving, delivery, fees, and sales tax collected for the state."
+            hint="From checked lines. Profit is customer price after discount minus designer cost minus shipping, receiving, delivery, fees, and sales tax collected for the state. Shipping, receiving, and delivery for goods on another invoice are not deducted."
           />
         </div>
 

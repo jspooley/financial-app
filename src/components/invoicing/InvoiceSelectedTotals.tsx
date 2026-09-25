@@ -78,7 +78,7 @@ export function InvoiceSelectedTotals({
       {showHint ? (
         <p className="mt-1.5 text-xs text-slate-500">
           {hint ??
-            "Profit is customer price after discount minus designer cost minus shipping, receiving, delivery, fees, and sales tax collected for the state."}
+            "Profit is customer price after discount minus designer cost minus shipping, receiving, delivery, fees, and sales tax collected for the state. Shipping, receiving, and delivery for goods on another invoice are not deducted."}
         </p>
       ) : null}
     </div>
