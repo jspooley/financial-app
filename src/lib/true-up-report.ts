@@ -165,7 +165,7 @@ export const TRUE_UP_EXCLUSIONS: { label: string; detail: string }[] = [
   {
     label: "Sales & use tax collected on invoices",
     detail:
-      "Stripped from sales income (owed to the state). Profit is client payment minus designer cost minus shipping, receiving, delivery, and fees — then split 50/50.",
+      "Subtracted from profit because it is collected from the client and paid to the state. The 50/50 split is customer price after discount minus designer cost minus shipping, receiving, delivery, fees, and that tax.",
   },
 ];
 
@@ -231,10 +231,10 @@ export function requiredTransfers(amounts: PartnerAmounts): PartnerAmounts {
 }
 
 /**
- * After attributing costs to the purchaser and client payment (retail) to the
- * payee, equalize so each partner ends with half of
- * (client payment − designer cost − shipping/receiving/delivery/fees).
- * Sales tax is omitted from income. When there is no profit yet (costs exceed
+ * After attributing costs to the purchaser and client payment (customer price
+ * after discount) to the payee, equalize so each partner ends with half of
+ * (customer price − designer cost − shipping/receiving/delivery/fees − sales tax).
+ * When there is no profit yet (costs exceed
  * income), reimburse each partner's purchases in full instead of splitting
  * the shortfall 50/50.
  */
@@ -638,14 +638,25 @@ function salesIncomePassThrough(
   return roundMoney(Number(entry.tax_amount ?? 0));
 }
 
-/** Income that enters the true-up transfer: retail × qty when known. */
+/** Income that enters the true-up transfer: customer price after discount, then minus sales tax. */
 function netSalesIncome(
   gross: number,
-  source: Pick<LedgerEntry, "tax_amount" | "retail_price" | "quantity">
+  source: Pick<
+    LedgerEntry,
+    | "tax_amount"
+    | "retail_price"
+    | "quantity"
+    | "discount_percent"
+    | "customer_price"
+    | "designer_cost"
+    | "wholesale_retail"
+    | "trade_partner_id"
+  >
 ) {
+  const tax = salesIncomePassThrough(source);
   const profitIncome = salesProfitIncome(source);
-  if (profitIncome > 0) return profitIncome;
-  return roundMoney(gross - salesIncomePassThrough(source));
+  if (profitIncome > 0) return roundMoney(profitIncome - tax);
+  return roundMoney(gross - tax);
 }
 
 function addCostToGroup(

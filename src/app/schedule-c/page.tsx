@@ -186,7 +186,7 @@ export default function ScheduleCPage() {
     <AppShell>
       <PageHeader
         title="Schedule C Report"
-        description="Chart of accounts breakout for business income and expenses. Profit is retail price minus designer cost. Shipping, tax, receiving, delivery, and fees are passed through to the customer and are not part of profit. Sales Income, COGS, and most operating expenses split 50/50 unless a line is excluded from true-up. 203 commissions and fees stay with whoever paid them."
+        description="Chart of accounts breakout for business income and expenses. Profit is customer price after discount minus designer cost. Shipping, tax, receiving, delivery, and fees are passed through and subtracted. Sales Income, COGS, and most operating expenses split 50/50 unless a line is excluded from true-up. 203 commissions and fees stay with whoever paid them."
       />
 
       <section className="mb-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -359,9 +359,9 @@ export default function ScheduleCPage() {
 
           <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <p className="mb-4 text-sm text-slate-600">
-              Sales income on invoice lines is retail price plus shipping, receiving,
-              delivery, and fees. Designer cost stays in COGS. Those pass-through
-              charges and sales tax are not part of profit. Balance-sheet, equity
+              Sales income on invoice lines is the customer price after discount.
+              Designer cost stays in COGS. Shipping, receiving, delivery, fees, and
+              sales tax are subtracted from profit. Balance-sheet, equity
               (300-series), and liability (400-series) activity is left off this
               table. 50/50 share is each designer’s half of shared 100, 101, and
               other 200-series amounts. Jess and Molly are lines excluded from

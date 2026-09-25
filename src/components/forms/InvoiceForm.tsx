@@ -751,7 +751,7 @@ export function InvoiceForm({
           />
           <InvoiceSelectedTotals
             totals={includedLineTotals}
-            hint="From checked lines. Profit is retail minus designer cost minus shipping, receiving, delivery, and fees. Sales tax is excluded."
+            hint="From checked lines. Profit is customer price after discount minus designer cost minus shipping, receiving, delivery, fees, and sales tax collected for the state."
           />
         </div>
 

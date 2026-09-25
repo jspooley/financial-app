@@ -96,8 +96,11 @@ function scheduleCSalesAmount(
   const parent = entry.source_ledger_id
     ? byId.get(entry.source_ledger_id)
     : undefined;
-  const recognized = salesProfitIncome(parent ?? entry);
-  if (recognized > 0) return recognized;
+  const source = parent ?? entry;
+  const recognized = salesProfitIncome(source);
+  if (recognized > 0) {
+    return roundMoney(recognized - Number(source.tax_amount ?? 0));
+  }
   return roundMoney(
     Number(entry.credit_amount ?? 0) - Number(entry.debit_amount ?? 0)
   );

@@ -1202,7 +1202,7 @@ export default function TrueUpReportPage() {
     <AppShell>
       <PageHeader
         title="True Up Report"
-        description="Cash-basis accounting between partners. Profit is client payment (retail) minus designer cost minus shipping, receiving, delivery, and fees. Sales tax is excluded. Required transfer equalizes so each partner gets half of that profit: send is negative, receive is positive."
+        description="Cash-basis accounting between partners. Profit split 50/50 is customer price after discount minus designer cost minus shipping, receiving, delivery, fees, and sales tax collected for the state. Required transfer equalizes so each partner gets half of that profit: send is negative, receive is positive."
         action={
           <div className="flex flex-wrap gap-2">
             <SelectField
@@ -1256,7 +1256,7 @@ export default function TrueUpReportPage() {
         <div className="space-y-8">
           <CollapsibleSection
             title="Sales and Revenue"
-            description="Cash in and out by invoice. COGS is designer cost plus shipping, receiving, delivery, and fees (who paid). Sales income is retail / client payment (who received it); sales tax is excluded. Profit is income minus those costs, and Required Transfer equalizes so each partner gets half. Example: $200 payment − $100 designer − $25 shipping = $75 profit → $37.50 each after the transfer. Exclude from true up keeps the Jess/Molly amounts on the line and only drops those values from Required Transfer. If you netted unrelated expenses instead of sending the full required transfer, set Settle remaining to Yes on the discrepancy — that zeros the invoice without posting a 304 to checking. Jobs with purchases but no client payment yet show as Pending."
+            description="Cash in and out by invoice. COGS is designer cost plus shipping, receiving, delivery, and fees (who paid). Sales income is the customer price after discount; sales tax is subtracted because it is paid to the state. Profit is that income minus those costs, and Required Transfer equalizes so each partner gets half. Exclude from true up keeps the Jess/Molly amounts on the line and only drops those values from Required Transfer. If you netted unrelated expenses instead of sending the full required transfer, set Settle remaining to Yes on the discrepancy — that zeros the invoice without posting a 304 to checking. Jobs with purchases but no client payment yet show as Pending."
           >
             <BlockTable
               sectionLabel="Sales&Revenue"

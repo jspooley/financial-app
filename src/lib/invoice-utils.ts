@@ -5,7 +5,6 @@ import {
   getLedgerCustomerPrice,
   getLedgerInvoicedAmount,
   getLedgerInvoicedAmountExcludingPaymentFee,
-  getLedgerRetailSubtotal,
   getLedgerTotalDesignerCost,
   parseDateOnlyParts,
   roundMoney,
@@ -677,37 +676,51 @@ export function invoiceLinePassThroughCollected(entry: {
   );
 }
 
-/** Sales income used for true-up / Schedule C profit: retail × qty (client
- * merchandise payment). Tax is not included. Shipping and other pass-through
- * costs reduce profit on the COGS side when they are paid. */
+/** Sales income for profit: customer price after the client discount.
+ * Tax is not included. Shipping and other pass-through costs reduce profit separately. */
 export function salesProfitIncome(entry: {
   retail_price?: number | null;
   quantity?: number | null;
+  discount_percent?: number | null;
+  customer_price?: number | null;
+  designer_cost?: number | null;
+  wholesale_retail?: "wholesale" | "retail" | "service" | null;
+  trade_partner_id?: string | null;
 }): number {
-  return getLedgerRetailSubtotal({
+  const wholesaleRetail =
+    entry.wholesale_retail === "wholesale" ||
+    entry.wholesale_retail === "service"
+      ? entry.wholesale_retail
+      : "retail";
+  return getLedgerCustomerPrice({
     retail_price: Number(entry.retail_price ?? 0),
     quantity: Number(entry.quantity ?? 1),
+    discount_percent: Number(entry.discount_percent ?? 0),
+    customer_price: entry.customer_price,
+    designer_cost: Number(entry.designer_cost ?? 0),
+    wholesale_retail: wholesaleRetail,
+    trade_partner_id: entry.trade_partner_id,
   });
 }
 
-/** Invoice line profit: retail × qty minus designer cost × qty minus shipping,
- * receiving, delivery, and fees. Sales tax is excluded (owed to the state). */
+/** Invoice line profit: customer price minus designer cost × qty minus shipping,
+ * receiving, delivery, fees, and sales tax collected for the state. */
 export function invoiceLineProfit(entry: LedgerAmountEntry): number {
   if (entry.balance_sheet) return 0;
-  const retail = getLedgerRetailSubtotal({
-    retail_price: Number(entry.retail_price ?? 0),
-    quantity: Number(entry.quantity ?? 1),
-  });
+  const customerPrice = salesProfitIncome(entry);
   const designerCost = getLedgerTotalDesignerCost({
     designer_cost: Number(entry.designer_cost ?? 0),
     quantity: Number(entry.quantity ?? 1),
   });
   return roundMoney(
-    retail - designerCost - invoiceLinePassThroughCollected(entry)
+    customerPrice -
+      designerCost -
+      invoiceLinePassThroughCollected(entry) -
+      Number(entry.tax_amount ?? 0)
   );
 }
 
-/** Sum invoice line profit (retail − designer − shipping/receiving/delivery/fees). */
+/** Sum invoice line profit (customer price − designer − shipping/receiving/delivery/fees − tax). */
 export function sumInvoiceLineProfit(entries: LedgerAmountEntry[]): number {
   return roundMoney(
     entries
