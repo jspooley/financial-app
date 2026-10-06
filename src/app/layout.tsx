@@ -1,6 +1,13 @@
 import type { Metadata } from "next";
+import { Great_Vibes } from "next/font/google";
 import { RecordLockProvider } from "@/components/RecordLockProvider";
 import "./globals.css";
+
+const greatVibes = Great_Vibes({
+  weight: "400",
+  subsets: ["latin"],
+  variable: "--font-great-vibes",
+});
 
 export const metadata: Metadata = {
   title: "Maison Joy Financial Manager",
@@ -16,7 +23,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className={greatVibes.variable}>
       <body>
         <RecordLockProvider>{children}</RecordLockProvider>
       </body>

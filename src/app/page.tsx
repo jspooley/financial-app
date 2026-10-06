@@ -1,7 +1,16 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
-import { PageHeader } from "@/components/ui/PageHeader";
 import { createClient } from "@/lib/supabase/server";
+import { OverviewTodoList } from "@/components/overview/OverviewTodoList";
+import { AppointmentFunnel } from "@/components/overview/AppointmentFunnel";
+import { SalesComparisonChart } from "@/components/overview/SalesComparisonChart";
+import {
+  buildOverviewAutoTodos,
+  buildProposalFollowUpTodos,
+  buildSendBudgetTodos,
+  buildSendProposalTodos,
+} from "@/lib/overview-todos";
+import { buildOverviewChartSeries, countAppointmentsByMonth } from "@/lib/overview-chart";
 import { formatCurrency } from "@/lib/utils";
 import {
   summarizeInvoicedUnpaid,
@@ -17,44 +26,36 @@ import {
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-type SummaryCardData = {
-  label: string;
-  value: string | number;
-  hint?: string;
-  href: string;
-};
-
-function SummaryCard({ card }: { card: SummaryCardData }) {
-  return (
-    <Link
-      href={card.href}
-      className="flex h-full min-h-[6.5rem] flex-col rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition hover:border-brand-200 sm:min-h-[7.25rem] sm:p-4"
-    >
-      <p className="text-xs text-slate-500 sm:text-sm">{card.label}</p>
-      <p className="mt-1 text-xl font-semibold text-slate-900 sm:text-2xl">{card.value}</p>
-      <p className="mt-auto hidden min-h-[2.5rem] pt-1 text-xs leading-snug text-slate-500 sm:block">
-        {card.hint ?? ""}
-      </p>
-    </Link>
-  );
-}
-
 export default async function DashboardPage() {
   const supabase = await createClient();
 
   const [
     { count: clientCount },
-    { count: totalAppointments },
+    { count: totalAppointments, error: upcomingAppointmentsError },
+    { count: budgetPhaseAppointments, error: budgetPhaseError },
     { count: wonAppointments },
     { count: lostAppointments },
     { count: proposalSentAppointments },
+    { count: onHoldAppointments, error: onHoldError },
     { data: ledgerTotals },
     { data: invoiceHeaders },
+    { data: appointmentDates },
+    { data: proposalAppointments, error: proposalAppointmentsError },
+    { data: sendProposalAppointments, error: sendProposalAppointmentsError },
+    { data: sendBudgetAppointments, error: sendBudgetAppointmentsError },
   ] = await Promise.all([
     supabase.from("clients").select("*", { count: "exact", head: true }),
     supabase
       .from("appointments")
       .select("*", { count: "exact", head: true })
+      .eq("proposal_sent", false)
+      .eq("send_budget", false)
+      .eq("job_won", false)
+      .eq("job_lost", false),
+    supabase
+      .from("appointments")
+      .select("*", { count: "exact", head: true })
+      .eq("send_budget", true)
       .eq("proposal_sent", false)
       .eq("job_won", false)
       .eq("job_lost", false),
@@ -66,9 +67,72 @@ export default async function DashboardPage() {
       .eq("proposal_sent", true)
       .eq("job_won", false)
       .eq("job_lost", false),
+    supabase
+      .from("appointments")
+      .select("*", { count: "exact", head: true })
+      .eq("on_hold", true)
+      .eq("job_won", false)
+      .eq("job_lost", false),
     supabase.from("ledger").select("*, clients(name)"),
     supabase.from("invoicing").select("client_id, po_number"),
+    supabase.from("appointments").select("appointment_date"),
+    supabase
+      .from("appointments")
+      .select(
+        "id, client_name, proposal_sent, job_won, job_lost, proposal_sent_date, updated_at"
+      )
+      .eq("proposal_sent", true)
+      .eq("job_won", false)
+      .eq("job_lost", false),
+    supabase
+      .from("appointments")
+      .select(
+        "id, client_name, appointment_date, send_proposal, proposal_sent, job_won, job_lost"
+      )
+      .eq("send_proposal", true)
+      .eq("proposal_sent", false)
+      .eq("job_won", false)
+      .eq("job_lost", false),
+    supabase
+      .from("appointments")
+      .select("id, client_name, appointment_date, send_budget, job_won, job_lost")
+      .eq("send_budget", true)
+      .eq("job_won", false)
+      .eq("job_lost", false),
   ]);
+
+  let upcomingCount = totalAppointments ?? 0;
+  let budgetPhaseCount = budgetPhaseAppointments ?? 0;
+  let proposalPhaseCount = proposalSentAppointments ?? 0;
+  const onHoldCount = onHoldError ? 0 : (onHoldAppointments ?? 0);
+  if (!onHoldError) upcomingCount = Math.max(0, upcomingCount - onHoldCount);
+  if (
+    (upcomingAppointmentsError && /send_budget/i.test(upcomingAppointmentsError.message)) ||
+    (budgetPhaseError && /send_budget/i.test(budgetPhaseError.message))
+  ) {
+    const fallback = await supabase
+      .from("appointments")
+      .select("*", { count: "exact", head: true })
+      .eq("proposal_sent", false)
+      .eq("job_won", false)
+      .eq("job_lost", false);
+    upcomingCount = fallback.count ?? 0;
+    budgetPhaseCount = 0;
+  }
+
+  let openProposals = proposalAppointments ?? [];
+  if (
+    proposalAppointmentsError &&
+    /proposal_sent_date/i.test(proposalAppointmentsError.message)
+  ) {
+    const fallback = await supabase
+      .from("appointments")
+      .select("id, client_name, proposal_sent, job_won, job_lost, updated_at")
+      .eq("proposal_sent", true)
+      .eq("job_won", false)
+      .eq("job_lost", false);
+    openProposals = fallback.data ?? [];
+  }
 
   const invoicedPoKeys = new Set(
     (invoiceHeaders ?? []).map(
@@ -90,27 +154,50 @@ export default async function DashboardPage() {
   const toBeInvoiced = summarizeToBeInvoiced(allLedgerEntries);
   const invoicedUnpaid = summarizeInvoicedUnpaid(allLedgerEntries);
   const jobSummary = summarizeJobsByStatus(allLedgerEntries, { invoicedPoKeys });
+  const chartYear = new Date().getFullYear();
+  const chartThroughMonth = new Date().getMonth() + 1;
+  const appointmentCounts = countAppointmentsByMonth(
+    appointmentDates ?? [],
+    chartYear,
+    chartThroughMonth
+  );
+  const chartSeries = buildOverviewChartSeries(
+    mergePaymentCompanionsOntoEntries(
+      ledgerRows,
+      ledgerRows.filter((entry) => isPaymentCompanionRow(entry))
+    ),
+    {
+      year: chartYear,
+      throughMonth: chartThroughMonth,
+      invoicedPoKeys,
+    }
+  );
 
-  const summaryCards: SummaryCardData[] = [
+  const funnelStages = [
     {
       label: "Upcoming Appointments",
-      value: totalAppointments ?? 0,
+      value: upcomingCount,
       href: "/appointments",
+    },
+    {
+      label: "Budget Phase",
+      value: budgetPhaseCount,
+      href: "/appointments?status=budget",
+    },
+    {
+      label: "Proposal Phase",
+      value: proposalPhaseCount,
+      href: "/appointments?status=proposal_sent",
+    },
+    {
+      label: "On Hold",
+      value: onHoldCount,
+      href: "/appointments?status=on_hold",
     },
     {
       label: "Won",
       value: wonAppointments ?? 0,
       href: "/appointments?status=won",
-    },
-    {
-      label: "Lost",
-      value: lostAppointments ?? 0,
-      href: "/appointments?status=lost",
-    },
-    {
-      label: "Proposal Sent",
-      value: proposalSentAppointments ?? 0,
-      href: "/appointments?status=proposal_sent",
     },
     {
       label: "Open Jobs",
@@ -124,24 +211,15 @@ export default async function DashboardPage() {
       hint: "Invoices paid in full",
       href: "/ledger?jobs=closed",
     },
+    {
+      label: "Lost",
+      value: lostAppointments ?? 0,
+      href: "/appointments?status=lost",
+    },
   ];
-
-  const [
-    pendingCard,
-    wonCard,
-    lostCard,
-    proposalSentCard,
-    openJobsCard,
-    closedJobsCard,
-  ] = summaryCards;
 
   return (
     <AppShell>
-      <PageHeader
-        title="Maison Joy Business Overview"
-        description="Overview of expenses and receivables."
-      />
-
       {(clientCount ?? 0) === 0 && (
         <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="font-medium">Get started by adding a client.</p>
@@ -158,52 +236,38 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 lg:grid-flow-col lg:grid-rows-2">
-        <SummaryCard card={pendingCard} />
-        <SummaryCard card={proposalSentCard} />
-        <SummaryCard card={wonCard} />
-        <SummaryCard card={lostCard} />
-        <SummaryCard card={openJobsCard} />
-        <SummaryCard card={closedJobsCard} />
-      </div>
+      <SalesComparisonChart
+        year={chartYear}
+        series={chartSeries}
+        appointments={appointmentCounts}
+        aside={<AppointmentFunnel stages={funnelStages} />}
+      />
 
-      <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+      <div className="mb-6 grid items-stretch gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,3fr)]">
+      <section className="flex h-full min-h-0 min-w-0 max-h-[var(--paired-box-height,none)] flex-col overflow-auto rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
         <h2 className="text-lg font-semibold text-slate-900">Invoicing &amp; Payments</h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Uninvoiced ledger items ready to bill, and invoiced amounts still awaiting payment.
-        </p>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <div className="mt-4 grid gap-4">
           <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
             <p className="text-xs uppercase tracking-wide text-slate-500">To Be Invoiced</p>
             <p className="mt-1 text-xl font-semibold text-slate-900">
               {formatCurrency(toBeInvoiced.amount)}
             </p>
-            {toBeInvoiced.count === 0 ? (
-              <p className="mt-1 text-sm text-slate-600">
-                No outstanding items to be invoiced
-              </p>
-            ) : (
-              <>
-                <p className="mt-1 text-sm text-slate-600">
-                  {toBeInvoiced.count} outstanding{" "}
-                  {toBeInvoiced.count === 1 ? "item" : "items"} to be invoiced
-                </p>
-                <div className="mt-2 flex flex-wrap gap-3 text-sm font-medium">
-                  <Link
-                    href="/ledger?uninvoiced=1"
-                    className="text-brand-700 hover:text-brand-800 hover:underline"
-                  >
-                    View in Ledger →
-                  </Link>
-                  <Link
-                    href="/invoicing"
-                    className="text-brand-700 hover:text-brand-800 hover:underline"
-                  >
-                    Create Invoice →
-                  </Link>
-                </div>
-              </>
-            )}
+            {toBeInvoiced.count !== 0 ? (
+              <div className="mt-2 flex flex-wrap gap-3 text-sm font-medium">
+                <Link
+                  href="/ledger?uninvoiced=1"
+                  className="text-brand-700 hover:text-brand-800 hover:underline"
+                >
+                  View in Ledger →
+                </Link>
+                <Link
+                  href="/invoicing"
+                  className="text-brand-700 hover:text-brand-800 hover:underline"
+                >
+                  Create Invoice →
+                </Link>
+              </div>
+            ) : null}
           </div>
           <Link
             href="/payments"
@@ -213,14 +277,22 @@ export default async function DashboardPage() {
             <p className="mt-1 text-xl font-semibold text-amber-800">
               {formatCurrency(invoicedUnpaid.amount)}
             </p>
-            <p className="mt-1 text-sm text-slate-600">
-              {invoicedUnpaid.count === 0
-                ? "No outstanding payment balance"
-                : `${invoicedUnpaid.count} ${invoicedUnpaid.count === 1 ? "item" : "items"} with balance due`}
-            </p>
           </Link>
         </div>
       </section>
+      <OverviewTodoList
+        autoTodos={[
+          ...buildOverviewAutoTodos(allLedgerEntries),
+          ...buildProposalFollowUpTodos(openProposals),
+          ...buildSendProposalTodos(
+            sendProposalAppointmentsError ? [] : (sendProposalAppointments ?? [])
+          ),
+          ...buildSendBudgetTodos(
+            sendBudgetAppointmentsError ? [] : (sendBudgetAppointments ?? [])
+          ),
+        ]}
+      />
+      </div>
     </AppShell>
   );
 }

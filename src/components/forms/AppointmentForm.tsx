@@ -5,10 +5,18 @@ import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/client";
-import { REFERRAL_SOURCE_OPTIONS, type Appointment, type ReferralSource } from "@/lib/types";
+import {
+  APPOINTMENT_STATUSES,
+  APPOINTMENT_STATUS_LABELS,
+  appointmentStatus,
+  REFERRAL_SOURCE_OPTIONS,
+  type Appointment,
+  type ReferralSource,
+} from "@/lib/types";
+import { proposalSentDateForSave } from "@/lib/overview-todos";
 import { nowTimeInputValue, todayDateInputValue, toDateInputValue, toTimeInputValue } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
-import { CheckboxField, InputField, SelectField, TextareaField } from "@/components/ui/FormFields";
+import { InputField, SelectField, TextareaField } from "@/components/ui/FormFields";
 
 const referralSourceSchema = z.enum([
   "Instagram",
@@ -29,13 +37,7 @@ const schema = z
     referred_by: z.string().optional(),
     referral_source: z.union([referralSourceSchema, z.literal("")]).optional(),
     notes: z.string().max(500, "Notes must be 500 characters or less").optional(),
-    job_won: z.boolean(),
-    job_lost: z.boolean(),
-    proposal_sent: z.boolean(),
-  })
-  .refine((values) => !(values.job_won && values.job_lost), {
-    message: "An appointment cannot be marked both won and lost",
-    path: ["job_lost"],
+    status: z.enum(APPOINTMENT_STATUSES),
   });
 
 type FormValues = z.infer<typeof schema>;
@@ -61,9 +63,7 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
       referred_by: initial?.referred_by ?? "",
       referral_source: initial?.referral_source ?? "",
       notes: initial?.notes ?? "",
-      job_won: initial?.job_won ?? false,
-      job_lost: initial?.job_lost ?? false,
-      proposal_sent: initial?.proposal_sent ?? false,
+      status: initial ? appointmentStatus(initial) : "upcoming",
     }),
     [initial]
   );
@@ -71,7 +71,6 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
     register,
     handleSubmit,
     watch,
-    setValue,
     control,
     reset,
     formState: { errors, isSubmitting },
@@ -84,9 +83,6 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
     reset(formDefaults);
   }, [formDefaults, reset]);
 
-  const jobWon = watch("job_won");
-  const jobLost = watch("job_lost");
-  const proposalSent = watch("proposal_sent");
   const notesLength = watch("notes")?.length ?? 0;
 
   async function onSubmit(values: FormValues) {
@@ -94,7 +90,7 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
     const supabase = createClient();
     let clientId = initial?.client_id ?? null;
 
-    if (values.job_won && !clientId) {
+    if (values.status === "job_won" && !clientId) {
       const { data: newClient, error: clientError } = await supabase
         .from("clients")
         .insert({
@@ -126,9 +122,18 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
         ? (values.referral_source as ReferralSource)
         : null,
       notes: values.notes?.trim() ? values.notes.trim() : null,
-      job_won: values.job_won,
-      job_lost: values.job_lost,
-      proposal_sent: values.proposal_sent,
+      job_won: values.status === "job_won",
+      job_lost: values.status === "job_lost",
+      send_proposal: values.status === "send_proposal",
+      send_budget: values.status === "send_budget",
+      proposal_sent: values.status === "proposal_sent",
+      on_hold: values.status === "on_hold",
+      proposal_sent_date: proposalSentDateForSave({
+        proposalSent: values.status === "proposal_sent",
+        wasSent: Boolean(initial?.proposal_sent),
+        existingSentDate: initial?.proposal_sent_date,
+        updatedAt: initial?.updated_at,
+      }),
       client_id: clientId,
     };
 
@@ -226,30 +231,17 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
           error={errors.notes?.message}
           {...register("notes")}
         />
-        <CheckboxField
-          label="Job Won"
-          checked={jobWon}
-          onChange={(event) => {
-            const checked = event.target.checked;
-            setValue("job_won", checked, { shouldValidate: true });
-            if (checked) setValue("job_lost", false, { shouldValidate: true });
-          }}
-        />
-        <CheckboxField
-          label="Job Lost"
-          checked={jobLost}
-          error={errors.job_lost?.message}
-          onChange={(event) => {
-            const checked = event.target.checked;
-            setValue("job_lost", checked, { shouldValidate: true });
-            if (checked) setValue("job_won", false, { shouldValidate: true });
-          }}
-        />
-        <CheckboxField
-          label="Proposal Sent"
-          checked={proposalSent}
-          onChange={(event) => setValue("proposal_sent", event.target.checked)}
-        />
+        <SelectField
+          label="Status"
+          error={errors.status?.message}
+          {...register("status")}
+        >
+          {APPOINTMENT_STATUSES.map((option) => (
+            <option key={option} value={option}>
+              {APPOINTMENT_STATUS_LABELS[option]}
+            </option>
+          ))}
+        </SelectField>
       </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}

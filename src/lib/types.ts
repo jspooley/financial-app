@@ -259,26 +259,110 @@ export interface Appointment {
   job_won: boolean;
   job_lost: boolean;
   proposal_sent: boolean;
+  /** Appointment is paused and stays out of the active funnel stages. */
+  on_hold?: boolean;
+  /** Appointment should get a proposal; to-do is due 7 days after the appointment. */
+  send_proposal?: boolean;
+  /** Appointment should get a budget; to-do is due 7 days after the appointment. */
+  send_budget?: boolean;
+  /** Calendar date the proposal was marked sent. */
+  proposal_sent_date?: string | null;
   client_id: string | null;
   created_at: string;
   updated_at: string;
 }
 
-/** Proposal sent counts only when the job is still open (not won or lost). */
+export const APPOINTMENT_STATUSES = [
+  "upcoming",
+  "send_budget",
+  "send_proposal",
+  "proposal_sent",
+  "on_hold",
+  "job_won",
+  "job_lost",
+] as const;
+
+export type AppointmentStatus = (typeof APPOINTMENT_STATUSES)[number];
+
+export const APPOINTMENT_STATUS_LABELS: Record<AppointmentStatus, string> = {
+  upcoming: "Upcoming",
+  send_budget: "Send budget",
+  send_proposal: "Send proposal",
+  proposal_sent: "Proposal Sent",
+  on_hold: "On Hold",
+  job_won: "Job Won",
+  job_lost: "Job Lost",
+};
+
+type AppointmentStatusSource = {
+  job_won?: boolean | null;
+  job_lost?: boolean | null;
+  on_hold?: boolean | null;
+  proposal_sent?: boolean | null;
+  send_proposal?: boolean | null;
+  send_budget?: boolean | null;
+};
+
+/** One status for the appointment form. Earlier flags win when older rows have more than one. */
+export function appointmentStatus(appointment: AppointmentStatusSource): AppointmentStatus {
+  if (appointment.job_lost) return "job_lost";
+  if (appointment.job_won) return "job_won";
+  if (appointment.on_hold) return "on_hold";
+  if (appointment.proposal_sent) return "proposal_sent";
+  if (appointment.send_proposal) return "send_proposal";
+  if (appointment.send_budget) return "send_budget";
+  return "upcoming";
+}
+
+/** Proposal sent counts only when the job is still open (not won, lost, or on hold). */
 export function isPendingProposalSent(
-  appointment: Pick<Appointment, "proposal_sent" | "job_won" | "job_lost">
+  appointment: Pick<Appointment, "proposal_sent" | "job_won" | "job_lost"> & {
+    on_hold?: boolean | null;
+  }
 ): boolean {
   return (
-    appointment.proposal_sent && !appointment.job_won && !appointment.job_lost
+    appointment.proposal_sent &&
+    !appointment.on_hold &&
+    !appointment.job_won &&
+    !appointment.job_lost
   );
 }
 
-/** Main appointments bucket — open appointments only (not proposal pipeline, won, or lost). */
-export function isAppointmentsBucket(
-  appointment: Pick<Appointment, "proposal_sent" | "job_won" | "job_lost">
+/** Budget has been requested and a proposal has not been sent yet. */
+export function isBudgetPhase(
+  appointment: Pick<Appointment, "proposal_sent" | "job_won" | "job_lost"> & {
+    send_budget?: boolean | null;
+    on_hold?: boolean | null;
+  }
 ): boolean {
   return (
+    Boolean(appointment.send_budget) &&
     !appointment.proposal_sent &&
+    !appointment.on_hold &&
+    !appointment.job_won &&
+    !appointment.job_lost
+  );
+}
+
+export function isOnHold(
+  appointment: Pick<Appointment, "job_won" | "job_lost"> & {
+    on_hold?: boolean | null;
+  }
+): boolean {
+  return Boolean(appointment.on_hold) && !appointment.job_won && !appointment.job_lost;
+}
+
+/** Main appointments bucket — open appointments only (not budget or proposal phase, won, or lost). */
+export function isAppointmentsBucket(
+  appointment: Pick<Appointment, "proposal_sent" | "job_won" | "job_lost"> & {
+    send_budget?: boolean | null;
+    on_hold?: boolean | null;
+  }
+): boolean {
+  return (
+    !appointment.send_budget &&
+    !appointment.proposal_sent &&
+    !appointment.on_hold &&
     !appointment.job_won &&
     !appointment.job_lost
   );

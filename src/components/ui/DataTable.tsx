@@ -1,3 +1,7 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+
 type DataTableColumn = {
   key: string;
   label: string;
@@ -29,6 +33,8 @@ interface DataTableProps {
   onSort?: (key: string) => void;
   getRowId?: (row: Record<string, React.ReactNode>, index: number) => string | undefined;
   highlightedRowId?: string | null;
+  /** Range control that scrolls the desktop table horizontally. */
+  horizontalSlider?: boolean;
 }
 
 function SortIndicator({
@@ -73,7 +79,35 @@ export function DataTable({
   onSort,
   getRowId,
   highlightedRowId,
+  horizontalSlider = false,
 }: DataTableProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollMax, setScrollMax] = useState(0);
+  const [scrollLeft, setScrollLeft] = useState(0);
+
+  useEffect(() => {
+    if (!horizontalSlider) return;
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const update = () => {
+      const max = Math.max(0, el.scrollWidth - el.clientWidth);
+      setScrollMax(max);
+      setScrollLeft(Math.min(el.scrollLeft, max));
+    };
+
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    const table = el.querySelector("table");
+    if (table) observer.observe(table);
+    el.addEventListener("scroll", update, { passive: true });
+    return () => {
+      observer.disconnect();
+      el.removeEventListener("scroll", update);
+    };
+  }, [horizontalSlider, rows, columns]);
+
   if (rows.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
@@ -187,7 +221,26 @@ export function DataTable({
         )}
       </div>
 
+      {horizontalSlider && scrollMax > 0 ? (
+        <label className="mb-2 hidden w-full items-center gap-3 text-sm text-slate-600 md:flex">
+          <span className="shrink-0">Scroll</span>
+          <input
+            type="range"
+            min={0}
+            max={scrollMax}
+            value={scrollLeft}
+            aria-label="Scroll table"
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              if (scrollRef.current) scrollRef.current.scrollLeft = next;
+              setScrollLeft(next);
+            }}
+            className="h-2 w-full cursor-pointer accent-brand-600"
+          />
+        </label>
+      ) : null}
       <div
+        ref={scrollRef}
         className={`hidden rounded-xl border border-slate-200 bg-white shadow-sm md:block ${
           maxBodyHeight ? "overflow-auto" : "overflow-x-auto"
         }`}

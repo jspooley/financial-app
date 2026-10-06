@@ -8,18 +8,18 @@ import { useInactivityLogout } from "@/lib/use-inactivity-logout";
 import { Button } from "./ui/Button";
 
 const navItems = [
-  { href: "/", label: "Maison Joy Business Overview", shortLabel: "Overview", icon: "⌂" },
-  { href: "/appointments", label: "Appointments", shortLabel: "Appts", icon: "📅" },
-  { href: "/budget-tool", label: "Quoting Tool", shortLabel: "Quoting Tool", icon: "📊" },
-  { href: "/clients", label: "Clients", shortLabel: "Clients", icon: "👤" },
+  { href: "/", label: "Dashboard", shortLabel: "Dashboard", icon: "🏠" },
+  { href: "/appointments", label: "Add Appointment", shortLabel: "Add Appointment", icon: "📅" },
+  { href: "/budget-tool", label: "Budget Tool", shortLabel: "Budget Tool", icon: "📊" },
+  { href: "/clients", label: "Client List", shortLabel: "Client List", icon: "👤" },
+  { href: "/invoicing", label: "Invoicing", shortLabel: "Invoicing", icon: "📄" },
+  { href: "/payments", label: "Payments", shortLabel: "Payments", icon: "💵" },
   {
     href: "/ledger",
-    label: "Goods & Services",
-    shortLabel: "Goods & Services",
+    label: "Buy Goods/Svcs",
+    shortLabel: "Buy Goods/Svcs",
     icon: "₿",
   },
-  { href: "/invoicing", label: "Invoicing", shortLabel: "Invoice", icon: "📄" },
-  { href: "/payments", label: "Payments", shortLabel: "Pay", icon: "💵" },
 ];
 
 const tradePartnersHref = "/trade-partners";
@@ -97,28 +97,22 @@ function ReportsBox({ pathname }: { pathname: string }) {
         Cashflow
       </Link>
       <Link
-        href={salesUseTaxHref}
-        className={navLinkClass(pathname === salesUseTaxHref)}
-        title="Sales & Use Tax"
-      >
-        <span aria-hidden>🧾</span>
-        Sales &amp; Use Tax
-      </Link>
-      <Link
         href={debtTrackingHref}
         className={navLinkClass(pathname === debtTrackingHref)}
-        title="Business Debt"
+        title="Debt"
       >
         <span aria-hidden>👛</span>
-        Business Debt
+        Debt
       </Link>
       <Link
-        href={trueUpHref}
-        className={navLinkClass(pathname === trueUpHref)}
-        title="True Up Report"
+        href={plReportHref}
+        className={navLinkClass(
+          pathname === plReportHref || pathname === "/reconciliation"
+        )}
+        title="Profit/Loss"
       >
-        <span aria-hidden>⚖️</span>
-        True Up Report
+        <span aria-hidden>📈</span>
+        Profit/Loss
       </Link>
       <Link
         href={scheduleCHref}
@@ -129,14 +123,20 @@ function ReportsBox({ pathname }: { pathname: string }) {
         Schedule C
       </Link>
       <Link
-        href={plReportHref}
-        className={navLinkClass(
-          pathname === plReportHref || pathname === "/reconciliation"
-        )}
-        title="P&L Report"
+        href={salesUseTaxHref}
+        className={navLinkClass(pathname === salesUseTaxHref)}
+        title="Sales & Use Tax"
       >
-        <span aria-hidden>📈</span>
-        P&amp;L Report
+        <span aria-hidden>🧾</span>
+        Sales &amp; Use Tax
+      </Link>
+      <Link
+        href={trueUpHref}
+        className={navLinkClass(pathname === trueUpHref)}
+        title="True Up Report"
+      >
+        <span aria-hidden>⚖️</span>
+        True Up Report
       </Link>
     </div>
   );
@@ -169,6 +169,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useInactivityLogout();
 
+  const overview = pathname === "/";
+
   useEffect(() => {
     const supabase = createClient();
     void supabase
@@ -198,20 +200,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               className="h-10 w-auto shrink-0 sm:h-14"
             />
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-brand-600 sm:whitespace-normal">
+              <p className="truncate font-script text-[2.52rem] font-normal leading-tight text-brand-600 sm:whitespace-normal">
                 Maison Joy Financial Manager
               </p>
-              <p className="hidden text-sm text-slate-500 sm:block">Shared business ledger</p>
             </div>
           </Link>
-          <Button variant="ghost" onClick={handleSignOut} className="hidden shrink-0 sm:inline-flex">
+          <Button
+            variant="ghost"
+            onClick={handleSignOut}
+            className="hidden shrink-0 !text-[1.26rem] sm:inline-flex"
+          >
             Sign out
           </Button>
         </div>
       </header>
 
-      <div className="mx-auto flex max-w-7xl flex-col gap-3 px-3 py-4 pb-28 sm:py-5 md:flex-row md:gap-3 md:pb-6 md:px-4">
-        <nav className="hidden w-36 shrink-0 md:block">
+      <div
+        className={
+          overview
+            ? "mx-auto grid max-w-7xl grid-cols-1 items-start gap-3 px-3 py-4 pb-28 sm:py-5 md:grid-cols-[9rem_minmax(0,1fr)] md:px-4 md:pb-6"
+            : "mx-auto flex max-w-7xl flex-col gap-3 px-3 py-4 pb-28 sm:py-5 md:flex-row md:gap-3 md:pb-6 md:px-4"
+        }
+      >
+        <nav className={`hidden w-36 shrink-0 md:block ${overview ? "md:col-start-1 md:w-full" : ""}`}>
           <ul className="space-y-0.5 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
             {navItems.map((item) => {
               const active = pathname === item.href;
@@ -239,22 +250,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </ul>
 
           <div className="mt-3">
-            <TradeAccountBox count={tradeAccountCount} pathname={pathname} />
+            <ReportsBox pathname={pathname} />
           </div>
           <div className="mt-3">
-            <ReportsBox pathname={pathname} />
+            <TradeAccountBox count={tradeAccountCount} pathname={pathname} />
           </div>
           <div className="mt-3">
             <DocumentationBox pathname={pathname} />
           </div>
         </nav>
 
-        <main className="min-w-0 flex-1 overflow-x-hidden">
+        <main className={`min-w-0 flex-1 overflow-x-hidden ${overview ? "md:col-start-2" : ""}`}>
           {children}
           <div className="mt-4 md:hidden">
-            <TradeAccountBox count={tradeAccountCount} pathname={pathname} />
+            <ReportsBox pathname={pathname} />
             <div className="mt-3">
-              <ReportsBox pathname={pathname} />
+              <TradeAccountBox count={tradeAccountCount} pathname={pathname} />
             </div>
             <div className="mt-3">
               <DocumentationBox pathname={pathname} />

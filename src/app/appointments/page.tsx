@@ -11,10 +11,25 @@ import { DataTable } from "@/components/ui/DataTable";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { RowActions } from "@/components/ui/RowActions";
 import { createClient } from "@/lib/supabase/client";
-import { isAppointmentsBucket, isPendingProposalSent, type Appointment } from "@/lib/types";
+import {
+  appointmentStatus,
+  APPOINTMENT_STATUS_LABELS,
+  isAppointmentsBucket,
+  isBudgetPhase,
+  isOnHold,
+  isPendingProposalSent,
+  type Appointment,
+} from "@/lib/types";
 import { formatDateTime, toDateInputValue, toTimeInputValue } from "@/lib/utils";
 
-type AppointmentFilter = "all" | "pending" | "won" | "lost" | "proposal_sent";
+type AppointmentFilter =
+  | "all"
+  | "pending"
+  | "won"
+  | "lost"
+  | "budget"
+  | "proposal_sent"
+  | "on_hold";
 
 function AppointmentsPageContent() {
   const { acquireLocks, releaseLocks } = useRecordLocks();
@@ -24,7 +39,9 @@ function AppointmentsPageContent() {
     filterParam === "pending" ||
     filterParam === "won" ||
     filterParam === "lost" ||
-    filterParam === "proposal_sent"
+    filterParam === "budget" ||
+    filterParam === "proposal_sent" ||
+    filterParam === "on_hold"
       ? filterParam
       : "all";
 
@@ -83,8 +100,14 @@ function AppointmentsPageContent() {
     if (filter === "lost") {
       return appointments.filter((row) => row.job_lost);
     }
+    if (filter === "budget") {
+      return appointments.filter(isBudgetPhase);
+    }
     if (filter === "proposal_sent") {
       return appointments.filter(isPendingProposalSent);
+    }
+    if (filter === "on_hold") {
+      return appointments.filter(isOnHold);
     }
     return appointments.filter(isAppointmentsBucket);
   }, [appointments, filter]);
@@ -124,9 +147,13 @@ function AppointmentsPageContent() {
         ? "Won appointments"
         : filter === "lost"
           ? "Lost appointments"
-          : filter === "proposal_sent"
-            ? "Pending appointments with proposal sent"
-            : null;
+          : filter === "budget"
+            ? "Budget phase"
+            : filter === "proposal_sent"
+              ? "Proposal phase"
+              : filter === "on_hold"
+                ? "On hold"
+                : null;
 
   return (
     <AppShell>
@@ -200,16 +227,19 @@ function AppointmentsPageContent() {
         <DataTable
           mobileTitleKey="client"
           stickyFirstColumn
+          horizontalSlider
           columns={[
             { key: "actions", label: "Actions" },
             { key: "date", label: "Date & Time" },
             { key: "client", label: "Client" },
             { key: "contact", label: "Contact" },
             { key: "referral", label: "Referral" },
-            { key: "proposalSent", label: "Proposal Sent" },
-            { key: "won", label: "Won" },
-            { key: "lost", label: "Lost" },
-            { key: "notes", label: "Notes" },
+            { key: "status", label: "Status" },
+            {
+              key: "notes",
+              label: "Notes",
+              className: "min-w-[36rem] whitespace-normal align-top",
+            },
           ]}
           rows={visibleAppointments.map((appointment) => ({
             actions: (
@@ -237,10 +267,12 @@ function AppointmentsPageContent() {
                 <div className="text-slate-500">{appointment.referral_source ?? "—"}</div>
               </div>
             ),
-            proposalSent: appointment.proposal_sent ? "Yes" : "No",
-            won: appointment.job_won ? "Yes" : "No",
-            lost: appointment.job_lost ? "Yes" : "No",
-            notes: appointment.notes ?? "—",
+            status: APPOINTMENT_STATUS_LABELS[appointmentStatus(appointment)],
+            notes: (
+              <span className="block whitespace-normal break-words">
+                {appointment.notes ?? "—"}
+              </span>
+            ),
           }))}
         />
       )}

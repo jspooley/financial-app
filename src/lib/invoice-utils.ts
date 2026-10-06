@@ -97,6 +97,7 @@ export type LedgerAmountEntry = {
   variance_accepted?: boolean | null;
   variance_amount?: number | null;
   balance_sheet?: boolean | null;
+  po_number?: string | null;
   /** Merchandise line this later shipping/receiving/delivery charge belongs to. */
   origin_ledger_id?: string | null;
   source_ledger_id?: string | null;
@@ -275,10 +276,11 @@ export function isInvoicedDebitLine(entry: LedgerAmountEntry): boolean {
   return entry.credit_debit === "debit" && isLedgerLineInvoiced(entry);
 }
 
-/** Uninvoiced debit line that belongs on the Invoicing outstanding list. */
+/** Uninvoiced debit line with a customer PO. Expense rows without a PO are excluded. */
 export function isToBeInvoicedLine(entry: LedgerAmountEntry): boolean {
   if (entry.balance_sheet) return false;
   if (entry.credit_debit && entry.credit_debit !== "debit") return false;
+  if (!normalizePoNumber(entry.po_number)) return false;
   return isLedgerLineUninvoiced(entry);
 }
 
