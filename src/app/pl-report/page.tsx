@@ -1,7 +1,10 @@
 import { AppShell } from "@/components/AppShell";
 import { BalanceSheetItems } from "@/components/pl-report/BalanceSheetItems";
 import { type PlExpenseDetailRow } from "@/components/pl-report/PlTotalsCards";
-import { PlYearSection } from "@/components/pl-report/PlYearSection";
+import {
+  PlYearSection,
+  type SavedBusinessGoals,
+} from "@/components/pl-report/PlYearSection";
 import { SalesComparisonChart } from "@/components/overview/SalesComparisonChart";
 import { buildOverviewChartSeries, countAppointmentsByMonth } from "@/lib/overview-chart";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -347,6 +350,12 @@ function PlMonthlyTable({
   );
 }
 
+function toGoalNumber(value: unknown) {
+  if (value == null || value === "") return null;
+  const goal = Number(value);
+  return Number.isFinite(goal) ? goal : null;
+}
+
 export default async function PlReportPage() {
   const supabase = await createClient();
   const reportYear = new Date().getFullYear();
@@ -357,11 +366,17 @@ export default async function PlReportPage() {
     { data: invoiceHeaders },
     { data: tradePartners },
     { data: appointmentDates },
+    { data: goalRow, error: goalsError },
   ] = await Promise.all([
     supabase.from("ledger").select("*, clients(name)"),
     supabase.from("invoicing").select("client_id, po_number"),
     supabase.from("trade_partners").select("retail_price, designer_cost, discount_amount"),
     supabase.from("appointments").select("appointment_date"),
+    supabase
+      .from("business_goals")
+      .select("gross_profit_margin, gross_profit, net_profit, net_profit_margin")
+      .eq("id", "default")
+      .maybeSingle(),
   ]);
 
   const invoicedPoKeys = new Set(
@@ -410,6 +425,12 @@ export default async function PlReportPage() {
   });
   const partners = (tradePartners ?? []) as TradePartner[];
   const grossProfitGoal = grossProfitGoalFromTradePartners(partners);
+  const savedGoals: SavedBusinessGoals = {
+    grossProfitMargin: toGoalNumber(goalRow?.gross_profit_margin),
+    grossProfit: toGoalNumber(goalRow?.gross_profit),
+    netProfit: toGoalNumber(goalRow?.net_profit),
+    netProfitMargin: toGoalNumber(goalRow?.net_profit_margin),
+  };
   const appointmentCounts = countAppointmentsByMonth(
     appointmentDates ?? [],
     reportYear,
@@ -434,6 +455,8 @@ export default async function PlReportPage() {
         totals={ytdTotals}
         expenseRows={expenseRows}
         initialGoal={grossProfitGoal}
+        savedGoals={savedGoals}
+        goalsReady={!goalsError}
         overviewChart={
           <SalesComparisonChart
             year={reportYear}
