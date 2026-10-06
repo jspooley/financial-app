@@ -103,7 +103,7 @@ export default async function DashboardPage() {
 
   let upcomingCount = totalAppointments ?? 0;
   let budgetPhaseCount = budgetPhaseAppointments ?? 0;
-  let proposalPhaseCount = proposalSentAppointments ?? 0;
+  const proposalPhaseCount = proposalSentAppointments ?? 0;
   const onHoldCount = onHoldError ? 0 : (onHoldAppointments ?? 0);
   if (!onHoldError) upcomingCount = Math.max(0, upcomingCount - onHoldCount);
   if (
@@ -131,7 +131,10 @@ export default async function DashboardPage() {
       .eq("proposal_sent", true)
       .eq("job_won", false)
       .eq("job_lost", false);
-    openProposals = fallback.data ?? [];
+    openProposals = (fallback.data ?? []).map((row) => ({
+      ...row,
+      proposal_sent_date: null,
+    }));
   }
 
   const invoicedPoKeys = new Set(
