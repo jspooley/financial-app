@@ -102,8 +102,10 @@ function FormulaCard({
 interface PlTotalsCardsProps {
   totals: PlTotals;
   expenseLineCount: number;
-  grossProfitGoal: number;
-  tradePartnerCount: number;
+  grossProfitGoal: number | null;
+  grossProfitAmountGoal: number | null;
+  netProfitGoal: number | null;
+  netProfitMarginGoal: number | null;
   expenseRows: PlExpenseDetailRow[];
 }
 
@@ -111,14 +113,16 @@ export function PlTotalsCards({
   totals,
   expenseLineCount,
   grossProfitGoal,
-  tradePartnerCount,
+  grossProfitAmountGoal,
+  netProfitGoal,
+  netProfitMarginGoal,
   expenseRows,
 }: PlTotalsCardsProps) {
   const [detailView, setDetailView] = useState<DetailView>(null);
 
-  const canCompareGrossProfitGoal = tradePartnerCount > 0;
+  const canCompareGrossProfitGoal = grossProfitGoal != null;
   const grossProfitVsGoal = roundMoney(
-    totals.grossProfitMargin - grossProfitGoal
+    totals.grossProfitMargin - (grossProfitGoal ?? 0)
   );
   const belowGrossProfitGoal =
     canCompareGrossProfitGoal && grossProfitVsGoal < -0.005;
@@ -131,6 +135,40 @@ export function PlTotalsCards({
       ? `${formatPercent(Math.abs(grossProfitVsGoal))} below goal`
       : aboveGrossProfitGoal
         ? `${formatPercent(grossProfitVsGoal)} above goal`
+        : "at goal";
+
+  const canCompareGrossProfitAmount = grossProfitAmountGoal != null;
+  const grossProfitAmountVsGoal = roundMoney(
+    totals.grossProfit - (grossProfitAmountGoal ?? 0)
+  );
+  const grossProfitAmountVsGoalLabel = !canCompareGrossProfitAmount
+    ? null
+    : grossProfitAmountVsGoal < -0.005
+      ? `${formatCurrency(Math.abs(grossProfitAmountVsGoal))} below goal`
+      : grossProfitAmountVsGoal > 0.005
+        ? `${formatCurrency(grossProfitAmountVsGoal)} above goal`
+        : "at goal";
+
+  const canCompareNetProfitMarginGoal = netProfitMarginGoal != null;
+  const netProfitMarginVsGoal = roundMoney(
+    totals.netProfitMargin - (netProfitMarginGoal ?? 0)
+  );
+  const netProfitMarginVsGoalLabel = !canCompareNetProfitMarginGoal
+    ? null
+    : netProfitMarginVsGoal < -0.005
+      ? `${formatPercent(Math.abs(netProfitMarginVsGoal))} below goal`
+      : netProfitMarginVsGoal > 0.005
+        ? `${formatPercent(netProfitMarginVsGoal)} above goal`
+        : "at goal";
+
+  const canCompareNetProfitGoal = netProfitGoal != null;
+  const netProfitVsGoal = roundMoney(totals.netProfit - (netProfitGoal ?? 0));
+  const netProfitVsGoalLabel = !canCompareNetProfitGoal
+    ? null
+    : netProfitVsGoal < -0.005
+      ? `${formatCurrency(Math.abs(netProfitVsGoal))} below goal`
+      : netProfitVsGoal > 0.005
+        ? `${formatCurrency(netProfitVsGoal)} above goal`
         : "at goal";
 
   const expenseTotalFromRows = useMemo(
@@ -176,11 +214,17 @@ export function PlTotalsCards({
                   <p className="text-sm leading-snug text-slate-600">
                     GP Margin Goal{" "}
                     <span className="font-semibold text-slate-900">
-                      {tradePartnerCount === 0
+                      {grossProfitGoal == null ? "—" : formatPercent(grossProfitGoal)}
+                    </span>
+                  </p>
+                  <p className="text-sm leading-snug text-slate-600">
+                    GP Goal{" "}
+                    <span className="font-semibold text-slate-900">
+                      {grossProfitAmountGoal == null
                         ? "—"
-                        : formatPercent(grossProfitGoal)}
-                    </span>{" "}
-                    (1/2 of avg Trade discount)
+                        : formatCurrency(grossProfitAmountGoal)}
+                    </span>
+                    {grossProfitAmountVsGoalLabel ? ` (${grossProfitAmountVsGoalLabel})` : ""}
                   </p>
                   <p className="text-xs text-slate-500">
                     GP margin = GP ÷ revenue
@@ -243,6 +287,22 @@ export function PlTotalsCards({
                     className={`text-sm font-bold ${signedAmountClass(totals.netProfitMargin)}`}
                   >
                     NP Margin {formatPercent(totals.netProfitMargin)}
+                    {netProfitMarginVsGoalLabel ? ` (${netProfitMarginVsGoalLabel})` : ""}
+                  </p>
+                  <p className="text-sm leading-snug text-slate-600">
+                    NP Margin Goal{" "}
+                    <span className="font-semibold text-slate-900">
+                      {netProfitMarginGoal == null
+                        ? "—"
+                        : formatPercent(netProfitMarginGoal)}
+                    </span>
+                  </p>
+                  <p className="text-sm leading-snug text-slate-600">
+                    NP Goal{" "}
+                    <span className="font-semibold text-slate-900">
+                      {netProfitGoal == null ? "—" : formatCurrency(netProfitGoal)}
+                    </span>
+                    {netProfitVsGoalLabel ? ` (${netProfitVsGoalLabel})` : ""}
                   </p>
                   <p className="text-xs text-slate-500">
                     NP margin = NP ÷ revenue

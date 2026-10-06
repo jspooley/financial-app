@@ -1,13 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useInactivityLogout } from "@/lib/use-inactivity-logout";
 import { Button } from "./ui/Button";
 
-const navItems = [
+function CartIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" aria-hidden>
+      <path
+        fill="#ff69b4"
+        d="M2.25 2.25a.75.75 0 0 0 0 1.5h1.386c.17 0 .318.114.362.278l2.558 9.592a3.752 3.752 0 0 0-2.806 3.63c0 .414.336.75.75.75h15.75a.75.75 0 0 0 0-1.5H5.378A2.25 2.25 0 0 1 7.5 15h11.218a.75.75 0 0 0 .674-.421 60.358 60.358 0 0 0 2.96-7.228.75.75 0 0 0-.525-.965A60.864 60.864 0 0 0 5.68 4.509l-.232-.867A1.875 1.875 0 0 0 3.636 2.25H2.25ZM3.75 20.25a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0ZM16.5 20.25a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0Z"
+      />
+    </svg>
+  );
+}
+
+const navItems: { href: string; label: string; shortLabel: string; icon: ReactNode }[] = [
   { href: "/", label: "Dashboard", shortLabel: "Dashboard", icon: "🏠" },
   { href: "/appointments", label: "Add Appointment", shortLabel: "Add Appointment", icon: "📅" },
   { href: "/budget-tool", label: "Budget Tool", shortLabel: "Budget Tool", icon: "📊" },
@@ -18,7 +29,7 @@ const navItems = [
     href: "/ledger",
     label: "Buy Goods/Svcs",
     shortLabel: "Buy Goods/Svcs",
-    icon: "₿",
+    icon: <CartIcon />,
   },
 ];
 
@@ -31,26 +42,13 @@ function navLinkClass(active: boolean) {
   }`;
 }
 
-function tradeAccountCountLabel(count: number | null) {
-  if (count === null) return "—";
-  if (count === 0) return "None";
-  return `${count} acct${count === 1 ? "" : "s"}`;
-}
-
-function TradeAccountBox({
-  count,
-  pathname,
-}: {
-  count: number | null;
-  pathname: string;
-}) {
+function TradeAccountBox({ pathname }: { pathname: string }) {
   return (
     <div className="space-y-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
       <div className="px-1.5 py-1">
         <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
           Accounts
         </p>
-        <p className="text-xs font-medium text-slate-900">{tradeAccountCountLabel(count)}</p>
       </div>
       <Link
         href={tradePartnersHref}
@@ -165,21 +163,10 @@ function DocumentationBox({ pathname }: { pathname: string }) {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [tradeAccountCount, setTradeAccountCount] = useState<number | null>(null);
 
   useInactivityLogout();
 
   const overview = pathname === "/";
-
-  useEffect(() => {
-    const supabase = createClient();
-    void supabase
-      .from("trade_partners")
-      .select("*", { count: "exact", head: true })
-      .then(({ count, error }) => {
-        if (!error) setTradeAccountCount(count ?? 0);
-      });
-  }, [pathname]);
 
   async function handleSignOut() {
     const supabase = createClient();
@@ -200,8 +187,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               className="h-10 w-auto shrink-0 sm:h-14"
             />
             <div className="min-w-0">
-              <p className="truncate font-script text-[2.52rem] font-normal leading-tight text-brand-600 sm:whitespace-normal">
-                Maison Joy Financial Manager
+              <p className="truncate font-script text-[1.75rem] font-semibold leading-tight text-brand-600 sm:text-[2.52rem] sm:whitespace-normal">
+                Financial Manager
               </p>
             </div>
           </Link>
@@ -253,9 +240,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <ReportsBox pathname={pathname} />
           </div>
           <div className="mt-3">
-            <TradeAccountBox count={tradeAccountCount} pathname={pathname} />
+            <TradeAccountBox pathname={pathname} />
           </div>
-          <div className="mt-3">
+          <div id="sidebar-documentation" className="mt-3">
             <DocumentationBox pathname={pathname} />
           </div>
         </nav>
@@ -265,7 +252,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="mt-4 md:hidden">
             <ReportsBox pathname={pathname} />
             <div className="mt-3">
-              <TradeAccountBox count={tradeAccountCount} pathname={pathname} />
+              <TradeAccountBox pathname={pathname} />
             </div>
             <div className="mt-3">
               <DocumentationBox pathname={pathname} />

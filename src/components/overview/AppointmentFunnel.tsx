@@ -47,11 +47,11 @@ export function AppointmentFunnel({ stages }: { stages: FunnelStage[] }) {
   const count = stages.length;
 
   return (
-    <div className="flex h-full min-h-72 w-full min-w-0 flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
-      <h2 className="shrink-0 text-center text-lg font-semibold text-slate-900">
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col items-center rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6 md:items-stretch">
+      <h2 className="w-full shrink-0 text-center text-lg font-semibold text-slate-900">
         Sales Funnel
       </h2>
-      <div className="relative mt-3 min-h-0 flex-1">
+      <div className="relative mt-3 h-64 w-40 sm:h-72 sm:w-44 md:h-auto md:min-h-0 md:w-full md:flex-1">
         <svg
           viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
           preserveAspectRatio="none"
@@ -81,8 +81,12 @@ export function AppointmentFunnel({ stages }: { stages: FunnelStage[] }) {
                   className="flex flex-col items-center leading-tight"
                   style={{ maxWidth: `${Math.max(32, Math.round(inner * 100) - 2)}%` }}
                 >
-                  <span className="text-[11px] font-medium">{stage.label}</span>
-                  <span className="text-sm font-semibold">{stage.value}</span>
+                  <span className="text-[10px] font-medium leading-tight md:text-[11px]">
+                    {stage.label}
+                  </span>
+                  <span className="text-xs font-semibold leading-tight md:text-sm">
+                    {stage.value}
+                  </span>
                 </span>
               </Link>
             );

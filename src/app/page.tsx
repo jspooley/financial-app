@@ -3,14 +3,12 @@ import { AppShell } from "@/components/AppShell";
 import { createClient } from "@/lib/supabase/server";
 import { OverviewTodoList } from "@/components/overview/OverviewTodoList";
 import { AppointmentFunnel } from "@/components/overview/AppointmentFunnel";
-import { SalesComparisonChart } from "@/components/overview/SalesComparisonChart";
 import {
   buildOverviewAutoTodos,
   buildProposalFollowUpTodos,
   buildSendBudgetTodos,
   buildSendProposalTodos,
 } from "@/lib/overview-todos";
-import { buildOverviewChartSeries, countAppointmentsByMonth } from "@/lib/overview-chart";
 import { formatCurrency } from "@/lib/utils";
 import {
   summarizeInvoicedUnpaid,
@@ -39,7 +37,6 @@ export default async function DashboardPage() {
     { count: onHoldAppointments, error: onHoldError },
     { data: ledgerTotals },
     { data: invoiceHeaders },
-    { data: appointmentDates },
     { data: proposalAppointments, error: proposalAppointmentsError },
     { data: sendProposalAppointments, error: sendProposalAppointmentsError },
     { data: sendBudgetAppointments, error: sendBudgetAppointmentsError },
@@ -75,7 +72,6 @@ export default async function DashboardPage() {
       .eq("job_lost", false),
     supabase.from("ledger").select("*, clients(name)"),
     supabase.from("invoicing").select("client_id, po_number"),
-    supabase.from("appointments").select("appointment_date"),
     supabase
       .from("appointments")
       .select(
@@ -157,24 +153,6 @@ export default async function DashboardPage() {
   const toBeInvoiced = summarizeToBeInvoiced(allLedgerEntries);
   const invoicedUnpaid = summarizeInvoicedUnpaid(allLedgerEntries);
   const jobSummary = summarizeJobsByStatus(allLedgerEntries, { invoicedPoKeys });
-  const chartYear = new Date().getFullYear();
-  const chartThroughMonth = new Date().getMonth() + 1;
-  const appointmentCounts = countAppointmentsByMonth(
-    appointmentDates ?? [],
-    chartYear,
-    chartThroughMonth
-  );
-  const chartSeries = buildOverviewChartSeries(
-    mergePaymentCompanionsOntoEntries(
-      ledgerRows,
-      ledgerRows.filter((entry) => isPaymentCompanionRow(entry))
-    ),
-    {
-      year: chartYear,
-      throughMonth: chartThroughMonth,
-      invoicedPoKeys,
-    }
-  );
 
   const funnelStages = [
     {
@@ -239,15 +217,27 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      <SalesComparisonChart
-        year={chartYear}
-        series={chartSeries}
-        appointments={appointmentCounts}
-        aside={<AppointmentFunnel stages={funnelStages} />}
-      />
+      <div className="mb-6 grid items-stretch gap-3 md:min-h-0 md:grid-cols-[minmax(0,2fr)_minmax(12rem,1fr)] md:grid-rows-[minmax(0,1fr)] md:overflow-hidden">
+        <OverviewTodoList
+          autoTodos={[
+            ...buildOverviewAutoTodos(allLedgerEntries),
+            ...buildProposalFollowUpTodos(openProposals),
+            ...buildSendProposalTodos(
+              sendProposalAppointmentsError ? [] : (sendProposalAppointments ?? [])
+            ),
+            ...buildSendBudgetTodos(
+              sendBudgetAppointmentsError ? [] : (sendBudgetAppointments ?? [])
+            ),
+          ]}
+        />
+        <AppointmentFunnel stages={funnelStages} />
+      </div>
 
-      <div className="mb-6 grid items-stretch gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,3fr)]">
-      <section className="flex h-full min-h-0 min-w-0 max-h-[var(--paired-box-height,none)] flex-col overflow-auto rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+      <div className="mb-6">
+      <section
+        id="overview-invoicing"
+        className="flex min-h-0 min-w-0 flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
+      >
         <h2 className="text-lg font-semibold text-slate-900">Invoicing &amp; Payments</h2>
         <div className="mt-4 grid gap-4">
           <div className="rounded-lg border border-slate-100 bg-slate-50 p-4">
@@ -263,12 +253,6 @@ export default async function DashboardPage() {
                 >
                   View in Ledger →
                 </Link>
-                <Link
-                  href="/invoicing"
-                  className="text-brand-700 hover:text-brand-800 hover:underline"
-                >
-                  Create Invoice →
-                </Link>
               </div>
             ) : null}
           </div>
@@ -283,18 +267,6 @@ export default async function DashboardPage() {
           </Link>
         </div>
       </section>
-      <OverviewTodoList
-        autoTodos={[
-          ...buildOverviewAutoTodos(allLedgerEntries),
-          ...buildProposalFollowUpTodos(openProposals),
-          ...buildSendProposalTodos(
-            sendProposalAppointmentsError ? [] : (sendProposalAppointments ?? [])
-          ),
-          ...buildSendBudgetTodos(
-            sendBudgetAppointmentsError ? [] : (sendBudgetAppointments ?? [])
-          ),
-        ]}
-      />
       </div>
     </AppShell>
   );

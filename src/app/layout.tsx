@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
-import { Great_Vibes } from "next/font/google";
+import { Dancing_Script } from "next/font/google";
 import { RecordLockProvider } from "@/components/RecordLockProvider";
 import "./globals.css";
 
-const greatVibes = Great_Vibes({
-  weight: "400",
+const dancingScript = Dancing_Script({
+  weight: "600",
   subsets: ["latin"],
-  variable: "--font-great-vibes",
+  variable: "--font-dancing-script",
 });
 
 export const metadata: Metadata = {
@@ -23,7 +23,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={greatVibes.variable}>
+    <html lang="en" className={dancingScript.variable}>
       <body>
         <RecordLockProvider>{children}</RecordLockProvider>
       </body>

@@ -1,10 +1,9 @@
-import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { BalanceSheetItems } from "@/components/pl-report/BalanceSheetItems";
-import {
-  PlTotalsCards,
-  type PlExpenseDetailRow,
-} from "@/components/pl-report/PlTotalsCards";
+import { type PlExpenseDetailRow } from "@/components/pl-report/PlTotalsCards";
+import { PlYearSection } from "@/components/pl-report/PlYearSection";
+import { SalesComparisonChart } from "@/components/overview/SalesComparisonChart";
+import { buildOverviewChartSeries, countAppointmentsByMonth } from "@/lib/overview-chart";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
   buildBalanceSheetReview,
@@ -21,7 +20,7 @@ import {
   isPaymentCompanionRow,
   mergePaymentCompanionsOntoEntries,
 } from "@/lib/payment-companions";
-import { formatCurrency, formatPercent, grossProfitGoalFromTradePartners } from "@/lib/utils";
+import { formatCurrency, formatPercent, grossProfitGoalFromTradePartners, roundMoney } from "@/lib/utils";
 import type { TradePartner } from "@/lib/types";
 import {
   buildPersonalFundsReport,
@@ -60,7 +59,39 @@ function PlMarginCell({ value, emphasize }: { value: number; emphasize?: boolean
   );
 }
 
-function PlMonthlyTable({ rows }: { rows: PlReportRow[] }) {
+function appointmentsForRow(row: PlReportRow, appointments: number[]) {
+  if (row.kind === "month") return appointments[row.month - 1] ?? 0;
+  const start = (row.quarter - 1) * 3;
+  return appointments.slice(start, start + 3).reduce((sum, count) => sum + count, 0);
+}
+
+function yearToDateTotals(rows: PlReportRow[]) {
+  const months = rows.filter((row) => row.kind === "month");
+  const revenue = roundMoney(months.reduce((sum, row) => sum + row.totals.revenue, 0));
+  const cogs = roundMoney(months.reduce((sum, row) => sum + row.totals.cogs, 0));
+  const expenseAmount = roundMoney(
+    months.reduce((sum, row) => sum + row.totals.expenseAmount, 0)
+  );
+  const grossProfit = roundMoney(revenue - cogs);
+  const netProfit = roundMoney(months.reduce((sum, row) => sum + row.totals.netProfit, 0));
+  return {
+    revenue,
+    cogs,
+    expenseAmount,
+    grossProfit,
+    grossProfitMargin: revenue > 0 ? roundMoney((grossProfit / revenue) * 100) : 0,
+    netProfit,
+    netProfitMargin: revenue > 0 ? roundMoney((netProfit / revenue) * 100) : 0,
+  };
+}
+
+function PlMonthlyTable({
+  rows,
+  appointments,
+}: {
+  rows: PlReportRow[];
+  appointments: number[];
+}) {
   if (rows.length === 0) {
     return (
       <p className="mt-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
@@ -71,6 +102,7 @@ function PlMonthlyTable({ rows }: { rows: PlReportRow[] }) {
 
   const columns = [
     { key: "period", label: "Period", className: "text-left" },
+    { key: "appointments", label: "Appts", className: "text-left" },
     { key: "revenue", label: "Revenue", className: "text-right" },
     { key: "cogs", label: "COGS", className: "text-right" },
     { key: "expense", label: "Expenses", className: "text-right" },
@@ -80,9 +112,12 @@ function PlMonthlyTable({ rows }: { rows: PlReportRow[] }) {
     { key: "netMargin", label: "Net Margin", className: "text-right" },
   ] as const;
 
+  const ytd = yearToDateTotals(rows);
+  const ytdAppointments = appointments.reduce((sum, count) => sum + count, 0);
+
   return (
     <>
-      <div className="mt-6 space-y-3 md:hidden">
+      <div className="mt-4 space-y-3 md:hidden">
         {rows.map((row) => {
           const emphasize = row.kind === "quarter";
           const cardClass = emphasize
@@ -99,6 +134,12 @@ function PlMonthlyTable({ rows }: { rows: PlReportRow[] }) {
                 {row.label}
               </p>
               <dl className="mt-3 space-y-2 text-sm">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-slate-500">Appts</dt>
+                  <dd className={emphasize ? "font-semibold text-slate-900" : "text-slate-800"}>
+                    {appointmentsForRow(row, appointments)}
+                  </dd>
+                </div>
                 <div className="flex justify-between gap-3">
                   <dt className="text-slate-500">Revenue</dt>
                   <dd>
@@ -154,9 +195,60 @@ function PlMonthlyTable({ rows }: { rows: PlReportRow[] }) {
             </article>
           );
         })}
+        <article className="rounded-xl border border-brand-200 bg-brand-50 p-4 shadow-sm">
+          <p className="text-sm font-semibold text-brand-900">Year to date</p>
+          <dl className="mt-3 space-y-2 text-sm">
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">Appts</dt>
+              <dd className="font-semibold text-slate-900">{ytdAppointments}</dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">Revenue</dt>
+              <dd>
+                <PlAmountCell value={ytd.revenue} emphasize />
+              </dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">COGS</dt>
+              <dd>
+                <PlAmountCell value={-ytd.cogs} emphasize />
+              </dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">Expenses</dt>
+              <dd>
+                <PlAmountCell value={-ytd.expenseAmount} emphasize />
+              </dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">Gross Profit</dt>
+              <dd>
+                <PlAmountCell value={ytd.grossProfit} emphasize />
+              </dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">Gross Margin</dt>
+              <dd>
+                <PlMarginCell value={ytd.grossProfitMargin} emphasize />
+              </dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">Net Profit</dt>
+              <dd>
+                <PlAmountCell value={ytd.netProfit} emphasize />
+              </dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-slate-500">Net Margin</dt>
+              <dd>
+                <PlMarginCell value={ytd.netProfitMargin} emphasize />
+              </dd>
+            </div>
+          </dl>
+        </article>
       </div>
 
-      <div className="mt-6 hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
+      <div className="mt-4 hidden overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm md:block">
         <table className="min-w-full divide-y divide-slate-200 text-sm">
           <thead className="bg-slate-50">
             <tr>
@@ -182,6 +274,11 @@ function PlMonthlyTable({ rows }: { rows: PlReportRow[] }) {
                     className={`px-4 py-3 text-left ${emphasize ? "font-semibold text-brand-900" : "text-slate-900"}`}
                   >
                     {row.label}
+                  </td>
+                  <td
+                    className={`px-4 py-3 text-left ${emphasize ? "font-semibold text-slate-900" : "text-slate-800"}`}
+                  >
+                    {appointmentsForRow(row, appointments)}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <PlAmountCell value={row.totals.revenue} emphasize={emphasize} />
@@ -216,6 +313,33 @@ function PlMonthlyTable({ rows }: { rows: PlReportRow[] }) {
                 </tr>
               );
             })}
+            <tr className="bg-brand-50/80">
+              <td className="px-4 py-3 text-left font-semibold text-brand-900">Year to date</td>
+              <td className="px-4 py-3 text-left font-semibold text-slate-900">
+                {ytdAppointments}
+              </td>
+              <td className="px-4 py-3 text-right">
+                <PlAmountCell value={ytd.revenue} emphasize />
+              </td>
+              <td className="px-4 py-3 text-right">
+                <PlAmountCell value={-ytd.cogs} emphasize />
+              </td>
+              <td className="px-4 py-3 text-right">
+                <PlAmountCell value={-ytd.expenseAmount} emphasize />
+              </td>
+              <td className="px-4 py-3 text-right">
+                <PlAmountCell value={ytd.grossProfit} emphasize />
+              </td>
+              <td className="px-4 py-3 text-right">
+                <PlMarginCell value={ytd.grossProfitMargin} emphasize />
+              </td>
+              <td className="px-4 py-3 text-right">
+                <PlAmountCell value={ytd.netProfit} emphasize />
+              </td>
+              <td className="px-4 py-3 text-right">
+                <PlMarginCell value={ytd.netProfitMargin} emphasize />
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -228,11 +352,16 @@ export default async function PlReportPage() {
   const reportYear = new Date().getFullYear();
   const throughMonth = new Date().getMonth() + 1;
 
-  const [{ data: ledgerTotals }, { data: invoiceHeaders }, { data: tradePartners }] =
-    await Promise.all([
+  const [
+    { data: ledgerTotals },
+    { data: invoiceHeaders },
+    { data: tradePartners },
+    { data: appointmentDates },
+  ] = await Promise.all([
     supabase.from("ledger").select("*, clients(name)"),
     supabase.from("invoicing").select("client_id, po_number"),
     supabase.from("trade_partners").select("retail_price, designer_cost, discount_amount"),
+    supabase.from("appointments").select("appointment_date"),
   ]);
 
   const invoicedPoKeys = new Set(
@@ -281,6 +410,16 @@ export default async function PlReportPage() {
   });
   const partners = (tradePartners ?? []) as TradePartner[];
   const grossProfitGoal = grossProfitGoalFromTradePartners(partners);
+  const appointmentCounts = countAppointmentsByMonth(
+    appointmentDates ?? [],
+    reportYear,
+    throughMonth
+  );
+  const chartSeries = buildOverviewChartSeries(ledgerForPl, {
+    year: reportYear,
+    throughMonth,
+    invoicedPoKeys,
+  });
   const balanceSheetReview = buildBalanceSheetReview(allLedgerEntries);
 
   return (
@@ -290,43 +429,32 @@ export default async function PlReportPage() {
         description="Revenue, cost of goods sold, expenses, gross profit, and net profit from ledger activity."
       />
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
-        <h2 className="text-lg font-semibold text-slate-900">
-          Year to Date — {reportYear}
-        </h2>
-        <div className="mt-4">
-          <PlTotalsCards
-            totals={ytdTotals}
-            expenseLineCount={expenseRows.length}
-            grossProfitGoal={grossProfitGoal}
-            tradePartnerCount={partners.length}
-            expenseRows={expenseRows}
+      <PlYearSection
+        reportYear={reportYear}
+        totals={ytdTotals}
+        expenseRows={expenseRows}
+        initialGoal={grossProfitGoal}
+        overviewChart={
+          <SalesComparisonChart
+            year={reportYear}
+            series={chartSeries}
+            appointments={appointmentCounts}
+            details={
+              <div className="mt-6 border-t border-slate-200 pt-4">
+                <h3 className="text-base font-semibold text-slate-900">Monthly Breakdown</h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  Ledger activity by <strong>entry date</strong> for {reportYear}. Quarterly
+                  subtotals appear after March, June, September, and December.
+                </p>
+                <PlMonthlyTable rows={monthlyRows} appointments={appointmentCounts} />
+              </div>
+            }
           />
-        </div>
-        <p className="mt-4 text-sm">
-          <Link
-            href="/reconciliation"
-            className="font-medium text-brand-700 hover:text-brand-800 hover:underline"
-          >
-            View reconciliation report →
-          </Link>
-          <span className="text-slate-500">
-            {" "}
-            — compare Invoice History, Payments, Revenue, and accepted underpayment variances
-          </span>
-        </p>
-      </section>
+        }
+      />
 
       <BalanceSheetItems items={balanceSheetReview.items} />
 
-      <section className="mt-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
-        <h2 className="text-lg font-semibold text-slate-900">Monthly Breakdown</h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Ledger activity by <strong>entry date</strong> for {reportYear}. Quarterly
-          subtotals appear after March, June, September, and December.
-        </p>
-        <PlMonthlyTable rows={monthlyRows} />
-      </section>
     </AppShell>
   );
 }

@@ -227,7 +227,6 @@ function AppointmentsPageContent() {
         <DataTable
           mobileTitleKey="client"
           stickyFirstColumn
-          horizontalSlider
           columns={[
             { key: "actions", label: "Actions" },
             { key: "date", label: "Date & Time" },

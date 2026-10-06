@@ -138,14 +138,11 @@ function TodoNote({
 }
 
 export function OverviewTodoList({ autoTodos }: { autoTodos: OverviewAutoTodo[] }) {
+  const sectionRef = useRef<HTMLElement>(null);
   const [todos, setTodos] = useState<StoredTodo[]>([]);
   const [ready, setReady] = useState(false);
   const [task, setTask] = useState("");
   const [dueDate, setDueDate] = useState(overviewTodoDueDate);
-  const sectionRef = useRef<HTMLElement>(null);
-  const heightCapped = useRef(false);
-  const [sectionMax, setSectionMax] = useState<number | null>(null);
-
   const rows = useMemo(
     () =>
       [...todos].sort((a, b) => {
@@ -164,16 +161,49 @@ export function OverviewTodoList({ autoTodos }: { autoTodos: OverviewAutoTodo[] 
   }, [autoTodos]);
 
   useEffect(() => {
-    if (!ready || rows.length === 0 || heightCapped.current) return;
+    if (!ready) return;
     const section = sectionRef.current;
     if (!section) return;
-    const full = section.offsetHeight;
-    if (full < 80) return;
-    const half = Math.round(full / 2);
-    setSectionMax(half);
-    section.parentElement?.style.setProperty("--paired-box-height", `${half}px`);
-    heightCapped.current = true;
-  }, [ready, rows.length]);
+
+    function align() {
+      const current = sectionRef.current;
+      const row = current?.parentElement;
+      const invoicing = document.getElementById("overview-invoicing");
+      const docs = document.getElementById("sidebar-documentation");
+      const clear = () => {
+        row?.style.removeProperty("height");
+      };
+      if (!current || !row || !invoicing || !docs || window.innerWidth < 768) {
+        clear();
+        return;
+      }
+      const marginBottom = Number.parseFloat(getComputedStyle(row).marginBottom) || 0;
+      const height = Math.round(
+        docs.getBoundingClientRect().bottom -
+          row.getBoundingClientRect().top -
+          marginBottom -
+          invoicing.getBoundingClientRect().height
+      );
+      if (height < 180) {
+        clear();
+        return;
+      }
+      row.style.height = `${height}px`;
+    }
+
+    align();
+    const observer = new ResizeObserver(align);
+    const invoicing = document.getElementById("overview-invoicing");
+    const docs = document.getElementById("sidebar-documentation");
+    if (invoicing) observer.observe(invoicing);
+    if (docs) observer.observe(docs);
+    window.addEventListener("resize", align);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", align);
+      section.parentElement?.style.removeProperty("height");
+    };
+  }, [ready]);
 
   function update(next: StoredTodo[]) {
     setTodos(next);
@@ -202,34 +232,11 @@ export function OverviewTodoList({ autoTodos }: { autoTodos: OverviewAutoTodo[] 
   return (
     <section
       ref={sectionRef}
-      style={sectionMax ? { maxHeight: sectionMax } : undefined}
       className="flex h-full min-h-0 min-w-0 flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
     >
-      <h2 className="text-lg font-semibold text-[#ff69b4]">To Do</h2>
-      <form onSubmit={addTodo} className="mt-3 flex flex-col gap-2 sm:flex-row">
-        <input
-          value={task}
-          onChange={(event) => setTask(event.target.value)}
-          placeholder="Add a to do"
-          aria-label="To do"
-          className="min-h-9 min-w-0 flex-1 rounded-lg border border-slate-200 px-3 text-sm text-slate-900"
-        />
-        <input
-          type="date"
-          value={dueDate}
-          onChange={(event) => setDueDate(event.target.value)}
-          aria-label="Due date"
-          className="min-h-9 rounded-lg border border-slate-200 px-2 text-sm text-slate-900"
-        />
-        <button
-          type="submit"
-          className="min-h-9 rounded-lg bg-brand-600 px-3 text-sm font-medium text-white hover:bg-brand-700"
-        >
-          Add
-        </button>
-      </form>
+      <h2 className="shrink-0 text-lg font-semibold text-[#ff69b4]">To Do</h2>
 
-      <div className="-mb-4 -mr-4 mt-4 min-h-0 flex-1 overflow-auto pb-4 pr-4 sm:-mb-6 sm:-mr-6 sm:pb-6 sm:pr-6">
+      <div className="-mr-4 mt-4 min-h-0 flex-1 overflow-auto pr-4 sm:-mr-6 sm:pr-6">
         <table className="min-w-full text-sm">
           <thead className="sticky top-0 bg-white">
             <tr className="border-b border-slate-200 text-left text-slate-500">
@@ -311,6 +318,29 @@ export function OverviewTodoList({ autoTodos }: { autoTodos: OverviewAutoTodo[] 
           </tbody>
         </table>
       </div>
+
+      <form onSubmit={addTodo} className="mt-3 flex shrink-0 flex-col gap-2 sm:flex-row">
+        <input
+          value={task}
+          onChange={(event) => setTask(event.target.value)}
+          placeholder="Add a to do"
+          aria-label="To do"
+          className="min-h-9 min-w-0 flex-1 rounded-lg border border-slate-200 px-3 text-sm text-slate-900"
+        />
+        <input
+          type="date"
+          value={dueDate}
+          onChange={(event) => setDueDate(event.target.value)}
+          aria-label="Due date"
+          className="min-h-9 rounded-lg border border-slate-200 px-2 text-sm text-slate-900"
+        />
+        <button
+          type="submit"
+          className="min-h-9 rounded-lg bg-brand-600 px-3 text-sm font-medium text-white hover:bg-brand-700"
+        >
+          Add
+        </button>
+      </form>
     </section>
   );
 }

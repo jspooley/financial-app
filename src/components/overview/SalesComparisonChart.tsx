@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import type { OverviewChartMonth, OverviewChartSeries } from "@/lib/overview-chart";
-import { formatCurrency, roundMoney } from "@/lib/utils";
+import { formatCurrency } from "@/lib/utils";
 
 type DepartmentFilter = "interior" | "paint" | "both";
 
@@ -58,12 +58,6 @@ function axisTicks(min: number, max: number) {
   return { ticks, start, end: Math.max(end, start + step) };
 }
 
-function signedClass(value: number) {
-  if (value < -0.005) return "text-red-700";
-  if (value > 0.005) return "text-emerald-700";
-  return "text-slate-700";
-}
-
 function asNegative(value: number) {
   return Math.abs(value) < 0.005 ? 0 : -value;
 }
@@ -73,18 +67,17 @@ export function SalesComparisonChart({
   series,
   appointments,
   aside,
+  details,
 }: {
   year: number;
   series: OverviewChartSeries;
   appointments: number[];
   aside?: ReactNode;
+  details?: ReactNode;
 }) {
   const [filter, setFilter] = useState<DepartmentFilter>("both");
-  const [showDetails, setShowDetails] = useState(false);
   const [boxWidth, setBoxWidth] = useState(67);
   const months = series[filter];
-  const ytd = useMemo(() => sumYearToDate(months), [months]);
-  const appointmentTotal = appointments.reduce((total, count) => total + count, 0);
   const chart = useMemo(
     () => layoutChart(months, appointments),
     [months, appointments]
@@ -93,8 +86,14 @@ export function SalesComparisonChart({
   return (
     <div className="mb-6">
       <div
-        className="grid items-start gap-3 md:grid-cols-[var(--chart-width)_minmax(0,1fr)]"
-        style={{ ["--chart-width" as string]: `${boxWidth}%` }}
+        className={
+          aside
+            ? "grid items-start gap-3 md:grid-cols-[var(--chart-width)_minmax(0,1fr)]"
+            : undefined
+        }
+        style={
+          aside ? { ["--chart-width" as string]: `${boxWidth}%` } : undefined
+        }
       >
     <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -125,24 +124,26 @@ export function SalesComparisonChart({
         </div>
       </div>
 
-      <label className="mt-4 flex max-w-sm items-center gap-3 text-sm text-slate-600">
-        <span className="shrink-0">Width</span>
-        <input
-          type="range"
-          min={40}
-          max={75}
-          value={boxWidth}
-          aria-label="Chart width"
-          onChange={(event) => setBoxWidth(Number(event.target.value))}
-          className="h-2 w-full cursor-pointer accent-brand-600"
-        />
-      </label>
+      {aside ? (
+        <label className="mt-4 flex max-w-sm items-center gap-3 text-sm text-slate-600">
+          <span className="shrink-0">Width</span>
+          <input
+            type="range"
+            min={40}
+            max={75}
+            value={boxWidth}
+            aria-label="Chart width"
+            onChange={(event) => setBoxWidth(Number(event.target.value))}
+            className="h-2 w-full cursor-pointer accent-brand-600"
+          />
+        </label>
+      ) : null}
 
       <div className="mt-4 overflow-x-auto">
         <svg
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
           role="img"
-          aria-label={`Monthly sales, cost, expenses, profit, and appointments for ${year}`}
+          aria-label={`Monthly revenue, COGS, expenses, net profit, and appointments for ${year}`}
           className="h-auto w-full"
         >
           {chart.ticks.map((tick) => (
@@ -187,7 +188,7 @@ export function SalesComparisonChart({
                 width={group.barW}
                 height={group.salesH}
                 fill={SALES_COLOR}
-                label={`${group.label} sales ${formatCurrency(group.sales)}`}
+                label={`${group.label} revenue ${formatCurrency(group.sales)}`}
               />
               <Bar
                 x={group.stackX}
@@ -195,7 +196,7 @@ export function SalesComparisonChart({
                 width={group.barW}
                 height={group.costH}
                 fill={COST_COLOR}
-                label={`${group.label} cost ${formatCurrency(asNegative(group.cost))}`}
+                label={`${group.label} COGS ${formatCurrency(asNegative(group.cost))}`}
               />
               <Bar
                 x={group.stackX}
@@ -211,7 +212,7 @@ export function SalesComparisonChart({
                 width={group.barW}
                 height={group.profitH}
                 fill={PROFIT_COLOR}
-                label={`${group.label} profit ${formatCurrency(group.profit)}`}
+                label={`${group.label} net profit ${formatCurrency(group.profit)}`}
               />
               <text
                 x={group.labelX}
@@ -260,75 +261,14 @@ export function SalesComparisonChart({
       </div>
 
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-slate-700">
-        <Legend swatch={SALES_COLOR} label="Sales income" />
-        <Legend swatch={COST_COLOR} label="Cost" />
+        <Legend swatch={SALES_COLOR} label="Revenue" />
+        <Legend swatch={COST_COLOR} label="COGS" />
         <Legend swatch={EXPENSE_COLOR} label="Expenses" />
-        <Legend swatch={PROFIT_COLOR} label="Profit" />
+        <Legend swatch={PROFIT_COLOR} label="Net Profit" />
         <Legend swatch={APPOINTMENT_COLOR} label="Appointments" line />
       </div>
 
-      <button
-        type="button"
-        aria-expanded={showDetails}
-        onClick={() => setShowDetails((open) => !open)}
-        className="mt-3 text-sm font-medium text-brand-600 hover:text-brand-700"
-      >
-        {showDetails ? "Hide details" : "Show details"}
-      </button>
-
-      {showDetails && (
-      <div className="mt-4 overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-200 text-left text-slate-500">
-              <th className="py-2 pr-3 font-medium" />
-              {months.map((month) => (
-                <th
-                  key={month.label}
-                  className="border-l border-slate-200 px-2 py-2 text-right font-medium"
-                >
-                  {month.label}
-                </th>
-              ))}
-              <th className="sticky right-0 z-10 border-l-2 border-slate-300 bg-white px-2 py-2 text-right font-semibold text-slate-700 shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.35)]">
-                YTD
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <ValueRow label="Sales" color={SALES_COLOR} values={months.map((m) => m.sales)} ytd={ytd.sales} />
-            <ValueRow
-              label="Cost"
-              color={COST_COLOR}
-              values={months.map((m) => asNegative(m.cost))}
-              ytd={asNegative(ytd.cost)}
-              signed
-            />
-            <ValueRow
-              label="Expenses"
-              color={EXPENSE_COLOR}
-              values={months.map((m) => asNegative(m.expenses))}
-              ytd={asNegative(ytd.expenses)}
-              signed
-            />
-            <ValueRow
-              label="Profit"
-              color={PROFIT_COLOR}
-              values={months.map((m) => m.profit)}
-              ytd={ytd.profit}
-              signed
-            />
-            <ValueRow
-              label="Appointments"
-              color={APPOINTMENT_COLOR}
-              values={appointments}
-              ytd={appointmentTotal}
-              plain
-            />
-          </tbody>
-        </table>
-      </div>
-      )}
+      {details}
     </section>
         {aside ? (
           <div className="relative min-w-0 md:self-stretch">
@@ -363,58 +303,6 @@ function Legend({
       )}
       {label}
     </span>
-  );
-}
-
-function ValueRow({
-  label,
-  color,
-  values,
-  ytd,
-  signed,
-  plain,
-}: {
-  label: string;
-  color: string;
-  values: number[];
-  ytd: number;
-  signed?: boolean;
-  plain?: boolean;
-}) {
-  const format = plain ? (value: number) => String(value) : formatCurrency;
-  return (
-    <tr className="border-b border-slate-100">
-      <th className="whitespace-nowrap py-2 pr-3 text-left font-medium text-slate-800">
-        <span className="mr-2 inline-block h-2.5 w-2.5 rounded-sm align-middle" style={{ backgroundColor: color }} />
-        {label}
-      </th>
-      {values.map((value, index) => (
-        <td
-          key={index}
-          className={`border-l border-slate-200 px-2 py-2 text-right tabular-nums ${signed ? signedClass(value) : "text-slate-800"}`}
-        >
-          {format(value)}
-        </td>
-      ))}
-      <td
-        className={`sticky right-0 z-10 border-l-2 border-slate-300 bg-white px-2 py-2 text-right font-semibold tabular-nums shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.35)] ${signed ? signedClass(ytd) : "text-slate-900"}`}
-      >
-        {format(ytd)}
-      </td>
-    </tr>
-  );
-}
-
-function sumYearToDate(months: OverviewChartMonth[]): OverviewChartMonth {
-  return months.reduce<OverviewChartMonth>(
-    (total, month) => ({
-      label: "YTD",
-      sales: roundMoney(total.sales + month.sales),
-      cost: roundMoney(total.cost + month.cost),
-      expenses: roundMoney(total.expenses + month.expenses),
-      profit: roundMoney(total.profit + month.profit),
-    }),
-    { label: "YTD", sales: 0, cost: 0, expenses: 0, profit: 0 }
   );
 }
 
