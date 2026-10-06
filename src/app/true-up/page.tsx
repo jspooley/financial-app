@@ -148,32 +148,24 @@ function isSettled(amounts: PartnerAmounts) {
   );
 }
 
-function amountClass(
-  value: number,
-  emphasize?: boolean,
-  tone?: "danger" | "success"
-) {
+function signedAmountColor(value: number) {
+  if (value < 0) return "text-red-700";
+  if (value > 0) return "text-emerald-700";
+  return "text-slate-900";
+}
+
+function amountClass(value: number, emphasize?: boolean) {
   const weight = emphasize ? "font-bold" : "font-normal";
-  const color =
-    tone === "danger"
-      ? "text-red-700"
-      : tone === "success"
-        ? "text-emerald-700"
-        : value < 0
-          ? "text-red-700"
-          : "text-slate-900";
-  return `px-3 py-1.5 text-right tabular-nums ${weight} ${color}`;
+  return `px-3 py-1.5 text-right tabular-nums ${weight} ${signedAmountColor(value)}`;
 }
 
 function AmountCells({
   amounts,
   emphasize,
-  tone,
   unknown,
 }: {
   amounts: PartnerAmounts;
   emphasize?: boolean;
-  tone?: "danger" | "success";
   unknown?: boolean;
 }) {
   const total = partnerTotal(amounts);
@@ -186,22 +178,22 @@ function AmountCells({
         <td className={unknownClass}>TBD</td>
         <td className={unknownClass}>TBD</td>
         <td className={unknownClass}>TBD</td>
-        <td className={amountClass(0, emphasize, tone)}>{money(0)}</td>
+        <td className={amountClass(0, emphasize)}>{money(0)}</td>
       </>
     );
   }
   return (
     <>
-      <td className={amountClass(amounts.jess, emphasize, tone)}>
+      <td className={amountClass(amounts.jess, emphasize)}>
         {money(amounts.jess)}
       </td>
-      <td className={amountClass(amounts.molly, emphasize, tone)}>
+      <td className={amountClass(amounts.molly, emphasize)}>
         {money(amounts.molly)}
       </td>
-      <td className={amountClass(amounts.tbd, emphasize, tone)}>
+      <td className={amountClass(amounts.tbd, emphasize)}>
         {money(amounts.tbd)}
       </td>
-      <td className={amountClass(total, emphasize, tone)}>{money(total)}</td>
+      <td className={amountClass(total, emphasize)}>{money(total)}</td>
     </>
   );
 }
@@ -228,13 +220,13 @@ function DiscrepancyRow({
   const settled = isSettled(amounts);
   const labelClass = settled
     ? "px-3 py-1.5 font-bold text-emerald-700"
-    : "px-3 py-1.5 font-bold text-red-700";
+    : "px-3 py-1.5 font-bold text-orange-600";
   return (
     <tr className="border-b border-slate-200">
       {Array.from({ length: leadingCells }, (_, index) => (
         <td key={index} />
       ))}
-      <td className={labelClass}>Discrepancy</td>
+      <td className={labelClass}>True Up Due</td>
       {onSettle ? (
         <td className="px-3 py-1.5">
           <p className="mb-0.5 text-[11px] leading-tight text-slate-500">
@@ -273,11 +265,7 @@ function DiscrepancyRow({
       ) : showExclude ? (
         <td />
       ) : null}
-      <AmountCells
-        amounts={amounts}
-        emphasize
-        tone={settled ? "success" : "danger"}
-      />
+      <AmountCells amounts={amounts} emphasize />
     </tr>
   );
 }
@@ -936,9 +924,7 @@ function UntaggedTransfersTable({ rows }: { rows: TrueUpUntaggedTransfer[] }) {
                   </td>
                   <td className="px-3 py-1.5 text-slate-700">{row.party}</td>
                   <td
-                    className={`px-3 py-1.5 text-right tabular-nums ${
-                      row.amount < 0 ? "text-red-700" : "text-slate-900"
-                    }`}
+                    className={`px-3 py-1.5 text-right tabular-nums ${signedAmountColor(row.amount)}`}
                   >
                     {money(row.amount)}
                   </td>
@@ -1298,18 +1284,18 @@ export default function TrueUpReportPage() {
           <section>
             <h2 className="mb-1 text-lg font-semibold text-slate-900">YTD</h2>
             <p className="mb-3 text-sm text-slate-600">
-              Year-to-date Required, Recorded, and Discrepancy for Goods and
+              Year-to-date Required, Recorded, and True Up Due for Goods and
               Services and for Expenses, then Grand Total YTD for both.
-              Positive = received; negative = sent. Discrepancy is required
+              Positive = received; negative = sent. True Up Due is required
               minus recorded. Unassigned (TBD) is invoiced income not yet
               received and purchases not yet assigned to Jess or Molly — it is
               not part of Required or Recorded.
             </p>
             <div className="mb-3 space-y-1 text-sm">
-              <p className="font-semibold text-slate-900">
+              <p className={`font-semibold ${signedAmountColor(report.ytdMollyToJess)}`}>
                 Molly to Jes YTD = {money(report.ytdMollyToJess)}
               </p>
-              <p className="font-semibold text-slate-900">
+              <p className={`font-semibold ${signedAmountColor(report.ytdJessToMolly)}`}>
                 Jess to Molly YTD = {money(report.ytdJessToMolly)}
               </p>
               <p className="text-slate-600">
