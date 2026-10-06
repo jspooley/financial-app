@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { existingClientIdForName } from "@/lib/client-name";
 import { createClient } from "@/lib/supabase/client";
 import {
   APPOINTMENT_STATUSES,
@@ -91,23 +92,36 @@ export function AppointmentForm({ initial, onSuccess, onCancel }: AppointmentFor
     let clientId = initial?.client_id ?? null;
 
     if (values.status === "job_won" && !clientId) {
-      const { data: newClient, error: clientError } = await supabase
+      const { data: existingClients, error: lookupError } = await supabase
         .from("clients")
-        .insert({
-          name: values.client_name,
-          phone: values.client_phone || null,
-          email: values.client_email || null,
-          address: values.client_address || null,
-        })
-        .select("id")
-        .single();
+        .select("id, name, created_at");
 
-      if (clientError) {
-        setError(clientError.message);
+      if (lookupError) {
+        setError(lookupError.message);
         return;
       }
 
-      clientId = newClient.id;
+      clientId = existingClientIdForName(existingClients ?? [], values.client_name);
+
+      if (!clientId) {
+        const { data: newClient, error: clientError } = await supabase
+          .from("clients")
+          .insert({
+            name: values.client_name.trim(),
+            phone: values.client_phone || null,
+            email: values.client_email || null,
+            address: values.client_address || null,
+          })
+          .select("id")
+          .single();
+
+        if (clientError || !newClient) {
+          setError(clientError?.message ?? "Could not create client.");
+          return;
+        }
+
+        clientId = newClient.id;
+      }
     }
 
     const payload = {

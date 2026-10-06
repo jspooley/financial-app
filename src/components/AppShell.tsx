@@ -23,14 +23,14 @@ const navItems: { href: string; label: string; shortLabel: string; icon: ReactNo
   { href: "/appointments", label: "Add Appointment", shortLabel: "Add Appointment", icon: "📅" },
   { href: "/budget-tool", label: "Budget Tool", shortLabel: "Budget Tool", icon: "📊" },
   { href: "/clients", label: "Client List", shortLabel: "Client List", icon: "👤" },
-  { href: "/invoicing", label: "Invoicing", shortLabel: "Invoicing", icon: "📄" },
-  { href: "/payments", label: "Payments", shortLabel: "Payments", icon: "💵" },
   {
     href: "/ledger",
     label: "Buy Goods/Svcs",
     shortLabel: "Buy Goods/Svcs",
     icon: <CartIcon />,
   },
+  { href: "/invoicing", label: "Invoicing", shortLabel: "Invoicing", icon: "📄" },
+  { href: "/payments", label: "Payments", shortLabel: "Payments", icon: "💵" },
 ];
 
 const tradePartnersHref = "/trade-partners";
