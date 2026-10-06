@@ -9,7 +9,10 @@ import { createClient } from "@/lib/supabase/client";
 import { ledgerFormToDb, normalizeLedgerRow, type LedgerDbRow } from "@/lib/ledger-db";
 import { accountMoveFields, isCashflowAccount } from "@/lib/account-move";
 import { syncCostCompanions } from "@/lib/cost-companions";
-import { syncPaymentCompanionFromParent } from "@/lib/payment-companions";
+import {
+  designerCostDebitAmount,
+  syncPaymentCompanionFromParent,
+} from "@/lib/payment-companions";
 import { SubsequentChargesForm } from "@/components/forms/SubsequentChargesForm";
 import {
   LEDGER_DELIVERY_AND_ORIGIN_SETUP_SQL,
@@ -278,6 +281,9 @@ export function LedgerForm({
   const [showPaymentDetails, setShowPaymentDetails] = useState(false);
   const isEditing = Boolean(initial);
   const isSubsequentCharge = Boolean(initial?.origin_ledger_id);
+  const paidLocked = Boolean(initial && isPaidLedgerRecord(initial));
+  const canAdjustPaidDesignerCost =
+    paidLocked && !initial?.origin_ledger_id && !initial?.source_ledger_id;
   const schema = useMemo(
     () => ledgerSchema(isSubsequentCharge),
     [isSubsequentCharge]
@@ -422,9 +428,11 @@ export function LedgerForm({
 
   const effectiveTax = isWholesale ? autoTax : 0;
 
-  const effectiveDesignerCost = isService
-    ? numericDesignerCost
-    : !hasTradePartner || designerCostManuallyEdited.current
+  const effectiveDesignerCost =
+    isService ||
+    canAdjustPaidDesignerCost ||
+    !hasTradePartner ||
+    designerCostManuallyEdited.current
       ? numericDesignerCost
       : autoDesignerCost;
 
@@ -546,6 +554,7 @@ export function LedgerForm({
 
   // Markup lines: retail follows markup when markup is the source.
   useEffect(() => {
+    if (paidLocked) return;
     if (!usesCostMarkup) return;
     if (retailManuallyEdited.current) return;
     if (numericDesignerCost <= 0) return;
@@ -556,11 +565,13 @@ export function LedgerForm({
     numericDesignerCost,
     markedUpRetailPrice,
     numericRetailPrice,
+    paidLocked,
     setValue,
   ]);
 
   // Markup lines: markup follows retail when retail is the source.
   useEffect(() => {
+    if (paidLocked) return;
     if (!usesCostMarkup) return;
     if (!retailManuallyEdited.current) return;
     if (numericDesignerCost <= 0 || numericRetailPrice <= 0) return;
@@ -575,10 +586,12 @@ export function LedgerForm({
     numericDesignerCost,
     numericRetailPrice,
     numericDiscount,
+    paidLocked,
     setValue,
   ]);
 
   useEffect(() => {
+    if (paidLocked) return;
     if (isService) return;
     if (skipDesignerCostReset.current) {
       skipDesignerCostReset.current = false;
@@ -593,10 +606,12 @@ export function LedgerForm({
     hasTradePartner,
     autoDesignerCost,
     numericRetailPrice,
+    paidLocked,
     setValue,
   ]);
 
   useEffect(() => {
+    if (paidLocked) return;
     if (isService) return;
     if (skipRetailFromDesignerReset.current) {
       skipRetailFromDesignerReset.current = false;
@@ -615,10 +630,12 @@ export function LedgerForm({
     hasTradePartner,
     autoRetailPrice,
     numericDesignerCost,
+    paidLocked,
     setValue,
   ]);
 
   useEffect(() => {
+    if (paidLocked) return;
     if (isService) return;
     const currentTradePartnerId = selectedTradePartnerId ?? "";
     const previousTradePartnerId = previousTradePartnerIdRef.current;
@@ -638,10 +655,11 @@ export function LedgerForm({
     } else {
       designerCostManuallyEdited.current = false;
     }
-  }, [isService, selectedTradePartnerId, setValue, getValues]);
+  }, [paidLocked, isService, selectedTradePartnerId, setValue, getValues]);
 
   // Wholesale: default purchaser to trade partner account owner when partner changes.
   useEffect(() => {
+    if (paidLocked) return;
     if (!isWholesale) return;
     const owner = selectedTradePartner?.account_owner;
     if (owner !== "Jess" && owner !== "Molly") return;
@@ -664,6 +682,7 @@ export function LedgerForm({
     isWholesale,
     selectedTradePartnerId,
     selectedTradePartner?.account_owner,
+    paidLocked,
     setValue,
   ]);
 
@@ -698,7 +717,7 @@ export function LedgerForm({
 
   function markDesignerCostAsSource() {
     designerCostManuallyEdited.current = true;
-    retailManuallyEdited.current = false;
+    if (!paidLocked) retailManuallyEdited.current = false;
   }
 
   useEffect(() => {
@@ -716,8 +735,6 @@ export function LedgerForm({
     previousClientIdRef.current = selectedClientId;
   }, [selectedClientId, setValue]);
 
-  const paidLocked = Boolean(initial && isPaidLedgerRecord(initial));
-
   async function onSubmit(values: FormValues) {
     const usesMarkupPricing =
       values.wholesale_retail === "service" ||
@@ -732,6 +749,56 @@ export function LedgerForm({
       return;
     }
     await saveEntry(values);
+  }
+
+  async function savePaidDesignerCost(rawCost: unknown) {
+    if (!initial || !canAdjustPaidDesignerCost) return;
+    const designerCost = roundMoney(Number(rawCost));
+    if (!Number.isFinite(designerCost) || designerCost < 0) {
+      setError("Designer cost cannot be negative.");
+      return;
+    }
+
+    setError(null);
+    setSaving(true);
+    const supabase = createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      setSaving(false);
+      setError("You must be signed in to save. Go to Login and sign in first.");
+      return;
+    }
+
+    const { data, error: dbError } = await supabase
+      .from("ledger")
+      .update({
+        designer_cost: designerCost,
+        debit_amount: designerCostDebitAmount({
+          designer_cost: designerCost,
+          quantity: initial.quantity,
+          balance_sheet: initial.balance_sheet,
+        }),
+      })
+      .eq("id", initial.id)
+      .select("id")
+      .single();
+
+    setSaving(false);
+    if (dbError) {
+      if (dbError.message.includes("row-level security")) {
+        setError("Permission denied. Sign out and sign back in, then try again.");
+      } else {
+        setError(dbError.message);
+      }
+      return;
+    }
+    if (!data?.id) {
+      setError("Save failed — no row was written. Check that you are signed in.");
+      return;
+    }
+    onSuccess();
   }
 
   async function saveEntry(values: FormValues) {
@@ -909,13 +976,30 @@ export function LedgerForm({
   return (
     <div className="space-y-4">
     <form
-      onSubmit={handleSubmit(onSubmit, onInvalid)}
+      onSubmit={
+        canAdjustPaidDesignerCost
+          ? (event) => {
+              event.preventDefault();
+              void savePaidDesignerCost(getValues("designer_cost"));
+            }
+          : handleSubmit(onSubmit, onInvalid)
+      }
       className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
     >
       <h2 className="text-lg font-semibold text-slate-900">
-        {initial ? "Edit Ledger Entry" : "New Ledger Entry"}
+        {canAdjustPaidDesignerCost
+          ? "Correct Designer Cost"
+          : initial
+            ? "Edit Ledger Entry"
+            : "New Ledger Entry"}
       </h2>
-      {paidLocked ? (
+      {canAdjustPaidDesignerCost ? (
+        <p className="text-sm text-amber-800">
+          This item is invoiced and paid. Changing designer cost updates cost
+          of goods sold, profit, and true-up. The customer invoice and the
+          amount paid stay the same.
+        </p>
+      ) : paidLocked ? (
         <p className="text-sm text-amber-800">
           This ledger entry is paid and cannot be edited. Add subsequent
           shipping, receiving, delivery, or card fees below to bill them on a
@@ -930,6 +1014,7 @@ export function LedgerForm({
             <SelectField
               label="Client"
               required
+              disabled={paidLocked}
               error={errors.client_id?.message}
               {...register("client_id")}
             >
@@ -953,6 +1038,7 @@ export function LedgerForm({
               rows={5}
               className="min-h-[8.5rem]"
               required
+              disabled={paidLocked}
               error={errors.description?.message}
               {...register("description")}
             />
@@ -963,6 +1049,7 @@ export function LedgerForm({
               label="Date"
               type="date"
               required
+              disabled={paidLocked}
               error={errors.entry_date?.message}
               {...register("entry_date")}
             />
@@ -972,6 +1059,7 @@ export function LedgerForm({
             <SelectField
               label="Department"
               required
+              disabled={paidLocked}
               error={errors.department?.message}
               {...register("department")}
             >
@@ -986,6 +1074,7 @@ export function LedgerForm({
           <div className="lg:col-start-1 lg:row-start-4">
             <SelectField
               label="Credit / Debit"
+              disabled={paidLocked}
               error={errors.credit_debit?.message}
               {...register("credit_debit")}
             >
@@ -998,6 +1087,7 @@ export function LedgerForm({
             <SelectField
               label="PO Number"
               required
+              disabled={paidLocked}
               error={errors.po_number?.message}
               {...register("po_number")}
             >
@@ -1020,7 +1110,11 @@ export function LedgerForm({
           </div>
 
           <div className="lg:col-start-1 lg:row-start-6">
-            <SelectField label="Trade Partner" {...register("trade_partner_id")}>
+            <SelectField
+              label="Trade Partner"
+              disabled={paidLocked}
+              {...register("trade_partner_id")}
+            >
               <option value="">No trade partner</option>
               {tradePartners.map((partner) => (
                 <option key={partner.id} value={partner.id}>
@@ -1034,6 +1128,7 @@ export function LedgerForm({
             <SelectField
               label="Wholesale / Retail / Service"
               required
+              disabled={paidLocked}
               error={errors.wholesale_retail?.message}
               {...register("wholesale_retail")}
             >
@@ -1052,6 +1147,7 @@ export function LedgerForm({
             step="0.01"
             min="0.01"
             required
+            disabled={paidLocked}
             error={errors.quantity?.message}
             {...register("quantity", { valueAsNumber: true })}
           />
@@ -1060,6 +1156,7 @@ export function LedgerForm({
             name="retail_price"
             label="Retail Price"
             required
+            disabled={paidLocked}
             hint={
               isService
                 ? "Customer-facing service price. Set retail or markup % (customer pays full retail × qty)."
@@ -1083,6 +1180,7 @@ export function LedgerForm({
           <SelectField
             label="Purchaser"
             required
+            disabled={paidLocked}
             error={errors.purchaser?.message}
             hint={
               isWholesale
@@ -1101,6 +1199,7 @@ export function LedgerForm({
           <SelectField
             label="Account"
             required
+            disabled={paidLocked}
             error={errors.account?.message}
             hint="Select the account used for this purchase. Choose TBD when the purchase account is not known yet."
             {...register("account")}
@@ -1117,15 +1216,19 @@ export function LedgerForm({
             name="designer_cost"
             label="Designer Cost"
             allowZero
+            disabled={paidLocked && !canAdjustPaidDesignerCost}
             hint={
-              isService
-                ? "Optional. Use 0 when there is no designer cost. Markup % or retail sets the sell price."
-                : hasTradePartner
-                  ? `From retail: retail × (1 − ${formatPercent(tradePartnerDiscount)}). Or enter 0 when there is no designer cost.`
-                  : "Enter cost, or 0 when there is no designer cost. Markup % or retail sets the sell price."
+              canAdjustPaidDesignerCost
+                ? "Updates cost of goods sold only. Invoice price and amount paid do not change."
+                : isService
+                  ? "Optional. Use 0 when there is no designer cost. Markup % or retail sets the sell price."
+                  : hasTradePartner
+                    ? `From retail: retail × (1 − ${formatPercent(tradePartnerDiscount)}). Or enter 0 when there is no designer cost.`
+                    : "Enter cost, or 0 when there is no designer cost. Markup % or retail sets the sell price."
             }
             error={errors.designer_cost?.message}
             computedValue={
+              canAdjustPaidDesignerCost ||
               isService ||
               !hasTradePartner ||
               designerCostManuallyEdited.current
@@ -1165,6 +1268,7 @@ export function LedgerForm({
                 min="0"
                 max={usesCostMarkup ? undefined : 100}
                 required
+                disabled={paidLocked}
                 hint={
                   usesCostMarkup
                     ? "((retail − designer) ÷ designer) × 100. Edit to set retail from cost, or set retail to auto-fill."
@@ -1465,8 +1569,16 @@ NOTIFY pgrst, 'reload schema';`}
       )}
 
       <div className="flex flex-wrap gap-2">
-        <Button type="submit" loading={isSubmitting || saving} disabled={paidLocked}>
-          {initial ? "Save Changes" : "Create Entry"}
+        <Button
+          type="submit"
+          loading={isSubmitting || saving}
+          disabled={paidLocked && !canAdjustPaidDesignerCost}
+        >
+          {canAdjustPaidDesignerCost
+            ? "Save Designer Cost"
+            : initial
+              ? "Save Changes"
+              : "Create Entry"}
         </Button>
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancel

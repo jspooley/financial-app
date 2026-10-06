@@ -256,6 +256,8 @@ function LedgerPageContent() {
 
   function entryActions(entry: LedgerEntry) {
     const paidLocked = isPaidLedgerRecord(entry);
+    const canAdjustDesignerCost =
+      paidLocked && !entry.origin_ledger_id && !entry.source_ledger_id;
     return (
       <RowActions
         onEdit={() => startEdit(entry)}
@@ -266,7 +268,8 @@ function LedgerPageContent() {
             : undefined
         }
         duplicateLabel="Add charges"
-        editDisabled={paidLocked}
+        editLabel={canAdjustDesignerCost ? "Edit cost" : "Edit"}
+        editDisabled={paidLocked && !canAdjustDesignerCost}
         deleteDisabled={paidLocked}
       />
     );
